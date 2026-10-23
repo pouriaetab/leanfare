@@ -1,0 +1,8 @@
+notes/
+node_modules/
+*.log
+.DS_Store
+.leanfare/
+*.db
+*.db-wal
+*.db-shm

@@ -1,0 +1,38 @@
+{
+  "name": "leanfare",
+  "version": "0.1.0",
+  "description": "Every top AI model in one app on your own computer. See what each message costs, let it pick the cheapest model that does the job, and keep a budget.",
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "src",
+    "data/catalog.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "bun": ">=1.4.2"
+  },
+  "packageManager": "bun@1.4.3",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc -p .",
+    "licences": "bun scripts/licences.ts",
+    "data": "bun scripts/build-data.ts"
+  },
+  "keywords": [
+    "llm",
+    "ai",
+    "gateway",
+    "openai",
+    "anthropic",
+    "gemini",
+    "ollama",
+    "cost",
+    "budget"
+  ],
+  "devDependencies": {
+    "@types/bun": "1.4.3",
+    "typescript": "7.0.2"
+  }
+}
