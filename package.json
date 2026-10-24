@@ -1,6 +1,6 @@
 {
   "name": "leanfare",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Every top AI model in one app on your own computer. See what each message costs, let it pick the cheapest model that does the job, and keep a budget.",
   "license": "MIT",
   "type": "module",

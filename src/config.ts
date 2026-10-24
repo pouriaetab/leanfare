@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.2.0";
 export const BUN_TESTED = "1.4"; // the Bun minor version this release is tested on
 export const HOST = "127.0.0.1";
 export const PORT = Number(process.env.LEANFARE_PORT ?? 4747);
