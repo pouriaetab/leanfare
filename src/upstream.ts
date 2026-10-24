@@ -136,8 +136,9 @@ const FINISH: Record<string, string> = { end_turn: "stop", stop_sequence: "stop"
 // cache_write_tokens is not part of OpenAI's format; Leanfare adds it so a
 // Claude answer's cache writes keep their own price on the way through.
 function openaiUsage(u: Usage) {
-  const prompt = u.uncached + u.cacheRead + u.cacheWrite;
-  return { prompt_tokens: prompt, completion_tokens: u.output, total_tokens: prompt + u.output, prompt_tokens_details: { cached_tokens: u.cacheRead, cache_write_tokens: u.cacheWrite } };
+  const hour = u.cacheWrite1h ?? 0;
+  const prompt = u.uncached + u.cacheRead + u.cacheWrite + hour;
+  return { prompt_tokens: prompt, completion_tokens: u.output, total_tokens: prompt + u.output, prompt_tokens_details: { cached_tokens: u.cacheRead, cache_write_tokens: u.cacheWrite + hour, ...(hour ? { cache_write_1h_tokens: hour } : {}) } };
 }
 
 // A whole Anthropic answer -> a whole OpenAI answer (thinking as reasoning_content, as DeepSeek sends it).
@@ -187,7 +188,7 @@ export class AnthropicStreamTranslator {
       if (j.usage?.output_tokens !== undefined) this.usage.output = j.usage.output_tokens;
       // Anthropic may repeat the input counts at the end; keep the larger.
       const u = fromAnthropicUsage(j.usage);
-      if (u) { this.usage.uncached = Math.max(this.usage.uncached, u.uncached); this.usage.cacheRead = Math.max(this.usage.cacheRead, u.cacheRead); this.usage.cacheWrite = Math.max(this.usage.cacheWrite, u.cacheWrite); }
+      if (u) { this.usage.uncached = Math.max(this.usage.uncached, u.uncached); this.usage.cacheRead = Math.max(this.usage.cacheRead, u.cacheRead); this.usage.cacheWrite = Math.max(this.usage.cacheWrite, u.cacheWrite); this.usage.cacheWrite1h = Math.max(this.usage.cacheWrite1h ?? 0, u.cacheWrite1h ?? 0); }
       this.finish = FINISH[j.delta?.stop_reason] ?? "stop";
       return this.chunk({}, this.finish);
     }

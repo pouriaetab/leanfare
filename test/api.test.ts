@@ -35,6 +35,17 @@ describe("OpenAI address: /v1/chat/completions", () => {
     expect(r.headers.get("x-leanfare-cost-usd")).toBe("0.00945000");
   });
 
+  test("an hour long cache write is priced at twice the input, through every address", async () => {
+    await keys("anthropic");
+    const content = "Hi [usage 2000 100] [write1h 1000]"; // 1,000 in, 1,000 written for an hour, 100 out: $0.0105
+    expect((await chat("anthropic/claude-sonnet-4-6", content)).headers.get("x-leanfare-cost-usd")).toBe("0.01050000");
+    const native = await post(`${url}/v1/messages`, { model: "claude-sonnet-4-6", max_tokens: 500, messages: [{ role: "user", content }] });
+    expect(native.headers.get("x-leanfare-cost-usd")).toBe("0.01050000");
+    const streamed = await readSSE(await chat("anthropic/claude-sonnet-4-6", content, { stream: true }));
+    expect(streamed.raw).toContain("cost_usd=0.01050000");
+    expect(ledger().map((r) => [r.in_tokens, r.cache_write])).toEqual([[2000, 1000], [2000, 1000], [2000, 1000]]);
+  });
+
   test("the other known answers", async () => {
     await keys("anthropic", "openai");
     expect((await chat("anthropic/claude-haiku-4-5", "x [usage 2000 500]")).headers.get("x-leanfare-cost-usd")).toBe("0.00450000");
