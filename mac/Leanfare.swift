@@ -32,7 +32,7 @@ enum Place {
         return FileManager.default.fileExists(atPath: u.path) ? u : nil
     }
 
-    // Notes go to the file build.sh names (his project's notes folder), or to ~/.leanfare/notes.md.
+    // Notes go to the file build.sh names (a notes folder next to this copy), or to ~/.leanfare/notes.md.
     static var notesFile: URL {
         if let p = Bundle.main.object(forInfoDictionaryKey: "LeanfareNotesFile") as? String, !p.isEmpty {
             return URL(fileURLWithPath: (p as NSString).expandingTildeInPath)

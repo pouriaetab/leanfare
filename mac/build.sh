@@ -29,7 +29,10 @@ step "Checking this Mac"
 sw_vers || true
 SWIFTC="$(xcrun --find swiftc 2>/dev/null || command -v swiftc || true)"
 [ -n "$SWIFTC" ] || fail "Apple's Swift compiler is missing. Install the Command Line Tools with: xcode-select --install"
+SDK="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
+[ -n "$SDK" ] || fail "the macOS SDK is missing. Install the Command Line Tools with: xcode-select --install"
 "$SWIFTC" --version
+echo "SDK: $SDK"
 BUN="$(command -v bun || true)"
 [ -z "$BUN" ] && [ -x "$HOME/.bun/bin/bun" ] && BUN="$HOME/.bun/bin/bun"
 if [ -n "$BUN" ]; then echo "Bun: $BUN ($("$BUN" --version))"; else echo "Bun is not installed: the app will say how to install it when it opens."; fi
@@ -48,7 +51,7 @@ fi
 step "Compiling Leanfare $VERSION for $(uname -m)"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/leanfare/data"
-"$SWIFTC" -O -swift-version 5 -parse-as-library -target "$(uname -m)-apple-macos13.0" "$HERE/Leanfare.swift" -o "$APP/Contents/MacOS/Leanfare"
+"$SWIFTC" -O -swift-version 5 -parse-as-library -sdk "$SDK" -target "$(uname -m)-apple-macos13.0" "$HERE/Leanfare.swift" -o "$APP/Contents/MacOS/Leanfare"
 
 step "Putting the app together"
 cp "$HERE/Info.plist" "$APP/Contents/Info.plist"

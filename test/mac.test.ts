@@ -51,6 +51,13 @@ describe("the Mac app's needs", () => {
     expect(Bun.file(join(root, "mac/AppIcon.icns")).size).toBeGreaterThan(10_000);
   });
 
+  test("the build points the Swift compiler at the macOS SDK", () => {
+    // swiftc run by its full path (from xcrun --find) cannot load the standard library without -sdk
+    const build = readFileSync(join(root, "mac/build.sh"), "utf8");
+    expect(build).toContain("xcrun --sdk macosx --show-sdk-path");
+    expect(build).toContain('-parse-as-library -sdk "$SDK" -target');
+  });
+
   test("Leanfare runs from the copy build.sh puts in the app", async () => {
     const build = readFileSync(join(root, "mac/build.sh"), "utf8");
     expect(build).toContain('cp -R "$ROOT/src" "$ROOT/ui" "$APP/Contents/Resources/leanfare/"');
