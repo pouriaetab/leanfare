@@ -127,7 +127,7 @@
     if (!thumbCache.has(f.id)) thumbCache.set(f.id, api(`/api/files/${f.id}`).then((r) => `data:${r.type};base64,${r.data}`).catch(() => null));
     return thumbCache.get(f.id);
   }
-  function fileChips(files, removable) {
+  function fileChips(files, onRemove = null) {
     return h("div", { class: "files" }, ...files.map((f, i) => {
       const chip = h("span", { class: "file " + f.kind, title: fileLabel(f) });
       if (f.kind === "image") {
@@ -137,7 +137,7 @@
         chip.append(img);
       } else chip.append(h("span", { class: "ico", text: f.kind === "pdf" ? "PDF" : "TXT" }));
       chip.append(h("span", { class: "fn", text: f.name }), h("span", { class: "fs", text: f.kind === "pdf" ? `${f.pages ?? "?"} p` : mbs(f.size) }));
-      if (removable) chip.append(h("button", { type: "button", class: "x", "aria-label": `Remove ${f.name}`, text: "✕", onclick: () => { S.pending.splice(i, 1); renderPending(); scheduleEstimate(); } }));
+      if (onRemove) chip.append(h("button", { type: "button", class: "x", "aria-label": `Remove ${f.name}`, text: "✕", onclick: () => onRemove(i) }));
       return chip;
     }));
   }
@@ -302,6 +302,7 @@
     system: null, // the open chat's instructions (a new chat starts with the default from Settings)
     sysOpen: false,
     pending: [], // files attached to the message being written
+    editing: null, // the index of the question being edited
   };
   const ready = () => S.st && S.st.usableCount > 0;
   const modelsOf = (pid) => (S.st?.models?.[pid] ?? []);
@@ -590,12 +591,18 @@
     }
     const col = h("div", { class: "col" });
     S.messages.forEach((m, i) => col.append(messageEl(m, i)));
-    box.replaceChildren(col);
+    keepInputs(box, () => box.replaceChildren(col)); // an open edit box keeps what is typed in it
     if (scrollToEnd) box.scrollTop = box.scrollHeight;
   }
 
   function messageEl(m, index) {
-    if (m.role === "user") return h("div", { class: "msg user" }, h("div", { class: "ucol" }, m.files?.length ? fileChips(m.files, false) : null, m.content ? h("div", { class: "bubble", text: m.content }) : null));
+    if (m.role === "user") {
+      if (S.editing === index) return editEl(m, index);
+      return h("div", { class: "msg user" }, h("div", { class: "ucol" },
+        m.files?.length ? fileChips(m.files) : null,
+        m.content ? h("div", { class: "bubble", text: m.content }) : null,
+        S.live ? null : h("button", { class: "edit-btn", type: "button", title: "Change this message and send it again", "aria-label": "Edit this message", text: "✎ Edit", onclick: () => { S.editing = index; renderMessages(); } })));
+    }
     const el = h("div", { class: "msg ai", "data-i": index });
     const body = h("div", { class: "body" });
     if (m.content) body.innerHTML = markdown(m.content);
@@ -615,6 +622,11 @@
     if (meta.priceStatus === "free plan") chips.push(h("span", { class: "chip good", text: "Free plan" }));
     if (meta.priceStatus === "local") chips.push(h("span", { class: "chip good", text: "On this computer" }));
     if (meta.priceStatus === "free") chips.push(h("span", { class: "chip good", text: "Free model" }));
+    if (meta.compare && meta.status !== "running" && !m.live) {
+      const a = meta.compare.cost, b = meta.cost;
+      const tone = typeof a === "number" && typeof b === "number" ? (b < a * 0.95 ? " good" : b > a * 1.05 ? " warn" : "") : "";
+      chips.push(h("span", { class: "chip compare" + tone, text: compareText(meta) }));
+    }
     const line = h("div", { class: "meta" }, ...chips);
     if (meta.status === "running" || m.live) {
       const waitingText = meta.waiting ? meta.waiting : !m.content ? (meta.slow ? "Taking longer than usual. You can stop it, or wait." : meta.model ? `Waiting for ${meta.model.label}…` : "Choosing a model…") : `Writing… ${num(Math.ceil(m.content.length / 4))} tokens`;
@@ -637,6 +649,12 @@
     const whyBtn = h("button", { class: "link", type: "button", text: m.whyOpen ? "Hide details" : "Why this model", onclick: () => { m.whyOpen = !m.whyOpen; renderMessages(); } });
     line.append(whyBtn);
     if (meta.status === "stopped" && last) line.append(h("button", { class: "btn small", text: "Start again", onclick: () => startAgain(index) }));
+    // Copy any answer; for the newest question, ask again or ask another model and compare the costs.
+    const group = lastGroup(index) && !S.live;
+    line.append(h("span", { class: "acts" },
+      m.content ? h("button", { class: "link", type: "button", text: "Copy", title: "Copy this answer (as Markdown)", onclick: () => copyText(m.content) }) : null,
+      group && meta.status !== "stopped" ? h("button", { class: "link", type: "button", text: "Again", title: "Ask the same question again (this answer is replaced)", onclick: () => startAgain(index) }) : null,
+      group ? anotherPicker(index, meta) : null));
     box.append(line);
     if (m.whyOpen) box.append(whyEl(meta));
     return box;
@@ -718,7 +736,7 @@
   }
   function renderPending() {
     if (!composer) return;
-    composer.pending.replaceChildren(S.pending.length ? fileChips(S.pending, true) : null);
+    composer.pending.replaceChildren(S.pending.length ? fileChips(S.pending, (i) => { S.pending.splice(i, 1); renderPending(); scheduleEstimate(); }) : null);
     renderComposerBar();
   }
   function setupDrop(area) {
@@ -787,16 +805,24 @@
 
   // The conversation so far, as it is sent: files by id once kept (or with their
   // contents), or just what they are when it is only for an estimate.
+  // When a question has two answers (another model was asked), the chat goes on from the newer one.
   function contextMessages(asFile = fileForSend) {
-    return S.messages
-      .filter((m) => (m.role === "user" && (m.content || m.files?.length)) || (m.role === "assistant" && m.content && m.meta?.status !== "error"))
-      .map((m) => (m.files?.length ? { role: m.role, content: m.content, files: m.files.map(asFile) } : { role: m.role, content: m.content }));
+    const out = [];
+    for (const m of S.messages) {
+      if (!((m.role === "user" && (m.content || m.files?.length)) || (m.role === "assistant" && m.content && m.meta?.status !== "error"))) continue;
+      const x = m.files?.length ? { role: m.role, content: m.content, files: m.files.map(asFile) } : { role: m.role, content: m.content };
+      if (x.role === "assistant" && out.at(-1)?.role === "assistant") out[out.length - 1] = x;
+      else out.push(x);
+    }
+    return out;
   }
 
-  async function sendMessage(retryOf = null, retryIndex = null) {
+  // action: send (the composer's message), again, another or edit (see the server's chat route).
+  async function sendMessage(opts = {}) {
     if (!ready()) { toast("Add a key in Settings first.", "error"); return; }
+    const action = opts.action ?? "send";
     let text;
-    if (retryIndex === null) {
+    if (action === "send") {
       text = composer.ta.value.trim();
       if (!text && !S.pending.length) return;
       const files = S.pending;
@@ -808,6 +834,7 @@
       S.messages.push(files.length ? { role: "user", content: text, files } : { role: "user", content: text });
     }
     const messages = contextMessages();
+    if (action === "again" || action === "another") while (messages.length && messages.at(-1).role === "assistant") messages.pop();
     const live = { role: "assistant", content: "", meta: { status: "running" }, live: true };
     S.messages.push(live);
     S.live = { ac: new AbortController(), msg: live, started: Date.now() };
@@ -818,7 +845,7 @@
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "x-leanfare": "1", "content-type": "application/json" },
-        body: JSON.stringify({ chatId: S.chatId, messages, model: S.model, retryOf, system: S.system ?? "" }),
+        body: JSON.stringify({ chatId: S.chatId, messages, model: opts.model ?? S.model, action, target: opts.target ?? null, compare: opts.compare ?? null, system: S.system ?? "" }),
         signal: S.live.ac.signal,
       });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `HTTP ${res.status}`);
@@ -872,6 +899,8 @@
         store.del(draftKey());
         S.chatId = e.chatId; store.set("chat", e.chatId); loadChats();
       }
+      const question = [...S.messages].reverse().find((m) => m.role === "user");
+      if (e.userMessageId && question && !question.id) question.id = e.userMessageId; // so it can be edited again
       if (e.files?.length) {
         const mine = [...S.messages].reverse().find((m) => m.role === "user" && m.files?.length);
         const unsaved = (mine?.files ?? []).filter((f) => !f.id);
@@ -902,11 +931,89 @@
 
   function stopLive() { S.live?.ac.abort(); }
 
+  // The answers to the newest question (they follow the last question of the chat).
+  const lastGroup = (index) => S.messages.slice(index + 1).every((x) => x.role !== "user");
+
   function startAgain(index) {
     const m = S.messages[index];
-    if (!m || S.live || index !== S.messages.length - 1) return;
+    if (!m || S.live || !lastGroup(index)) return;
     S.messages.splice(index, 1);
-    sendMessage(m.id ?? null, index);
+    sendMessage({ action: "again", target: m.id ?? null, model: m.meta?.auto ? "auto" : m.meta?.model?.id ?? S.model });
+  }
+
+  function askAnother(index, model) {
+    const m = S.messages[index];
+    if (!m || S.live) return;
+    const compare = m.meta?.model ? { model: { id: m.meta.model.id, label: m.meta.model.label }, cost: m.meta.cost ?? null } : null;
+    sendMessage({ action: "another", target: m.id ?? null, model, compare });
+  }
+
+  // What the conversation's files need from a model.
+  function filesNeed() {
+    const all = S.messages.flatMap((m) => m.files ?? []);
+    return { images: all.some((f) => f.kind === "image"), pdfs: all.some((f) => f.kind === "pdf") };
+  }
+
+  function anotherPicker(index, meta) {
+    const ticked = new Set(S.st.settings.ticked);
+    const need = filesNeed();
+    const groups = [];
+    for (const p of S.st.providers) {
+      if (!p.ready) continue;
+      const ms = modelsOf(p.id).filter((x) => ticked.has(x.id) && !x.retired && x.id !== meta.model?.id && (!need.images || x.vision) && (!need.pdfs || x.pdf));
+      if (ms.length) groups.push(h("optgroup", { label: p.name }, ...ms.map((x) => h("option", { value: x.id, text: `${x.label} · ${x.local || x.free ? "free" : perM(x.input) + " / " + perM(x.output)}` }))));
+    }
+    if (!groups.length) return null;
+    return h("select", { class: "another", "aria-label": "Ask another model", title: "Ask the same question on another model; both answers stay, with both costs", onchange: (e) => { const v = e.target.value; e.target.value = ""; if (v) askAnother(index, v); } },
+      h("option", { value: "", text: "Ask another model…" }), ...groups);
+  }
+
+  function compareText(meta) {
+    const a = meta.compare.cost, b = meta.cost, other = meta.compare.model.label;
+    const x = (r) => (r >= 10 ? String(Math.round(r)) : r.toFixed(1));
+    if (typeof a !== "number" || typeof b !== "number") return `Compared with ${other}`;
+    if (b === 0 && a > 0) return `Free; ${other} cost ${money(a)}`;
+    if (a === 0 && b > 0) return `${other} was free`;
+    if (a === 0 && b === 0) return `Both free (${other})`;
+    const r = a / b;
+    if (r >= 1.05) return `${x(r)}× cheaper than ${other}`;
+    if (r <= 0.95) return `${x(1 / r)}× the cost of ${other}`;
+    return `About the cost of ${other}`;
+  }
+
+  function copyText(text) {
+    navigator.clipboard?.writeText(text).then(() => toast("Copied.", "done"), () => failed("Could not copy."));
+  }
+
+  // Editing a question: change it (and its files), then send it; what came after it goes.
+  function editEl(m, index) {
+    const ta = h("textarea", { class: "edit-ta", rows: 3, "aria-label": "Edit your message", "data-keep": `edit-${index}`, text: m.content });
+    const files = (m.files ?? []).slice();
+    const filesBox = h("div");
+    const drawFiles = () => filesBox.replaceChildren(files.length ? fileChips(files, (i) => { files.splice(i, 1); drawFiles(); }) : null);
+    drawFiles();
+    const later = S.messages.length - index - 1;
+    const cancel = () => { S.editing = null; renderMessages(); };
+    const submit = () => {
+      const text = ta.value.trim();
+      if (!text && !files.length) return;
+      if (S.live) { toast("An answer is still being written. Press Esc or Stop to end it first.", "done"); return; }
+      S.editing = null;
+      S.messages = S.messages.slice(0, index);
+      S.messages.push(files.length ? { role: "user", content: text, files } : { role: "user", content: text });
+      sendMessage({ action: "edit", target: m.id ?? null });
+    };
+    ta.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); }
+      if (e.key === "Escape") { e.preventDefault(); cancel(); }
+    });
+    setTimeout(() => { if (document.activeElement !== ta) { ta.focus(); ta.setSelectionRange?.(ta.value.length, ta.value.length); } }, 0);
+    return h("div", { class: "msg user editing" }, h("div", { class: "edit-box" }, filesBox, ta,
+      h("div", { class: "row" },
+        later ? h("span", { class: "warn-text", text: `Sending removes the ${later} message${later === 1 ? "" : "s"} after this one.` }) : null,
+        h("span", { class: "grow" }),
+        h("button", { class: "btn small", type: "button", text: "Cancel", onclick: cancel }),
+        h("button", { class: "btn small primary", type: "button", text: "Send", onclick: submit }))));
   }
 
   // ---- savings ------------------------------------------------------------------------------------

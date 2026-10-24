@@ -199,6 +199,19 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
 .msg.user .ucol { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; max-width: 78%; }
 .msg.user .ucol .bubble { max-width: 100%; }
 .msg.user .files { justify-content: flex-end; }
+.edit-btn { border: 0; background: none; color: var(--faint); font-size: 12px; cursor: pointer; padding: 0 2px; opacity: 0; }
+.msg.user:hover .edit-btn, .edit-btn:focus-visible { opacity: 1; }
+.edit-btn:hover { color: var(--text); }
+@media (hover: none) { .edit-btn { opacity: 1; } }
+.msg.user.editing { display: block; }
+.edit-box { border: 1px solid var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); background: var(--panel); border-radius: 14px; padding: 8px 10px; display: grid; gap: 8px; }
+.edit-box textarea { border: 0; box-shadow: none !important; padding: 4px 2px; resize: vertical; min-height: 60px; }
+.edit-box .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.edit-box .grow { flex: 1; }
+.warn-text { font-size: 12px; color: var(--warn); }
+.meta .acts { display: inline-flex; align-items: center; gap: 10px; margin-left: auto; }
+.meta select.another { width: auto; min-height: 24px; padding: 1px 24px 1px 8px; font-size: 12px; border-radius: 7px; color: var(--accent); border-color: var(--line); background-position: calc(100% - 12px) 55%, calc(100% - 7px) 55%; }
+.chip.compare { font-weight: 600; }
 .lightbox { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.72); display: grid; place-items: center; z-index: 60; cursor: zoom-out; padding: 24px; }
 .lightbox img { max-width: 100%; max-height: 100%; border-radius: 10px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4); }
 .composer .box { max-width: 820px; margin: 0 auto; border: 1px solid var(--line-strong); background: var(--panel); border-radius: 16px; box-shadow: var(--shadow); padding: 8px 10px 8px 14px; }

@@ -675,6 +675,7 @@ export function planView(p: Plan) {
 
 export interface ChatOptions {
   system?: string; // the chat's instructions, sent first as a system message
+  meta?: Record<string, unknown>; // added to the answer's details (the answer it is compared with)
 }
 
 // The chat's instructions go first, as a system message (Claude's translation moves it to "system").
@@ -741,6 +742,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
     priceSource: model.source === "openrouter" ? "OpenRouter's model list" : model.local ? "runs on this computer" : `llmledger data built ${cat.built.slice(0, 10)} (LiteLLM price list${cat.litellmCommit ? ` at ${cat.litellmCommit.slice(0, 7)}` : ""})`,
     priceCommit: model.source === "openrouter" || model.local ? null : cat.litellmCommit,
     thinkingChars: thinking.length,
+    ...(opts.meta ?? {}),
   };
   if (status === "error") emit({ type: "error", message: failed ?? "The answer failed.", status: 502 });
   emit({ type: "done", result: meta });
