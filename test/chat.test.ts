@@ -129,3 +129,95 @@ describe("asking again, asking another model, editing", () => {
     expect((await messagesOf(t.id)).map((m) => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
   });
 });
+
+describe("what the chat keeps", () => {
+  const send = (body: unknown) => chatScreen(url, body);
+  const doneOf = (events: any[]) => events.find((e) => e.type === "done")?.result;
+  const chatOf = (events: any[]) => events.find((e) => e.type === "chat");
+
+  test("Again replaces the answer only when a new one came: refused, the earlier answer stays", async () => {
+    await keys("openai");
+    const first = await readSSE(await send({ messages: [{ role: "user", content: "Name a colour [usage 1000 100]" }], model: "openai/gpt-5-mini" }));
+    const chatId = chatOf(first.events).chatId;
+    const before = (await ui(url, `/api/chats/${chatId}`)).json.messages;
+    expect(before.map((m: any) => m.role)).toEqual(["user", "assistant"]);
+    await ui(url, "/api/settings", { budget: 0.0001, atLimit: "stop" });
+    const again = await readSSE(await send({ chatId, action: "again", target: before[1].id, model: "openai/gpt-5-mini", messages: [{ role: "user", content: before[0].content }] }));
+    expect(again.events.find((e) => e.type === "error")?.status).toBe(402);
+    const after = (await ui(url, `/api/chats/${chatId}`)).json.messages;
+    expect(after.map((m: any) => m.id)).toEqual(before.map((m: any) => m.id));
+    // With room again, Again does replace it.
+    await ui(url, "/api/settings", { budget: null });
+    const ok = await readSSE(await send({ chatId, action: "again", target: before[1].id, model: "openai/gpt-5-mini", messages: [{ role: "user", content: before[0].content }] }));
+    expect(doneOf(ok.events).status).toBe("ok");
+    const last = (await ui(url, `/api/chats/${chatId}`)).json.messages;
+    expect(last).toHaveLength(2);
+    expect(last[1].id).not.toBe(before[1].id);
+  });
+
+  test("the same words again after a failed send, with a new file: the new file is kept", async () => {
+    await keys("openai");
+    const a = { name: "jan.csv", type: "text/csv", data: Buffer.from("month,total\njan,1\n").toString("base64") };
+    const b = { name: "feb.csv", type: "text/csv", data: Buffer.from("month,total\nfeb,2\n").toString("base64") };
+    const first = await readSSE(await send({ model: "anthropic/claude-haiku-4-5", messages: [{ role: "user", content: "Sum the totals", files: [a] }] })); // no Anthropic key
+    const chatId = chatOf(first.events).chatId;
+    const fileA = chatOf(first.events).files[0];
+    const second = await readSSE(await send({ chatId, model: "openai/gpt-5-mini", messages: [
+      { role: "user", content: "Sum the totals", files: [{ id: fileA.id, name: fileA.name }] },
+      { role: "user", content: "Sum the totals", files: [b] },
+    ] }));
+    expect(doneOf(second.events).status).toBe("ok");
+    const msgs = (await ui(url, `/api/chats/${chatId}`)).json.messages;
+    expect(msgs.flatMap((m: any) => m.files.map((f: any) => f.name))).toContain("feb.csv");
+  });
+
+  test("with history turned off, a follow-up in a chat with files still sends", async () => {
+    await keys("openai");
+    const file = { name: "notes.txt", type: "text/plain", data: Buffer.from("The launch is on Friday.").toString("base64") };
+    const first = await readSSE(await send({ model: "openai/gpt-5-mini", messages: [{ role: "user", content: "When is the launch?", files: [file] }] }));
+    const { chatId, files } = chatOf(first.events);
+    await ui(url, "/api/settings", { history: false });
+    const next = await readSSE(await send({ chatId, model: "openai/gpt-5-mini", messages: [
+      { role: "user", content: "When is the launch?", files: [{ id: files[0].id, name: files[0].name }] },
+      { role: "assistant", content: "Friday." },
+      { role: "user", content: "And what day is that?" },
+    ] }));
+    expect(next.events.find((e) => e.type === "error")).toBeUndefined();
+    expect(doneOf(next.events).status).toBe("ok");
+  });
+
+  test("a chat saved for the first time keeps what came before its new message", async () => {
+    await keys("openai");
+    // A question the server never read (stopped at once), then a follow-up; or a chat from before history was on.
+    const { events } = await readSSE(await send({ chatId: "firstSave_0001", model: "openai/gpt-5-mini", messages: [
+      { role: "user", content: "What is a good name for a bakery?" },
+      { role: "assistant", content: "Crumb & Co." },
+      { role: "user", content: "Make it shorter please" },
+    ] }));
+    expect(doneOf(events).status).toBe("ok");
+    const msgs = (await ui(url, "/api/chats/firstSave_0001")).json.messages;
+    expect(msgs.map((m: any) => `${m.role}: ${m.content}`)).toEqual(["user: What is a good name for a bakery?", "assistant: Crumb & Co.", "user: Make it shorter please", "assistant: Hello from gpt-5-mini."]);
+  });
+
+  test("a new chat takes the name the page gave it, if it has that form", async () => {
+    await keys("openai");
+    const good = await readSSE(await send({ chatId: "pageMade_id-01", model: "openai/gpt-5-mini", messages: [{ role: "user", content: "Hi" }] }));
+    expect(chatOf(good.events).chatId).toBe("pageMade_id-01");
+    expect((await ui(url, "/api/chats/pageMade_id-01")).status).toBe(200);
+    const bad = await readSSE(await send({ chatId: "../not a name", model: "openai/gpt-5-mini", messages: [{ role: "user", content: "Hi" }] }));
+    expect(chatOf(bad.events).chatId).not.toBe("../not a name");
+    expect(chatOf(bad.events).chatId).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
+  });
+
+  test("a long pasted file goes through quickly", async () => {
+    const dna = Array.from({ length: 250_000 }, (_, i) => "ACGT"[(i * 7 + (i >> 3)) % 4]).join("");
+    await keys("openai");
+    const t0 = performance.now();
+    const r = await ui(url, "/api/estimate", { model: "auto", messages: [{ role: "user", content: "Find the start codons", files: [{ kind: "text", size: dna.length }] }] });
+    expect(r.status).toBe(200);
+    const file = { name: "genome.txt", type: "text/plain", data: Buffer.from(dna).toString("base64") };
+    const { events } = await readSSE(await send({ model: "auto", messages: [{ role: "user", content: "Find the start codons [usage 70000 50]", files: [file] }] }));
+    expect(doneOf(events).status).toBe("ok");
+    expect(performance.now() - t0).toBeLessThan(3000);
+  }, 20000);
+});

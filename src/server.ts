@@ -149,15 +149,21 @@ function chatMessages(id: string) {
 }
 
 // A message's files: ones kept from earlier (by id, from this chat) and new
-// ones (with their contents), checked the same way either way.
-function resolveFiles(list: unknown, chatId: string | null): Attachment[] | string {
-  if (!Array.isArray(list) || !list.length) return [];
+// ones (with their contents), checked the same way either way. A kept file
+// that is gone stops the new message (strict), or is left out of an earlier one.
+function resolveFiles(list: unknown, chatId: string | null, strict: boolean): { files: Attachment[]; missing: string[] } | string {
+  if (!Array.isArray(list) || !list.length) return { files: [], missing: [] };
   if (list.length > FILE_LIMITS.count) return `At most ${FILE_LIMITS.count} files go with one message.`;
   const out: Attachment[] = [];
+  const missing: string[] = [];
   for (const f of list as any[]) {
     if (f && typeof f.id === "number" && typeof f.data !== "string") {
       const row = chatId ? db.query("SELECT id, name, type, kind, size, pages, data FROM files WHERE id = ? AND chat_id = ?").get(f.id, chatId) as any : null;
-      if (!row) return `${String(f.name ?? "A file")} from earlier in this chat is no longer there. Remove it and send again.`;
+      if (!row) {
+        if (strict) return `${String(f.name ?? "A file")} is no longer there. Remove it and send again.`;
+        missing.push(String(f.name ?? "a file").slice(0, 200));
+        continue;
+      }
       out.push({ id: row.id, name: row.name, type: row.type, kind: row.kind, size: row.size, pages: row.pages ?? undefined, data: Buffer.from(row.data).toString("base64") });
     } else {
       const a = checkFile(f);
@@ -165,19 +171,23 @@ function resolveFiles(list: unknown, chatId: string | null): Attachment[] | stri
       out.push(a);
     }
   }
-  return out;
+  return { files: out, missing };
 }
 
 async function chatRoute(req: Request, body: any): Promise<Response> {
   const s = settings();
   let chatId: string | null = typeof body?.chatId === "string" ? body.chatId : null;
   const raw: any[] = Array.isArray(body?.messages) ? body.messages.filter((m: any) => (m?.role === "user" || m?.role === "assistant" || m?.role === "system") && typeof m.content === "string") : [];
-  const known = s.history && chatId ? chatId : null;
+  // Kept files are found by their chat, even after history was turned off.
+  const known = chatId && db.query("SELECT 1 FROM chats WHERE id = ?").get(chatId) ? chatId : null;
   const msgs: ChatMsg[] = [];
-  for (const m of raw) {
-    const files = m.role === "user" ? resolveFiles(m.files, known) : [];
-    if (typeof files === "string") return fail(400, files);
-    msgs.push({ role: m.role, content: m.content, files });
+  const gone: string[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const m = raw[i];
+    const r = m.role === "user" ? resolveFiles(m.files, known, i === raw.length - 1) : { files: [], missing: [] };
+    if (typeof r === "string") return fail(400, r);
+    gone.push(...r.missing);
+    msgs.push({ role: m.role, content: m.content, files: r.files });
   }
   const last = msgs.at(-1);
   if (!last || last.role !== "user" || (!last.content.trim() && !last.files.length)) return fail(400, "The chat needs a message to send.");
@@ -196,27 +206,45 @@ async function chatRoute(req: Request, body: any): Promise<Response> {
   const ts = now().toISOString();
   let userMessageId: number | null = null;
   let savedFiles: any[] = [];
+  let fresh = false; // a chat the server has not seen before
+  const putFile = () => db.query("INSERT INTO files(chat_id, message_id, name, type, kind, size, pages, data, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
   if (s.history) try {
     if (!chatId || !db.query("SELECT 1 FROM chats WHERE id = ?").get(chatId)) {
-      chatId = chatId ?? randomId();
+      fresh = true;
+      // A new chat takes the name the page gave it (so a Stop before this answer
+      // starts still knows its chat), if it is a name of that form.
+      chatId = chatId && /^[A-Za-z0-9_-]{8,64}$/.test(chatId) ? chatId : randomId();
       const firstUser = msgs.find((m) => m.role === "user")!;
       const first = firstUser.content.trim() || firstUser.files[0]?.name || "New chat";
       db.query("INSERT INTO chats(id, title, created, updated, system) VALUES (?, ?, ?, ?, ?)").run(chatId, first.replace(/\s+/g, " ").trim().slice(0, 60) || "New chat", ts, ts, system || null);
+      // What came before the new message is kept too: a question the server never
+      // read (stopped at once), or a chat from before history was turned on.
+      const put = db.query("INSERT INTO messages(chat_id, role, content, ts) VALUES (?, ?, ?, ?)");
+      const file = putFile();
+      for (const m of msgs.slice(0, -1)) {
+        if (m.role !== "user" && m.role !== "assistant") continue;
+        const id = Number(put.run(chatId, m.role, m.content, ts).lastInsertRowid);
+        for (const f of m.files) if (f.data) f.id = Number(file.run(chatId, id, f.name, f.type, f.kind, f.size, f.pages ?? null, Buffer.from(f.data, "base64"), ts).lastInsertRowid);
+      }
     } else if (typeof body.system === "string") db.query("UPDATE chats SET system = ? WHERE id = ?").run(system || null, chatId);
     const lastSaved = db.query("SELECT id, role, content FROM messages WHERE chat_id = ? AND deleted IS NULL ORDER BY id DESC LIMIT 1").get(chatId) as any;
-    if (action === "again") {
-      if (target !== null) db.query("UPDATE messages SET deleted = ? WHERE id = ? AND chat_id = ? AND role = 'assistant'").run(ts, target, chatId);
-    } else if (action === "another") {
+    if (action === "again" && !fresh) {
+      // The answer asked again is replaced only once a new one is there (below).
+    } else if (action === "another" && !fresh) {
       const row = target === null ? null : db.query("SELECT meta FROM messages WHERE id = ? AND chat_id = ? AND role = 'assistant' AND deleted IS NULL").get(target, chatId) as any;
       if (row?.meta) { try { compare = cleanCompare(JSON.parse(row.meta)); } catch {} }
     } else {
       if (action === "edit" && target !== null && db.query("SELECT 1 FROM messages WHERE id = ? AND chat_id = ? AND role = 'user' AND deleted IS NULL").get(target, chatId)) {
         db.query("UPDATE messages SET deleted = ? WHERE chat_id = ? AND id >= ? AND deleted IS NULL").run(ts, chatId, target);
-      } else if (action === "send" && lastSaved?.role === "user" && lastSaved.content === last.content) userMessageId = lastSaved.id; // a retry after a failed send
+      } else if (action === "send" && lastSaved?.role === "user" && lastSaved.content === last.content) {
+        // The same words again after a failed send: the same question, unless new files came with it.
+        if (last.files.some((f) => f.id === undefined)) db.query("UPDATE messages SET deleted = ? WHERE id = ?").run(ts, lastSaved.id);
+        else userMessageId = lastSaved.id;
+      }
       userMessageId ??= Number(db.query("INSERT INTO messages(chat_id, role, content, ts) VALUES (?, 'user', ?, ?)").run(chatId, last.content, ts).lastInsertRowid);
       const already = db.query("SELECT COUNT(*) AS n FROM files WHERE message_id = ?").get(userMessageId) as { n: number };
       if (!already.n) {
-        const put = db.query("INSERT INTO files(chat_id, message_id, name, type, kind, size, pages, data, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        const put = putFile();
         const move = db.query("UPDATE files SET message_id = ? WHERE id = ? AND chat_id = ?");
         for (const f of last.files) {
           if (f.id !== undefined) { move.run(userMessageId, f.id, chatId); continue; } // a kept file goes with the edited question
@@ -241,12 +269,17 @@ async function chatRoute(req: Request, body: any): Promise<Response> {
       try {
         send({ type: "chat", chatId, userMessageId, history: s.history, files: savedFiles });
         if (dropped.length) send({ type: "notice", message: `Left out of this message to stay within the providers' size limits: ${dropped.join(", ")} (attached earlier).` });
+        if (gone.length) send({ type: "notice", message: `No longer there, so left out: ${gone.join(", ")} (attached earlier).` });
         let title = "Chat";
         try { if (chatId) title = (db.query("SELECT title FROM chats WHERE id = ?").get(chatId) as any)?.title ?? title; } catch {}
         const out = await runChat(messages, asked, req.signal, send, title, { system, effort, meta: compare ? { compare } : undefined });
-        if (s.history && chatId && (out.text || out.status !== "error")) {
+        // Asked again: the new answer takes the old one's place only if it came
+        // (words, and no failure on the way); otherwise the old one stays.
+        const keep = action === "again" ? !!out.text && out.status !== "error" : !!(out.text || out.status !== "error");
+        if (s.history && chatId && keep) {
           try {
             const id = Number(db.query("INSERT INTO messages(chat_id, role, content, meta, ts) VALUES (?, 'assistant', ?, ?, ?)").run(chatId, out.text, JSON.stringify(out.meta), now().toISOString()).lastInsertRowid);
+            if (action === "again" && target !== null) db.query("UPDATE messages SET deleted = ? WHERE id = ? AND chat_id = ? AND role = 'assistant'").run(now().toISOString(), target, chatId);
             send({ type: "saved", messageId: id });
           } catch (e) {
             send({ type: "notice", message: `The answer could not be saved to your history: ${String((e as any)?.message ?? e)}` });
