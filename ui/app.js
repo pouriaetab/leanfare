@@ -335,7 +335,9 @@
       // Timestamps of background checks change every few seconds without changing anything you see.
       const calm = (x) => (x ? JSON.stringify({ ...x, running: x.running.length, month: null, pause: null, providers: x.providers.map((p) => ({ ...p, list: p.list ? { ...p.list, at: null } : null })), data: { ...x.data, status: { ...x.data.status, at: null } } }) : "");
       const changed = calm(st) !== calm(S.st) || S.redrawLater;
+      const before = S.st?.settings.instructions ?? "";
       S.st = st;
+      followDefault(before);
       renderShell();
       if (!changed) return;
       const screen = $("#tab-" + S.tab);
@@ -544,7 +546,7 @@
         catch (e) { failed(e); }
       }, 250);
     });
-    input.addEventListener("keydown", (e) => { if (e.key === "Escape") { input.value = ""; S.search = null; renderChatList(); } });
+    input.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); input.value = ""; S.search = null; renderChatList(); } });
     return input;
   }
   // The matching words, marked (built from text, never as HTML).
@@ -581,7 +583,7 @@
       const today = new Date();
       const g = d.toDateString() === today.toDateString() ? "Today" : (today - d) < 7 * 86400e3 ? "This week" : "Earlier";
       if (g !== group) { group = g; items.push(h("div", { class: "chat-group", text: g })); }
-      items.push(h("div", { class: "chat-item" + (c.id === S.chatId ? " on" : ""), title: c.title, onclick: () => openChat(c.id) },
+      items.push(h("div", { class: "chat-item" + (c.id === S.chatId ? " on" : ""), title: c.title, "data-id": c.id, onclick: () => openChat(c.id) },
         h("span", { class: "t", text: c.title }),
         h("span", { class: "acts" },
           h("button", { text: "✎", title: "Rename this chat", "aria-label": `Rename ${c.title}`, onclick: (e) => { e.stopPropagation(); renameChat(c); } }),
@@ -615,19 +617,27 @@
     catch (e) { S.chats = before; renderChatList(); failed(e); }
   }
   async function renameChat(c) {
-    const item = [...document.querySelectorAll(".chat-item")].find((el) => el.title === c.title);
+    const item = [...document.querySelectorAll(".chat-item")].find((el) => el.dataset.id === c.id);
     if (!item) return;
     const input = h("input", { type: "text", value: c.title, "aria-label": "Chat name" });
     item.replaceChildren(input);
     input.focus(); input.select();
+    // Enter or leaving the box saves; Esc puts the old name back. Only the first of them counts
+    // (redrawing the list removes the box, and that fires a blur of its own).
+    let closed = false;
     const done = async (save) => {
+      if (closed) return;
+      closed = true;
       const title = input.value.trim();
       if (save && title && title !== c.title) {
         try { const r = await api(`/api/chats/${c.id}`, { method: "PATCH", body: { title } }); S.chats = r.chats; toast("Renamed.", "done"); } catch (e) { failed(e); }
       }
       renderChatList();
     };
-    input.addEventListener("keydown", (e) => { if (e.key === "Enter") done(true); if (e.key === "Escape") done(false); });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); done(true); }
+      if (e.key === "Escape") { e.preventDefault(); done(false); }
+    });
     input.addEventListener("blur", () => done(true));
   }
 
@@ -635,6 +645,7 @@
     if (S.live) stopLive();
     S.chatId = null;
     S.messages = [];
+    S.editing = null;
     S.system = S.st?.settings.instructions ?? "";
     S.sysOpen = false;
     store.set("chat", null);
@@ -652,6 +663,7 @@
       const r = await api(`/api/chats/${id}`);
       S.chatId = id;
       store.set("chat", id);
+      S.editing = null;
       S.messages = r.messages.map((m) => ({ id: m.id, role: m.role, content: m.content, meta: m.meta, files: m.files?.length ? m.files : undefined }));
       S.system = r.chat?.system ?? "";
       S.sysOpen = false;
@@ -847,6 +859,8 @@
       renderComposerBar();
       scheduleEstimate();
     });
+    // Send turns into Stop at once, so the second click of a double click is not a Stop.
+    send.addEventListener("click", (e) => { if (S.live && (e.detail > 1 || Date.now() - S.live.started < 500)) e.preventDefault(); });
     form.addEventListener("submit", (e) => { e.preventDefault(); if (S.live) stopLive(); else sendMessage(); });
     setTimeout(restoreDraft, 0);
     return form;
@@ -969,20 +983,27 @@
     }
     const messages = contextMessages();
     if (action === "again" || action === "another") while (messages.length && messages.at(-1).role === "assistant") messages.pop();
-    const live = { role: "assistant", content: "", meta: { status: "running" }, live: true };
+    const view = S.messages; // the conversation on screen (another chat, or a new one, is a new list)
+    // An answer read back later must be newer than everything on screen now.
+    const after = Math.max(0, ...S.messages.map((m) => (typeof m.id === "number" ? m.id : 0)));
+    // A new chat gets its name here, so a Stop before the server says it back still knows it.
+    const newId = S.chatId ? null : chatIdNew();
+    const live = { role: "assistant", content: "", meta: { status: "running" }, live: true, after };
     S.messages.push(live);
     S.live = { ac: new AbortController(), msg: live, started: Date.now() };
     renderMessages(true);
     renderComposerBar();
     const slowTimer = setTimeout(() => { if (S.live?.msg === live && !live.content) { live.meta.slow = true; paintLive(); } }, 20000);
+    let streamed = false;
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "x-leanfare": "1", "content-type": "application/json" },
-        body: JSON.stringify({ chatId: S.chatId, messages, model: opts.model ?? S.model, action, target: opts.target ?? null, compare: opts.compare ?? null, system: S.system ?? "" }),
+        body: JSON.stringify({ chatId: S.chatId ?? newId, messages, model: opts.model ?? S.model, action, target: opts.target ?? null, compare: opts.compare ?? null, system: S.system ?? "" }),
         signal: S.live.ac.signal,
       });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `HTTP ${res.status}`);
+      streamed = true;
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = "";
@@ -1005,25 +1026,48 @@
       }
     } finally {
       clearTimeout(slowTimer);
-      const wasStopped = live.meta.status === "stopped" || live.meta.status === "running";
-      if (live.meta.status === "running") live.meta.status = "stopped";
+      // The answer stream ended without saying how: the connection broke on the way.
+      if (live.meta.status === "running") live.meta = { ...live.meta, status: "error", error: "The connection to Leanfare closed before the answer finished. Try again." };
+      const stopped = live.meta.status === "stopped";
       live.live = false;
       S.live = null;
+      const here = S.messages === view;
+      // Ended before the server said the chat's name: it is the name this page gave it
+      // (a chat the server did not make yet is made under that name by the next message).
+      if (here && (stopped || streamed) && newId && !S.chatId && S.history) { S.chatId = newId; store.set("chat", newId); }
+      // Asked again and nothing new came: the earlier answer stays (the server keeps it too).
+      let kept = false;
+      const old = opts.replaces;
+      if (here && old?.msg.content && old.msg.meta?.status !== "error" && (live.meta.status === "error" || !live.content)) {
+        const at = S.messages.indexOf(live);
+        if (at >= 0) S.messages.splice(at, 1);
+        S.messages.splice(Math.min(old.index, S.messages.length), 0, old.msg);
+        kept = true;
+        toast(live.meta.status === "error" ? `${live.meta.error ?? "The answer failed."} The earlier answer is kept.` : "Stopped. The earlier answer is kept.", live.meta.status === "error" ? "error" : "done");
+      }
       renderMessages();
       renderComposerBar();
       loadChats();
       refreshState();
       setTimeout(refreshState, 600); // the running count settles a moment after the answer ends
       // A stopped answer's cost is recorded by the server; read it back.
-      if (wasStopped && S.chatId && S.history) setTimeout(() => reloadMeta(live), 400);
+      if (here && stopped && !kept && S.chatId && S.history) { const id = S.chatId; setTimeout(() => reloadMeta(live, id), 400); }
     }
   }
 
-  async function reloadMeta(live) {
+  // A chat name made by the page, in the server's own form.
+  function chatIdNew() {
+    const b = crypto.getRandomValues(new Uint8Array(9));
+    return btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+
+  // Reads a stopped answer back from the chat: only one saved after this question
+  // was sent, never an older answer.
+  async function reloadMeta(live, chatId) {
     try {
-      const r = await api(`/api/chats/${S.chatId}`);
-      const last = [...r.messages].reverse().find((m) => m.role === "assistant");
-      if (last && last.meta) { live.id = last.id; live.meta = last.meta; live.content = last.content; renderMessages(); }
+      const r = await api(`/api/chats/${chatId}`);
+      const mine = [...r.messages].reverse().find((m) => m.role === "assistant" && typeof m.id === "number" && m.id > (live.after ?? 0));
+      if (mine?.meta && S.chatId === chatId && S.messages.includes(live)) { live.id = mine.id; live.meta = mine.meta; live.content = mine.content; renderMessages(); }
     } catch {}
   }
 
@@ -1035,6 +1079,7 @@
       }
       const question = [...S.messages].reverse().find((m) => m.role === "user");
       if (e.userMessageId && question && !question.id) question.id = e.userMessageId; // so it can be edited again
+      if (typeof e.userMessageId === "number") live.after = Math.max(live.after ?? 0, e.userMessageId);
       if (e.files?.length) {
         const mine = [...S.messages].reverse().find((m) => m.role === "user" && m.files?.length);
         const unsaved = (mine?.files ?? []).filter((f) => !f.id);
@@ -1045,7 +1090,7 @@
     else if (e.type === "delta") { live.content += e.text; paintLiveSoon(); }
     else if (e.type === "thinking") { live.thinking = (live.thinking ?? "") + e.text; live.meta.thinkingChars = live.thinking.length; paintLiveSoon(); }
     else if (e.type === "retry") { live.content = ""; live.thinking = ""; live.meta.thinkingChars = 0; live.meta.retryNote = e.message; paintLive(); } // the answer starts over
-    else if (e.type === "error") { live.meta.error = e.message; }
+    else if (e.type === "error") { live.meta = { ...live.meta, status: "error", error: e.message }; }
     else if (e.type === "done") { live.meta = e.result; live.live = false; }
     else if (e.type === "saved") { live.id = e.messageId; }
     else if (e.type === "notice") { toast(e.message, "error"); }
@@ -1073,7 +1118,7 @@
     const m = S.messages[index];
     if (!m || S.live || !lastGroup(index)) return;
     S.messages.splice(index, 1);
-    sendMessage({ action: "again", target: m.id ?? null, model: m.meta?.auto ? "auto" : m.meta?.model?.id ?? S.model });
+    sendMessage({ action: "again", target: m.id ?? null, model: m.meta?.auto ? "auto" : m.meta?.model?.id ?? S.model, replaces: { index, msg: m } });
   }
 
   function askAnother(index, model) {
@@ -1122,7 +1167,7 @@
 
   // Editing a question: change it (and its files), then send it; what came after it goes.
   function editEl(m, index) {
-    const ta = h("textarea", { class: "edit-ta", rows: 3, "aria-label": "Edit your message", "data-keep": `edit-${index}`, text: m.content });
+    const ta = h("textarea", { class: "edit-ta", rows: 3, "aria-label": "Edit your message", "data-keep": `edit-${S.chatId ?? "new"}-${m.id ?? index}`, text: m.content });
     const files = (m.files ?? []).slice();
     const filesBox = h("div");
     const drawFiles = () => filesBox.replaceChildren(files.length ? fileChips(files, (i) => { files.splice(i, 1); drawFiles(); }) : null);
@@ -1279,8 +1324,23 @@
   }
 
   async function patchSettings(patch, done) {
-    try { S.st = await api("/api/settings", { body: patch }); renderShell(); renderSettings(); renderComposerBar(); if (done) toast(done, "done"); }
-    catch (e) { failed(e); }
+    try {
+      const before = S.st?.settings.instructions ?? "";
+      S.st = await api("/api/settings", { body: patch });
+      followDefault(before);
+      renderShell(); renderSettings(); renderComposerBar();
+      if (done) toast(done, "done");
+    } catch (e) { failed(e); }
+  }
+
+  // A new chat that has nothing in it yet keeps up with the default instructions,
+  // unless its own were changed.
+  function followDefault(before) {
+    const now = S.st?.settings.instructions ?? "";
+    if (now === before || S.chatId || S.messages.length || S.system === null) return;
+    if ((S.system ?? "") !== before) return;
+    S.system = now;
+    renderConvoHead();
   }
 
   function modelRow(m) {
@@ -1465,7 +1525,15 @@
   document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => setTab(b.dataset.tab)));
   $("#spendPill").addEventListener("click", () => setTab("savings"));
   $("#pauseBtn").addEventListener("click", togglePause);
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && S.live) stopLive(); });
+  // Esc stops the answer being written, unless it was meant for something else: a box being
+  // typed in (search, a name, an edit, instructions), the picture viewer or the lock screen.
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !S.live || e.defaultPrevented) return;
+    if (document.querySelector(".lightbox, #lockScreen")) return;
+    const a = document.activeElement;
+    if (a && a !== composer?.ta && (a.matches?.("input, textarea, select") || a.isContentEditable)) return;
+    stopLive();
+  });
   (async () => {
     await refreshState();
     if (!S.st) return;
