@@ -216,6 +216,8 @@
     defOpen: {},
     model: store.get("model", "auto"),
     estimateSeq: 0,
+    system: null, // the open chat's instructions (a new chat starts with the default from Settings)
+    sysOpen: false,
   };
   const ready = () => S.st && S.st.usableCount > 0;
   const modelsOf = (pid) => (S.st?.models?.[pid] ?? []);
@@ -244,9 +246,10 @@
   function keepInputs(container, draw) {
     const kept = {};
     let focused = null;
-    container?.querySelectorAll("input[data-keep]").forEach((i) => { if (i.value !== i.defaultValue) kept[i.dataset.keep] = i.value; if (document.activeElement === i) focused = i.dataset.keep; });
+    const sel = "input[data-keep], textarea[data-keep]";
+    container?.querySelectorAll(sel).forEach((i) => { if (i.value !== i.defaultValue) kept[i.dataset.keep] = i.value; if (document.activeElement === i) focused = i.dataset.keep; });
     draw();
-    container?.querySelectorAll("input[data-keep]").forEach((i) => { if (i.dataset.keep in kept) i.value = kept[i.dataset.keep]; if (focused === i.dataset.keep) i.focus(); });
+    container?.querySelectorAll(sel).forEach((i) => { if (i.dataset.keep in kept) i.value = kept[i.dataset.keep]; if (focused === i.dataset.keep) i.focus(); });
   }
 
   function renderOffline(e) {
@@ -321,13 +324,54 @@
           h("div", { class: "chat-list", id: "chatList" }),
           h("div", { class: "chats-foot", id: "chatsFoot" })),
         h("div", { class: "convo" },
+          h("div", { class: "convo-head", id: "convoHead" }, h("div", { class: "row1" }), h("div", { class: "sys-slot" })),
           h("div", { class: "messages", id: "messages" }),
           buildComposer()),
       );
     }
+    if (S.system === null) S.system = S.chatId ? "" : (S.st?.settings.instructions ?? "");
     renderChatList();
     renderMessages();
     renderComposerBar();
+  }
+
+  // The bar above the conversation: its name and its instructions (a system prompt).
+  function renderConvoHead() {
+    const head = $("#convoHead");
+    if (!head || !S.st) return;
+    const title = S.chatId ? (S.chats.find((c) => c.id === S.chatId)?.title ?? "Chat") : "New chat";
+    const on = !!S.system?.trim();
+    head.querySelector(".row1").replaceChildren(
+      h("span", { class: "ct", text: title, title }),
+      h("span", { class: "grow" }),
+      h("button", { class: "chip-btn" + (on ? " on" : ""), type: "button", "aria-expanded": String(S.sysOpen), title: "What the model is told before every message in this chat (a system prompt)", text: on ? "Instructions on" : "Instructions", onclick: () => { S.sysOpen = !S.sysOpen; renderSysPanel(); renderConvoHead(); } }));
+  }
+
+  function renderSysPanel() {
+    const slot = $("#convoHead .sys-slot");
+    if (!slot) return;
+    if (!S.sysOpen) { slot.replaceChildren(); return; }
+    const ta = h("textarea", { rows: 4, placeholder: "For example: Answer briefly. I write Python 3.12 and use pandas.", "aria-label": "Instructions for this chat", text: S.system ?? "" });
+    const save = async (text) => {
+      const next = text.trim();
+      if (S.chatId && S.history) {
+        try { await api(`/api/chats/${S.chatId}`, { method: "PATCH", body: { system: next } }); } catch (e) { failed(e); return; }
+      }
+      S.system = next;
+      S.sysOpen = false;
+      renderSysPanel(); renderConvoHead(); scheduleEstimate();
+      toast(next ? "Instructions saved for this chat." : "This chat has no instructions now.", "done");
+    };
+    const def = S.st.settings.instructions;
+    slot.replaceChildren(h("div", { class: "sys-panel" }, ta,
+      h("div", { class: "row" },
+        h("button", { class: "btn small primary", type: "button", text: "Save", onclick: () => save(ta.value) }),
+        def && def !== ta.value.trim() ? h("button", { class: "btn small", type: "button", text: "Use my default", title: def, onclick: () => { ta.value = def; ta.focus(); } }) : null,
+        ta.value ? h("button", { class: "btn small quiet", type: "button", text: "Clear", onclick: () => save("") }) : null,
+        h("span", { class: "grow" }),
+        h("button", { class: "btn small quiet", type: "button", text: "Close", onclick: () => { S.sysOpen = false; renderSysPanel(); renderConvoHead(); } })),
+      h("p", { text: "Sent before every message in this chat and counted in each estimate. New chats start with your default instructions from Settings." })));
+    ta.focus();
   }
 
   function renderChatList() {
@@ -349,6 +393,7 @@
           h("button", { text: "✕", title: "Remove this chat from the list (you can undo)", "aria-label": `Remove ${c.title}`, onclick: (e) => { e.stopPropagation(); removeChat(c); } }))));
     }
     list.replaceChildren(...items);
+    renderConvoHead();
     const foot = $("#chatsFoot");
     foot.replaceChildren(
       h("span", { text: S.history ? "Chats are kept on this computer only." : "History is off." }),
@@ -395,9 +440,12 @@
     if (S.live) stopLive();
     S.chatId = null;
     S.messages = [];
+    S.system = S.st?.settings.instructions ?? "";
+    S.sysOpen = false;
     store.set("chat", null);
     chatEl().classList.remove("list-open");
     renderChatList();
+    renderSysPanel();
     renderMessages();
     restoreDraft();
     composer?.ta.focus();
@@ -410,8 +458,11 @@
       S.chatId = id;
       store.set("chat", id);
       S.messages = r.messages.map((m) => ({ id: m.id, role: m.role, content: m.content, meta: m.meta }));
+      S.system = r.chat?.system ?? "";
+      S.sysOpen = false;
       chatEl().classList.remove("list-open");
       renderChatList();
+      renderSysPanel();
       renderMessages(true);
       restoreDraft();
     } catch (e) {
@@ -605,7 +656,7 @@
     if (!draft) { renderComposerBar(); return; }
     const seq = ++S.estimateSeq;
     try {
-      const r = await api("/api/estimate", { body: { messages: [...contextMessages(), { role: "user", content: draft }], model: S.model } });
+      const r = await api("/api/estimate", { body: { messages: [...contextMessages(), { role: "user", content: draft }], model: S.model, system: S.system ?? "" } });
       if (seq !== S.estimateSeq) return;
       if (r.error) { composer.est.textContent = r.error; return; }
       const p = r.plan;
@@ -640,7 +691,7 @@
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "x-leanfare": "1", "content-type": "application/json" },
-        body: JSON.stringify({ chatId: S.chatId, messages, model: S.model, retryOf }),
+        body: JSON.stringify({ chatId: S.chatId, messages, model: S.model, retryOf, system: S.system ?? "" }),
         signal: S.live.ac.signal,
       });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `HTTP ${res.status}`);
@@ -983,6 +1034,10 @@
       h("div", { class: "setting" }, h("h3", { text: "Compare with a subscription" }),
         h("div", { class: "row" }, subBox, h("button", { class: "btn", text: "Save", onclick: () => patchSettings({ subscription: subBox.querySelector("input").value || null }, "Saved.") })),
         h("p", { text: "For example $20 for a monthly chat plan. The Savings page shows how far under or over it you are." })),
+      h("div", { class: "setting" }, h("h3", { text: "Instructions for new chats" }),
+        h("textarea", { rows: 3, placeholder: "For example: Answer briefly. I live in Toronto and write Python.", "aria-label": "Instructions for new chats", "data-keep": "instructions", text: s.instructions }),
+        h("div", { class: "row" }, h("button", { class: "btn", text: "Save", onclick: (e) => patchSettings({ instructions: e.target.closest(".setting").querySelector("textarea").value }, "Saved. New chats start with these instructions.") })),
+        h("p", { text: "Every new chat starts with these (a system prompt). Change them for one chat with Instructions above the conversation." })),
       h("div", { class: "setting" }, h("h3", { text: "Chat history" }),
         h("label", { class: "check" }, h("input", { type: "checkbox", checked: s.history, onchange: (e) => patchSettings({ history: e.target.checked }, e.target.checked ? "Chats will be kept on this computer." : "Chats will not be kept.").then(loadChats) }), "Keep my chats on this computer"),
         h("p", { text: "The cost ledger never keeps what you wrote, only token counts and costs." })),

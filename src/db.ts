@@ -59,9 +59,22 @@ CREATE TABLE IF NOT EXISTS messages(
 CREATE INDEX IF NOT EXISTS messages_chat ON messages(chat_id, id);
 `;
 
+// Columns added after 0.1: an older file gets them on its first start.
+const ADDED: [table: string, column: string, type: string][] = [
+  ["chats", "system", "TEXT"], // the chat's own instructions
+];
+
+function addColumns(d: Database) {
+  for (const [table, column, type] of ADDED) {
+    const cols = d.query(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!cols.some((c) => c.name === column)) d.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
+}
+
 function configure(d: Database) {
   d.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=250; PRAGMA foreign_keys=ON;");
   d.exec(SCHEMA);
+  addColumns(d);
 }
 
 const backupsOf = (path: string) => {

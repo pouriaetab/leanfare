@@ -19,6 +19,7 @@ export interface Settings {
   providers: Partial<Record<ProviderId, ProviderSettings>>;
   successors: Record<string, string>; // your own choice of replacement for a retiring model
   allowOrigins: string[]; // web pages allowed to call the engine addresses (empty: none)
+  instructions: string; // given to every new chat as its instructions (a system prompt); empty: none
 }
 
 export const DEFAULTS: Settings = {
@@ -32,7 +33,10 @@ export const DEFAULTS: Settings = {
   providers: {},
   successors: {},
   allowOrigins: [],
+  instructions: "",
 };
+
+export const MAX_INSTRUCTIONS = 20_000; // characters
 
 export const MODES: Record<Mode, { label: string; margin: number; blurb: string }> = {
   save: { label: "Save more", margin: 80, blurb: "the cheapest model rated within 80 points of the best you ticked" },
@@ -78,6 +82,10 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
   if ("allowOrigins" in p) {
     if (!Array.isArray(p.allowOrigins) || p.allowOrigins.some((o: unknown) => typeof o !== "string" || !/^https?:\/\/[^/]+$/.test(o as string))) return { error: "allowOrigins must be a list like http://localhost:3000" };
     out.allowOrigins = p.allowOrigins;
+  }
+  if ("instructions" in p) {
+    if (typeof p.instructions !== "string" || p.instructions.length > MAX_INSTRUCTIONS) return { error: `instructions must be text of at most ${MAX_INSTRUCTIONS.toLocaleString("en-US")} characters` };
+    out.instructions = p.instructions.trim();
   }
   return { patch: out };
 }
