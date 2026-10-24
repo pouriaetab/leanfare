@@ -41,6 +41,14 @@ try {
   step("the chat streams an answer and its cost", events.some((e) => e.type === "delta") && events.some((e) => e.type === "done" && typeof e.result.cost === "number"));
   const s = await ui("/api/savings");
   step("the savings page counts both answers", s.answers === 2, `${s.answers} answers, $${s.spent.toFixed(6)}`);
+  // The MCP door finds the running app by itself (its pid and token files).
+  const door = Bun.spawn([process.execPath, join(root, "src/cli.ts"), "mcp"], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  (door.stdin as any).write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "smoke", version: "1" } } }) + "\n");
+  (door.stdin as any).write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "spend", arguments: {} } }) + "\n");
+  (door.stdin as any).end();
+  const lines = (await new Response(door.stdout).text()).trim().split("\n").map((l) => JSON.parse(l));
+  const spend = lines.find((l) => l.id === 2)?.result?.content?.[0]?.text ?? "";
+  step("the MCP door answers (leanfare mcp)", lines.find((l) => l.id === 1)?.result?.serverInfo?.name === "leanfare" && spend.includes("over 2 answers"), spend.split("\n")[0]);
   const status = cli("status");
   step("leanfare status says it is running", (await status.exited) === 0, (await new Response(status.stdout).text()).split("\n")[0]);
 } catch (e) {
