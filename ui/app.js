@@ -458,6 +458,9 @@
 
   const slug = (t) => (t.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "chat");
   function download(name, text, type) {
+    // In the Mac app, the app saves it (a web view has no downloads of its own).
+    const mac = window.webkit?.messageHandlers?.leanfareSave;
+    if (mac) { mac.postMessage({ name, text }); toast(`Saved ${name} in your Downloads folder.`, "done"); return; }
     const href = URL.createObjectURL(new Blob([text], { type }));
     const a = h("a", { href, download: name, hidden: true });
     document.body.append(a);
