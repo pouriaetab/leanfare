@@ -83,6 +83,9 @@ function anthropicContent(content: unknown): any[] | string {
 const THINK_BUDGET: Record<string, number> = { minimal: 1024, low: 2048, medium: 6000, high: 16000, xhigh: 24000 };
 const THINK_ROOM: Record<string, number> = { minimal: 8192, low: 8192, medium: 16000, high: 32000, xhigh: 48000, max: 64000 };
 
+// The answer limit Claude is sent when the request has none of its own.
+export const anthropicDefaultMax = (effort: string | null) => Math.max(8192, effort ? THINK_ROOM[effort] ?? 16000 : 0);
+
 export function toAnthropic(body: any, m: Model, stream: boolean, effort: string | null = null): any {
   if (body.tools || body.functions || body.tool_choice) {
     throw new UserError(400, "In Leanfare 0.1, tools with Claude models work through the Anthropic address (/v1/messages), not the OpenAI one.");
@@ -115,7 +118,7 @@ export function toAnthropic(body: any, m: Model, stream: boolean, effort: string
   const level = effort ?? effortFor(m, typeof body.reasoning_effort === "string" ? body.reasoning_effort : null);
   if (level) {
     const limited = body.max_completion_tokens != null || body.max_tokens != null;
-    if (!limited) out.max_tokens = Math.max(out.max_tokens, THINK_ROOM[level] ?? 16000); // thinking counts in the answer limit
+    if (!limited) out.max_tokens = Math.max(out.max_tokens, anthropicDefaultMax(level)); // thinking counts in the answer limit
     if ((m.effort ?? []).includes("max")) {
       out.thinking = { type: "adaptive" };
       out.output_config = { effort: level };

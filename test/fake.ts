@@ -11,6 +11,10 @@
 //   [chunks 40]             stream the answer in 40 pieces, 50 ms apart
 //   [fail 429]              answer with this HTTP status
 //   [think]                 think first ("Let me think."), in each provider's own way
+//   [empty] [empty1]        answer nothing (always, or only the first time this prompt is seen)
+//   [cut1]                  the first time: stop sending after one piece, with no end marker
+//   [thinkall1]             the first time: only think, and stop at the answer limit
+//   [filter]                decline (finish_reason content_filter), with no text
 export const KEYS: Record<string, string> = {
   openai: "sk-test-openai-0001", anthropic: "sk-ant-test-0002", google: "AIzaTestGoogleKey0000000000003", openrouter: "sk-or-test-0004",
   deepseek: "sk-test-deepseek-05", xai: "xai-test-key-000006", mistral: "test-mistral-key-07",
@@ -58,6 +62,7 @@ function promptText(body: any): string {
 
 export function startFake() {
   const seen: Seen[] = [];
+  const onceSeen = new Set<string>();
   let dataJson: any = null;
   let dataStatus = 200;
   const server = Bun.serve({
@@ -103,12 +108,21 @@ export function startFake() {
       // Like a real provider, never write more than the request allows.
       const limit = body?.max_completion_tokens ?? body?.max_tokens ?? Infinity;
       const outTok = Math.min(u?.[1] ?? 12, limit);
-      const capped = (u?.[1] ?? 12) > limit;
+      let capped = (u?.[1] ?? 12) > limit;
       const cached = directive(text, "cached")?.[0] ?? 0;
       const nousage = !!directive(text, "nousage");
       const pieces = directive(text, "chunks")?.[0] ?? 3;
-      const answer = text.includes("[md]") ? MARKDOWN : `Hello from ${body?.model ?? "?"}.`;
-      const think = text.includes("[think]") ? "Let me think." : "";
+      const firstTime = !onceSeen.has(provider + "|" + text);
+      onceSeen.add(provider + "|" + text);
+      const filtered = text.includes("[filter]");
+      const thinkAll = text.includes("[thinkall1]") && firstTime;
+      const empty = text.includes("[empty]") || (text.includes("[empty1]") && firstTime) || thinkAll || filtered;
+      const cut = text.includes("[cut1]") && firstTime;
+      if (thinkAll) capped = true; // it stopped at the limit
+      const answer = empty ? "" : text.includes("[md]") ? MARKDOWN : `Hello from ${body?.model ?? "?"}.`;
+      const stopReason = filtered ? "refusal" : capped ? "max_tokens" : "end_turn";
+      const finishReason = filtered ? "content_filter" : capped ? "length" : "stop";
+      const think = text.includes("[think]") || thinkAll ? "Let me think." : "";
       const split = Array.from({ length: pieces }, (_, i) => answer.slice(Math.floor((i * answer.length) / pieces), Math.floor(((i + 1) * answer.length) / pieces)));
       const gap = pieces > 3 ? 50 : 0;
       const enc = new TextEncoder();
@@ -116,7 +130,7 @@ export function startFake() {
       if (provider === "anthropic" && url.pathname.endsWith("/v1/messages")) {
         const usage = { input_tokens: inTok - cached, cache_read_input_tokens: cached, cache_creation_input_tokens: 0, output_tokens: outTok };
         if (!body.stream) {
-          return Response.json({ id: "msg_fake", type: "message", role: "assistant", model: body.model, content: [...(think ? [{ type: "thinking", thinking: think, signature: "sig" }] : []), { type: "text", text: answer }], stop_reason: capped ? "max_tokens" : "end_turn", usage: nousage ? undefined : usage });
+          return Response.json({ id: "msg_fake", type: "message", role: "assistant", model: body.model, content: [...(think ? [{ type: "thinking", thinking: think, signature: "sig" }] : []), ...(answer ? [{ type: "text", text: answer }] : [])], stop_reason: stopReason, usage: nousage ? undefined : usage });
         }
         const events: [string, any][] = [
           ["message_start", { type: "message_start", message: { id: "msg_fake", type: "message", role: "assistant", model: body.model, content: [], usage: nousage ? undefined : { ...usage, output_tokens: 1 } } }],
@@ -127,11 +141,12 @@ export function startFake() {
             ["content_block_stop", { type: "content_block_stop", index: 0 }],
           ] as [string, any][] : []),
           ["content_block_start", { type: "content_block_start", index: think ? 1 : 0, content_block: { type: "text", text: "" } }],
-          ...split.map((t): [string, any] => ["content_block_delta", { type: "content_block_delta", index: think ? 1 : 0, delta: { type: "text_delta", text: t } }]),
+          ...split.filter((t) => t).map((t): [string, any] => ["content_block_delta", { type: "content_block_delta", index: think ? 1 : 0, delta: { type: "text_delta", text: t } }]),
           ["content_block_stop", { type: "content_block_stop", index: think ? 1 : 0 }],
-          ["message_delta", { type: "message_delta", delta: { stop_reason: capped ? "max_tokens" : "end_turn" }, usage: nousage ? undefined : { output_tokens: outTok } }],
+          ["message_delta", { type: "message_delta", delta: { stop_reason: stopReason }, usage: nousage ? undefined : { output_tokens: outTok } }],
           ["message_stop", { type: "message_stop" }],
         ];
+        if (cut) events.splice(events.findIndex(([e, d]) => e === "content_block_delta" && d.delta.type === "text_delta") + 1); // the connection drops after one piece
         return new Response(new ReadableStream({
           async start(c) {
             for (const [ev, data] of events) {
@@ -147,7 +162,7 @@ export function startFake() {
       if (url.pathname.endsWith("/chat/completions")) {
         const usage = { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok, prompt_tokens_details: { cached_tokens: cached }, ...(provider === "openrouter" ? { cost: 0.00042 } : {}) };
         if (!body.stream) {
-          return Response.json({ id: "chatcmpl-fake", object: "chat.completion", created: 1, model: body.model, choices: [{ index: 0, message: { role: "assistant", content: answer, ...(think ? { reasoning_content: think } : {}) }, finish_reason: capped ? "length" : "stop" }], ...(nousage ? {} : { usage }) });
+          return Response.json({ id: "chatcmpl-fake", object: "chat.completion", created: 1, model: body.model, choices: [{ index: 0, message: { role: "assistant", content: answer, ...(think ? { reasoning_content: think } : {}) }, finish_reason: finishReason }], ...(nousage ? {} : { usage }) });
         }
         const wantsUsage = body.stream_options?.include_usage === true || provider === "mistral" || provider === "google";
         return new Response(new ReadableStream({
@@ -159,10 +174,12 @@ export function startFake() {
               if (think) send({ id: "c1", object: "chat.completion.chunk", model: body.model, choices: [{ index: 0, delta: provider === "mistral" ? { content: [{ type: "thinking", thinking: [{ type: "text", text: think }] }] } : provider === "openrouter" || provider === "ollama" ? { reasoning: think } : { reasoning_content: think }, finish_reason: null }] });
               for (const t of split) {
                 if (rec.aborted) return;
+                if (!t) continue;
                 send({ id: "c1", object: "chat.completion.chunk", model: body.model, choices: [{ index: 0, delta: provider === "mistral" && think ? { content: [{ type: "text", text: t }] } : { content: t }, finish_reason: null }] });
+                if (cut) { c.close(); return; } // the connection drops after one piece
                 if (gap) await Bun.sleep(gap);
               }
-              send({ id: "c1", object: "chat.completion.chunk", model: body.model, choices: [{ index: 0, delta: {}, finish_reason: capped ? "length" : "stop" }] });
+              send({ id: "c1", object: "chat.completion.chunk", model: body.model, choices: [{ index: 0, delta: {}, finish_reason: finishReason }] });
               if (wantsUsage && !nousage) send({ id: "c1", object: "chat.completion.chunk", model: body.model, choices: [], usage });
               c.enqueue(enc.encode("data: [DONE]\n\n"));
               c.close();

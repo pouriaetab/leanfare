@@ -10,7 +10,7 @@ import { MODES, settings, type Mode } from "./settings";
 import { estimateFor, expectedOutput, guessTask, ledgerWhy, pickModel, resolveModel, type Guess, type Msg } from "./router";
 import { successor } from "./retire";
 import { addSpent, budgetState, release, tryReserve, wouldFit } from "./budget";
-import { AnthropicStreamTranslator, UserError, anthropicToOpenAI, effortFor, headersFor, networkError, openaiBody, plainError, toAnthropic } from "./upstream";
+import { AnthropicStreamTranslator, UserError, anthropicDefaultMax, anthropicToOpenAI, effortFor, headersFor, networkError, openaiBody, plainError, toAnthropic } from "./upstream";
 import { SSEParser, dollars, localDay, localMonth, median, now, providerMessage, randomId, redact, usd8 } from "./util";
 import { takesImages, takesPdfs } from "./files";
 
@@ -143,6 +143,7 @@ export interface Plan {
   capped: boolean; // a budget is set and the request has no answer limit of its own: Leanfare sends one
   asked: string | null;
   effortAsked: string | null;
+  capOverride?: number | null; // a second try with a higher answer limit (the first one spent it thinking)
 }
 
 const AUTO = /^(leanfare\/)?(auto|leanfare)(-(save|balanced|best))?$/i;
@@ -362,7 +363,7 @@ async function sendWithFallback(p: Plan, source: string, body: any, stream: bool
     }
     const t0 = performance.now();
     try {
-      const res = await send(m, body, stream, signal, native, extraHeaders, p.capped ? outCap(m) : null, p.effortAsked);
+      const res = await send(m, body, stream, signal, native, extraHeaders, p.capOverride ?? (p.capped ? outCap(m) : null), p.effortAsked);
       const type = res.headers.get("content-type") ?? "";
       if (res.ok && !/text\/html/i.test(type)) return { res, model: m, t0 };
       const text = await res.text();
@@ -523,15 +524,30 @@ export async function handleOpenAI(req: Request, body: any): Promise<Response> {
 
   if (!stream) {
     try {
-      const text = await res.text();
-      let j: any;
-      try { j = JSON.parse(text); } catch { throw new UserError(502, `${def.name} sent an answer Leanfare could not read.`, "bad_provider_answer"); }
-      const usage = def.kind === "anthropic" ? fromAnthropicUsage(j.usage) : fromOpenAIUsage(j.usage);
-      const out = def.kind === "anthropic" ? JSON.stringify(anthropicToOpenAI(j, name)) : text;
-      const answer = def.kind === "anthropic" ? "" : String(j.choices?.[0]?.message?.content ?? "");
-      const r = record(p, model, "openai", usage ?? estimatedUsage(p, answer.length), { status: "ok", ms: performance.now() - t0, reportedCost: typeof j.usage?.cost === "number" ? j.usage.cost : null, estimated: !usage });
+      // One whole answer; an empty one (no text, no tool call, not declined) is asked for once more.
+      const read = async (r: Response, t: number) => {
+        const text = await r.text();
+        let j: any;
+        try { j = JSON.parse(text); } catch { throw new UserError(502, `${def.name} sent an answer Leanfare could not read.`, "bad_provider_answer"); }
+        const oj = def.kind === "anthropic" ? anthropicToOpenAI(j, name) : j;
+        const msg = oj.choices?.[0]?.message ?? {};
+        const answer = typeof msg.content === "string" ? msg.content : "";
+        const empty = !answer.trim() && !msg.tool_calls?.length && !msg.function_call && oj.choices?.[0]?.finish_reason !== "content_filter";
+        const usage = def.kind === "anthropic" ? fromAnthropicUsage(j.usage) : fromOpenAIUsage(j.usage);
+        return { out: def.kind === "anthropic" ? JSON.stringify(oj) : text, answer, empty, usage, reported: typeof j.usage?.cost === "number" ? j.usage.cost : null, t };
+      };
+      let a = await read(res, t0);
+      if (a.empty && !ac.signal.aborted) {
+        record(p, model, "openai", a.usage ?? estimatedUsage(p, 0), { status: "error", error: "came back empty", ms: performance.now() - a.t, reportedCost: a.reported, estimated: !a.usage });
+        p.notes.push(`The first try came back empty, so Leanfare asked ${model.label} once more.`);
+        p.candidates = [model];
+        const again = await sendWithFallback(p, "openai", body, false, ac.signal);
+        a = await read(again.res, again.t0);
+        Object.assign(headers, leanHeaders(p, model));
+      }
+      const r = record(p, model, "openai", a.usage ?? estimatedUsage(p, a.answer.length), { status: "ok", ms: performance.now() - a.t, reportedCost: a.reported, estimated: !a.usage });
       headers["x-leanfare-cost-usd"] = r.cost === null ? "unknown" : usd8(r.cost);
-      return new Response(out, { status: 200, headers: { ...headers, "content-type": "application/json" } });
+      return new Response(a.out, { status: 200, headers: { ...headers, "content-type": "application/json" } });
     } catch (e) {
       return errorResponse(e);
     } finally {
@@ -678,6 +694,7 @@ export type ChatEvent =
   | { type: "meta"; plan: ReturnType<typeof planView> }
   | { type: "delta"; text: string }
   | { type: "thinking"; text: string }
+  | { type: "retry"; message: string }
   | { type: "done"; result: any }
   | { type: "error"; message: string; status: number };
 
@@ -723,36 +740,83 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
   }
   const rid = register("chat", `${label} · ${p.model.label}`, ac);
   emit({ type: "meta", plan: planView(p) });
-  let text = "", thinking = "", usage: Usage | null = null, reported: number | null = null, firstMs: number | null = null, failed: string | null = null;
-  let model = p.model, t0 = performance.now(), ended = false, finishReason: string | null = null;
-  const notesBefore = p.notes.length;
-  try {
-    const sent = await sendWithFallback(p, "chat", { messages: withSystem(messages, opts.system) }, true, ac.signal);
-    model = sent.model; t0 = sent.t0;
-    if (p.notes.length > notesBefore) emit({ type: "meta", plan: planView(p) }); // Auto passed it on: say so
-    for await (const { j, data } of openaiChunks(sent.res, model, model.apiId)) {
-      if (!j) { if (data === "[DONE]") ended = true; continue; }
-      const c = readChunk(j);
-      if (c.finish) { ended = true; finishReason = c.finish; }
-      if (c.usage) usage = c.usage;
-      if (c.cost !== null) reported = c.cost;
-      if (c.error) { failed = c.error; break; }
-      if ((c.text || c.thinking) && firstMs === null) firstMs = performance.now() - t0;
-      if (c.thinking) { thinking += c.thinking; emit({ type: "thinking", text: c.thinking }); }
-      if (c.text) { text += c.text; emit({ type: "delta", text: c.text }); }
+  const body = { messages: withSystem(messages, opts.system) };
+
+  // One try: send, then read the stream into text and thinking.
+  interface Try { text: string; thinking: string; usage: Usage | null; reported: number | null; firstMs: number | null; failed: string | null; ended: boolean; finish: string | null; model: Model; t0: number; answered: boolean }
+  const attempt = async (cap: number | null): Promise<Try> => {
+    const t: Try = { text: "", thinking: "", usage: null, reported: null, firstMs: null, failed: null, ended: false, finish: null, model: p.model, t0: performance.now(), answered: false };
+    const notesBefore = p.notes.length;
+    p.capOverride = cap;
+    try {
+      const sent = await sendWithFallback(p, "chat", body, true, ac.signal);
+      t.model = sent.model; t.t0 = sent.t0; t.answered = true;
+      if (p.notes.length > notesBefore) emit({ type: "meta", plan: planView(p) }); // Auto passed it on: say so
+      for await (const { j, data } of openaiChunks(sent.res, t.model, t.model.apiId)) {
+        if (!j) { if (data === "[DONE]") t.ended = true; continue; }
+        const c = readChunk(j);
+        if (c.finish) { t.ended = true; t.finish = c.finish; }
+        if (c.usage) t.usage = c.usage;
+        if (c.cost !== null) t.reported = c.cost;
+        if (c.error) { t.failed = c.error; break; }
+        if ((c.text || c.thinking) && t.firstMs === null) t.firstMs = performance.now() - t.t0;
+        if (c.thinking) { t.thinking += c.thinking; emit({ type: "thinking", text: c.thinking }); }
+        if (c.text) { t.text += c.text; emit({ type: "delta", text: c.text }); }
+      }
+      if (!t.ended && !t.failed && !ac.signal.aborted) t.failed = incomplete(t.model);
+    } catch (e: any) {
+      if (!ac.signal.aborted) t.failed = e instanceof UserError ? e.message : String(e?.message ?? e);
     }
-    if (!ended && !failed && !ac.signal.aborted) failed = incomplete(model);
-  } catch (e: any) {
-    if (!ac.signal.aborted) failed = e instanceof UserError ? e.message : String(e?.message ?? e);
+    return t;
+  };
+  // The answer limit a try had: Leanfare's own, or the one Claude is always sent.
+  const limitOf = (m: Model): number | null => p.capOverride ?? (p.capped ? outCap(m) : provider(m.provider)!.kind === "anthropic" ? anthropicDefaultMax(effortFor(m, p.effortAsked)) : null);
+  const words = (s: string) => (s.trim() ? s.trim().split(/\s+/).length : 0);
+  // A try that failed before the provider answered was written down where it failed (sendWithFallback).
+  const recordTry = (t: Try, status: "ok" | "stopped" | "error", error?: string) =>
+    status !== "error" || t.answered || t.usage
+      ? record(p, t.model, "chat", t.usage ?? estimatedUsage(p, t.text.length + t.thinking.length), { status, error, ms: performance.now() - t.t0, firstMs: t.firstMs, reportedCost: t.reported, estimated: !t.usage })
+      : null;
+
+  let t = await attempt(null);
+  let retried = false;
+  // An answer that came back empty, or was cut off on the way, is asked once more (noted on the answer).
+  if (t.answered && !ac.signal.aborted) {
+    let why: { note: string; ledger: string; cap: number | null } | null = null;
+    const name = t.model.label;
+    if (t.failed) why = { note: t.text ? `The first answer was cut off after about ${words(t.text).toLocaleString("en-US")} words, so Leanfare asked again.` : `The first try stopped before ${name} answered, so Leanfare asked again.`, ledger: `cut off: ${t.failed}`, cap: null };
+    else if (!t.text.trim() && t.finish === "length") {
+      const limit = limitOf(t.model);
+      if (limit) why = { note: `${name} spent its whole ${limit.toLocaleString("en-US")}-token answer limit thinking and wrote nothing, so Leanfare asked again with ${Math.min(2 * limit, 64000).toLocaleString("en-US")}.`, ledger: "spent the answer limit thinking", cap: Math.min(2 * limit, 64000) };
+    } else if (!t.text.trim() && t.finish !== "content_filter") why = { note: `The first try came back empty, so Leanfare asked ${name} once more.`, ledger: "came back empty", cap: null };
+    if (why) {
+      recordTry(t, "error", why.ledger);
+      release(p.reservation);
+      p.reservation = null;
+      const s = settings();
+      if (s.budget !== null) p.reservation = tryReserve(reserveFor(t.model, p.inMax, why.cap ?? p.maxOut), s.atLimit === "cheapest");
+      if (s.budget === null || p.reservation) {
+        p.notes.push(why.note);
+        p.model = t.model; p.candidates = [t.model]; // the same model again: the first try did reach it
+        emit({ type: "retry", message: why.note });
+        emit({ type: "meta", plan: planView(p) });
+        retried = true;
+        t = await attempt(why.cap);
+      } else p.notes.push(`${why.note.replace(/, so Leanfare .*$/, ".")} The budget does not leave room to ask again.`);
+    }
   }
-  if (finishReason === "length" && p.capped) p.notes.push(`The answer stopped at ${outCap(model).toLocaleString("en-US")} tokens, the limit Leanfare sets while a budget is on. Ask it to continue, or raise the budget.`);
+  let { text, thinking, usage, firstMs, failed, finish: finishReason, model, t0 } = t;
+  // What is still empty after that is an error you can see, with Try again.
+  if (!failed && !ac.signal.aborted && t.answered && !text.trim()) {
+    failed = finishReason === "content_filter" ? `${model.label} declined to answer this (its safety filter). Try rewording it, or another model.`
+      : finishReason === "length" ? `${model.label} spent its whole answer limit thinking and wrote nothing. Lower the thinking effort${p.capped ? ", or raise the budget" : ""}, and try again.`
+      : `${model.label} sent an empty answer.`;
+  }
+  if (finishReason === "length" && p.capped && text.trim()) p.notes.push(`The answer stopped at ${(p.capOverride ?? outCap(model)).toLocaleString("en-US")} tokens, the limit Leanfare sets while a budget is on. Ask it to continue, or raise the budget.`);
   const status: "ok" | "stopped" | "error" = ac.signal.aborted ? "stopped" : failed ? "error" : "ok";
   release(p.reservation);
   running.delete(rid);
-  const sentToProvider = status !== "error" || text.length > 0;
-  const r = sentToProvider || usage
-    ? record(p, model, "chat", usage ?? estimatedUsage(p, text.length + thinking.length), { status, error: failed ?? undefined, ms: performance.now() - t0, firstMs, reportedCost: reported, estimated: !usage })
-    : null;
+  const r = recordTry(t, status, failed ?? undefined);
   const cat = store.catalog;
   const meta = {
     ...planView(p),
@@ -772,6 +836,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
     thinkingChars: thinking.length,
     thinking: thinking ? thinking.slice(0, 200_000) : undefined,
     effort: effortFor(model, p.effortAsked),
+    retried,
     ...(opts.meta ?? {}),
   };
   if (status === "error") emit({ type: "error", message: failed ?? "The answer failed.", status: 502 });

@@ -719,6 +719,7 @@
     if (meta.task) chips.push(h("span", { class: "chip task", title: `Task guessed from ${meta.why}`, text: (S.st.tasks.find((t) => t[0] === meta.task)?.[1] ?? meta.task) }));
     if (meta.auto) chips.push(h("span", { class: "chip", text: `Auto · ${meta.modeLabel}` }));
     if (meta.switchedFrom) chips.push(h("span", { class: "chip warn", text: "Switched from a retired model" }));
+    if (meta.retried && !m.live) chips.push(h("span", { class: "chip warn", title: (meta.notes ?? []).find((n) => /asked (again|.* once more)/.test(n)) ?? "", text: "Second try" }));
     if (meta.priceStatus === "free plan") chips.push(h("span", { class: "chip good", text: "Free plan" }));
     if (meta.priceStatus === "local") chips.push(h("span", { class: "chip good", text: "On this computer" }));
     if (meta.priceStatus === "free") chips.push(h("span", { class: "chip good", text: "Free model" }));
@@ -729,7 +730,7 @@
     }
     const line = h("div", { class: "meta" }, ...chips);
     if (meta.status === "running" || m.live) {
-      const waitingText = meta.waiting ? meta.waiting : !m.content ? (meta.slow ? "Taking longer than usual. You can stop it, or wait." : meta.model ? `Waiting for ${meta.model.label}…` : "Choosing a model…") : `Writing… ${num(Math.ceil(m.content.length / 4))} tokens`;
+      const waitingText = meta.waiting ? meta.waiting : !m.content ? (meta.retryNote ? `Asking again: ${meta.retryNote.replace(/, so Leanfare .*$/, ".")}` : meta.slow ? "Taking longer than usual. You can stop it, or wait." : meta.model ? `Waiting for ${meta.model.label}…` : "Choosing a model…") : `Writing… ${num(Math.ceil(m.content.length / 4))} tokens`;
       line.prepend(h("span", { class: "spin" }));
       line.append(h("span", { text: waitingText }));
       if (meta.estimate !== undefined && meta.estimate !== null) line.append(h("span", { text: `≈ ${money(meta.estimate)} (estimate)` }));
@@ -1019,6 +1020,7 @@
     else if (e.type === "meta") { live.meta = { ...live.meta, ...e.plan, status: "running", waiting: null }; paintLive(); }
     else if (e.type === "delta") { live.content += e.text; paintLiveSoon(); }
     else if (e.type === "thinking") { live.thinking = (live.thinking ?? "") + e.text; live.meta.thinkingChars = live.thinking.length; paintLiveSoon(); }
+    else if (e.type === "retry") { live.content = ""; live.thinking = ""; live.meta.thinkingChars = 0; live.meta.retryNote = e.message; paintLive(); } // the answer starts over
     else if (e.type === "error") { live.meta.error = e.message; }
     else if (e.type === "done") { live.meta = e.result; live.live = false; }
     else if (e.type === "saved") { live.id = e.messageId; }
