@@ -6,6 +6,7 @@
   "type": "module",
   "files": [
     "src",
+    "ui",
     "data/catalog.json",
     "README.md",
     "LICENSE"
@@ -33,6 +34,7 @@
   ],
   "devDependencies": {
     "@types/bun": "1.4.3",
+    "happy-dom": "20.14.6",
     "typescript": "7.0.2"
   }
 }
