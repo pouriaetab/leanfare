@@ -165,9 +165,12 @@
     return j;
   }
 
-  // A locked Leanfare (Settings: Other apps need a key) asks a new browser for its key once.
+  // A locked Leanfare (Settings: Other apps need a key) asks a browser without its
+  // sign in for the key. In the Mac app, the app opens itself again, unlocked.
   function renderLocked() {
     if (document.getElementById("lockScreen")) return;
+    const mac = window.webkit?.messageHandlers?.leanfareLocked;
+    if (mac) { try { mac.postMessage({}); } catch {} }
     const input = h("input", { type: "password", placeholder: "lf-…", autocomplete: "off", "aria-label": "Access key" });
     const go = async () => {
       try { await api("/api/unlock", { body: { key: input.value } }); location.reload(); }
@@ -176,7 +179,7 @@
     input.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
     document.body.append(h("div", { id: "lockScreen", class: "lock" }, h("div", { class: "lock-card" },
       h("h2", { text: "Leanfare is locked" }),
-      h("p", { text: "Leanfare is set to ask for its access key. Paste it to open Leanfare in this browser. Opened from its menu bar icon, or with leanfare in Terminal, it opens unlocked." }),
+      h("p", { text: mac ? "The lock is on (Settings: Other apps need a key), so Leanfare is opening again with its own sign in. If this stays, paste the access key here." : "Leanfare is set to ask for its access key (Settings: Other apps need a key). Paste the key to open Leanfare in this browser. The Mac app and the leanfare command in Terminal open it without the key." }),
       h("div", { class: "row" }, input, h("button", { class: "btn primary", type: "button", text: "Unlock", onclick: go })))));
     input.focus();
   }

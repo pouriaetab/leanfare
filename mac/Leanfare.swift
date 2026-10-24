@@ -40,15 +40,38 @@ enum Place {
         return dataDir.appendingPathComponent("notes.md")
     }
 
-    // Bun: where its installer puts it, or where Homebrew does.
+    // Bun: the one build.sh found when it built this app (any install: bun.sh,
+    // Homebrew, mise, asdf, proto), then where its installer or Homebrew put it,
+    // then wherever your login shell finds it.
     static func bun() -> URL? {
         var candidates: [String] = []
         if let b = ProcessInfo.processInfo.environment["LEANFARE_BUN"], !b.isEmpty { candidates.append(b) }
+        if let b = Bundle.main.object(forInfoDictionaryKey: "LeanfareBun") as? String, !b.isEmpty {
+            candidates.append((b as NSString).expandingTildeInPath)
+        }
         candidates.append(home.appendingPathComponent(".bun/bin/bun").path)
         candidates.append("/opt/homebrew/bin/bun")
         candidates.append("/usr/local/bin/bun")
         for c in candidates where FileManager.default.isExecutableFile(atPath: c) { return URL(fileURLWithPath: c) }
-        return nil
+        return shellBun()
+    }
+
+    // Asks your shell, the way Terminal starts it, where bun is (at most 4 seconds).
+    static func shellBun() -> URL? {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        p.arguments = ["-ilc", "command -v bun"]
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        p.standardInput = FileHandle.nullDevice
+        do { try p.run() } catch { return nil }
+        let until = Date().addingTimeInterval(4)
+        while p.isRunning && Date() < until { Thread.sleep(forTimeInterval: 0.05) }
+        if p.isRunning { p.terminate(); return nil }
+        let text = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let path = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.last { $0.hasPrefix("/") } ?? ""
+        return FileManager.default.isExecutableFile(atPath: path) ? URL(fileURLWithPath: path) : nil
     }
 }
 
@@ -149,8 +172,10 @@ final class Server {
         p.terminationHandler = { [weak self] proc in
             let code = proc.terminationStatus
             DispatchQueue.main.async {
-                self?.child = nil
-                self?.onExit?(code)
+                // Only the Leanfare this app runs now (not one it stopped before starting another).
+                guard let self = self, self.child === proc else { return }
+                self.child = nil
+                self.onExit?(code)
             }
         }
         try p.run()
@@ -177,6 +202,8 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     let window: NSWindow
     let web: WKWebView
     var onClose: (() -> Void)?
+    var onLocked: (() -> Void)?
+    var lastUnlock = Date.distantPast
 
     override init() {
         let config = WKWebViewConfiguration()
@@ -187,8 +214,10 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
         super.init()
-        // The page saves files (an exported chat) through this, into your Downloads folder.
+        // The page saves files (an exported chat) through this, into your Downloads folder,
+        // and says when it shows the lock screen (the app then opens it again, unlocked).
         config.userContentController.add(self, name: "leanfareSave")
+        config.userContentController.add(self, name: "leanfareLocked")
         window.title = "Leanfare"
         window.minSize = NSSize(width: 760, height: 520)
         window.contentView = web
@@ -209,7 +238,16 @@ final class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDel
     func windowWillClose(_ notification: Notification) { onClose?() }
 
     // A file from the page: { name, text } saved in Downloads, then shown in Finder.
+    // The lock screen: opened again through the unlock link, at most every 10 seconds
+    // (so a lock the link cannot open stays on screen instead of reloading forever).
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == "leanfareLocked" {
+            if Date().timeIntervalSince(lastUnlock) > 10 {
+                lastUnlock = Date()
+                onLocked?()
+            }
+            return
+        }
         guard message.name == "leanfareSave", let body = message.body as? [String: Any],
               let name = body["name"] as? String, let text = body["text"] as? String else { return }
         let folder = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first ?? Place.home
@@ -269,6 +307,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var last: Summary?
     var problem: String?
     var quitting = false
+    var starting = false // waiting for the Leanfare this app started to answer
+    var windowWanted = false // open the window once Leanfare answers
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -292,13 +332,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // Use a Leanfare that is already running, or start the one inside this app.
     func connect(openWindow: Bool) {
+        if openWindow { windowWanted = true }
         server.readFiles()
         server.healthy { [weak self] ok in
             guard let self = self else { return }
             if ok {
                 self.problem = nil
                 self.refresh()
-                if openWindow { self.showWindow() }
                 return
             }
             guard let bun = Place.bun() else { self.needBun(); return }
@@ -307,23 +347,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.setProblem("Leanfare could not start: \(error.localizedDescription)")
                 return
             }
-            self.waitUntilUp(tries: 0, openWindow: openWindow)
+            self.starting = true
+            self.waitUntilUp(tries: 0)
         }
     }
 
-    func waitUntilUp(tries: Int, openWindow: Bool) {
+    // Waits up to 15 seconds for it to answer. After that it says so, and the next
+    // refresh that gets an answer clears the problem and opens the window after all.
+    func waitUntilUp(tries: Int) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self = self else { return }
             self.server.readFiles()
             self.server.healthy { ok in
                 if ok && !self.server.token.isEmpty {
+                    self.starting = false
                     self.problem = nil
                     self.refresh()
-                    if openWindow { self.showWindow() }
                 } else if tries < 60 && self.server.child != nil {
-                    self.waitUntilUp(tries: tries + 1, openWindow: openWindow)
-                } else if self.server.child != nil {
-                    self.setProblem("Leanfare is taking long to start. Its log is in ~/.leanfare/app.log.")
+                    self.waitUntilUp(tries: tries + 1)
+                } else {
+                    self.starting = false
+                    if self.server.child != nil { self.setProblem("Leanfare is taking long to start. Its log is in ~/.leanfare/app.log.") }
                 }
             }
         }
@@ -360,12 +404,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     // The menu bar: today's spend, coloured when the budget is close or used up.
+    // An answer clears any problem shown (Leanfare is up after all, or up again).
     func refresh() {
-        guard problem == nil || server.child != nil else { return }
         server.summary { [weak self] s in
             guard let self = self, let button = self.statusItem.button else { return }
-            guard let s = s else { return }
+            guard let s = s else { self.notAnswering(); return }
             self.last = s
+            self.problem = nil
+            if self.windowWanted {
+                self.windowWanted = false
+                self.showWindow()
+            }
             var color = NSColor.labelColor
             if let b = s.budget { color = b.reached ? NSColor.systemRed : b.warn ? NSColor.systemOrange : NSColor.labelColor }
             let text = (s.paused ? " ⏸ " : " ") + s.todayText
@@ -374,6 +423,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular),
             ])
             button.toolTip = "Leanfare: \(s.todayText) today, \(s.monthText) this month"
+        }
+    }
+
+    // No summary: Leanfare stopped, or was started again in Terminal (a new port or
+    // control token, read again here). A problem already shown stays as it is.
+    func notAnswering() {
+        server.readFiles() // so a Leanfare started in Terminal is found on the next refresh
+        if starting || quitting || problem != nil { return }
+        server.healthy { [weak self] ok in
+            guard let self = self, !ok, !self.starting, !self.quitting, self.problem == nil else { return }
+            self.last = nil
+            if self.server.startedHere {
+                self.setProblem("Leanfare is not answering. Its log is in ~/.leanfare/app.log. Choose Start Leanfare Again in the menu.")
+            } else {
+                self.setProblem("Leanfare is not running any more (it was started outside this app). Choose Start Leanfare Again in the menu.")
+            }
         }
     }
 
@@ -426,6 +491,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if webWindow == nil {
             let w = WebWindow()
             w.onClose = { [weak self] in self?.windowClosed() }
+            w.onLocked = { [weak self] in self?.reloadPage() }
             w.load(server)
             webWindow = w
         }
@@ -457,7 +523,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func startAgainServer() {
         problem = nil
+        last = nil
         statusItem.button?.title = " …"
+        // A Leanfare of this app's that stopped answering is stopped first.
+        if server.child != nil {
+            server.stop { [weak self] in
+                guard let self = self else { return }
+                self.server.child = nil // it stopped because it was asked to: not a problem to show
+                self.server.stopping = false
+                self.connect(openWindow: false)
+            }
+            return
+        }
         connect(openWindow: false)
     }
 
