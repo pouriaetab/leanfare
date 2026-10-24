@@ -47,8 +47,30 @@ describe("the Mac app's needs", () => {
 
   test("Info.plist allows the local address and names the notes file", () => {
     const plist = readFileSync(join(root, "mac/Info.plist"), "utf8");
-    for (const k of ["NSAllowsLocalNetworking", "127.0.0.1", "LSUIElement", "LeanfareNotesFile", "__VERSION__", "__BUILD__", "CFBundleIconFile"]) expect(plist).toContain(k);
+    for (const k of ["NSAllowsLocalNetworking", "127.0.0.1", "LSUIElement", "LeanfareNotesFile", "LeanfareBun", "__VERSION__", "__BUILD__", "CFBundleIconFile"]) expect(plist).toContain(k);
     expect(Bun.file(join(root, "mac/AppIcon.icns")).size).toBeGreaterThan(10_000);
+  });
+
+  test("the app uses the Bun the build found, wherever it is installed", () => {
+    const build = readFileSync(join(root, "mac/build.sh"), "utf8");
+    expect(build).toContain("process.execPath"); // past a mise, asdf or proto shim, to Bun itself
+    expect(build).toContain('plutil -replace LeanfareBun -string "$BUN_PATH"');
+    expect(swift).toContain('forInfoDictionaryKey: "LeanfareBun"');
+    expect(swift.indexOf('"LeanfareBun"')).toBeLessThan(swift.indexOf('".bun/bin/bun"'));
+  });
+
+  test("a window left on the lock screen opens itself again, unlocked", () => {
+    const app = readFileSync(join(root, "ui/app.js"), "utf8");
+    expect(app).toContain("messageHandlers?.leanfareLocked");
+    expect(swift).toContain('add(self, name: "leanfareLocked")');
+    expect(swift).toContain("w.onLocked = { [weak self] in self?.reloadPage() }");
+  });
+
+  test("a Leanfare that stops answering, or starts late, is noticed", () => {
+    // No summary: the app looks again (a new port or token) and says Leanfare stopped.
+    expect(swift).toContain("guard let s = s else { self.notAnswering(); return }");
+    // An answer clears an old problem and opens the window that was asked for.
+    expect(/self\.last = s\s+self\.problem = nil\s+if self\.windowWanted/.test(swift)).toBe(true);
   });
 
   test("the build points the Swift compiler at the macOS SDK", () => {
