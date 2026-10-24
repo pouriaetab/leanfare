@@ -2,7 +2,7 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { guessTask, pickModel, resolveModel } from "../src/router";
 import { getModel, loadCatalog, type Model } from "../src/data";
-const FIXTURE = new URL("./fixtures/catalog.json", import.meta.url).pathname;
+import { FIXTURE } from "./app";
 
 const ask = (text: string) => [{ role: "user", content: text }];
 const none = () => null;
