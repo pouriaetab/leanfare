@@ -303,6 +303,7 @@
     sysOpen: false,
     pending: [], // files attached to the message being written
     editing: null, // the index of the question being edited
+    search: null, // { q, results } while searching chats
   };
   const ready = () => S.st && S.st.usableCount > 0;
   const modelsOf = (pid) => (S.st?.models?.[pid] ?? []);
@@ -406,6 +407,7 @@
       el.append(
         h("aside", { class: "chats" },
           h("div", { class: "chats-head" }, h("button", { class: "btn primary", text: "New chat", onclick: newChat })),
+          h("div", { class: "chat-search" }, searchBox()),
           h("div", { class: "chat-list", id: "chatList" }),
           h("div", { class: "chats-foot", id: "chatsFoot" })),
         h("div", { class: "convo" },
@@ -430,7 +432,53 @@
     head.querySelector(".row1").replaceChildren(
       h("span", { class: "ct", text: title, title }),
       h("span", { class: "grow" }),
-      h("button", { class: "chip-btn" + (on ? " on" : ""), type: "button", "aria-expanded": String(S.sysOpen), title: "What the model is told before every message in this chat (a system prompt)", text: on ? "Instructions on" : "Instructions", onclick: () => { S.sysOpen = !S.sysOpen; renderSysPanel(); renderConvoHead(); } }));
+      h("button", { class: "chip-btn" + (on ? " on" : ""), type: "button", "aria-expanded": String(S.sysOpen), title: "What the model is told before every message in this chat (a system prompt)", text: on ? "Instructions on" : "Instructions", onclick: () => { S.sysOpen = !S.sysOpen; renderSysPanel(); renderConvoHead(); } }),
+      S.messages.some((m) => !m.live) ? h("button", { class: "chip-btn", type: "button", title: "Save this chat as a Markdown file", text: "Export", onclick: () => download(`${slug(title)}.md`, chatMarkdown(title), "text/markdown") }) : null);
+  }
+
+  const slug = (t) => (t.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "chat");
+  function download(name, text, type) {
+    const href = URL.createObjectURL(new Blob([text], { type }));
+    const a = h("a", { href, download: name, hidden: true });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(href), 5000);
+    toast(`Saved ${name} to your downloads.`, "done");
+  }
+  // One chat as Markdown: the questions, the answers, which model wrote each and what it cost.
+  function chatMarkdown(title) {
+    const lines = [`# ${title}`, "", `Exported from Leanfare on ${new Date().toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" })}.`];
+    if (S.system?.trim()) lines.push("", `**Instructions:** ${S.system.trim()}`);
+    for (const m of S.messages) {
+      if (m.live) continue;
+      if (m.role === "user") {
+        lines.push("", "## You", "");
+        if (m.content) lines.push(m.content);
+        if (m.files?.length) lines.push("", `_Attached: ${m.files.map((f) => f.name).join(", ")}_`);
+      } else if (m.role === "assistant" && m.content) {
+        const meta = m.meta ?? {};
+        lines.push("", `## ${meta.model?.label ?? "Answer"}${typeof meta.cost === "number" ? ` · ${money(meta.cost)}` : ""}`, "", m.content);
+      }
+    }
+    return lines.join("\n") + "\n";
+  }
+
+  async function exportEverything() {
+    const j = await api("/api/export");
+    download(`leanfare-chats-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(j), "application/json");
+  }
+  async function importFile(file) {
+    if (!file) return;
+    const t = toast(`Reading ${file.name}…`);
+    try {
+      const res = await fetch("/api/import", { method: "POST", headers: { "x-leanfare": "1", "content-type": "application/octet-stream" }, body: file });
+      const j = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(j?.error ?? `HTTP ${res.status}`);
+      const from = { leanfare: "a Leanfare export", chatgpt: "ChatGPT", claude: "Claude" }[j.from] ?? j.from;
+      t.set(`Imported ${num(j.imported)} chat${j.imported === 1 ? "" : "s"} (${num(j.messages)} messages) from ${from}.${j.skipped ? ` ${num(j.skipped)} ${j.skipped === 1 ? "was" : "were"} already here.` : ""}`, "done");
+      S.chats = j.chats; renderChatList();
+    } catch (e) { t.set(String(e?.message ?? e), "error"); }
   }
 
   function renderSysPanel() {
@@ -460,9 +508,47 @@
     ta.focus();
   }
 
+  let searchTimer = null, searchSeq = 0;
+  function searchBox() {
+    const input = h("input", { type: "search", placeholder: "Search chats", "aria-label": "Search chats", autocomplete: "off" });
+    input.addEventListener("input", () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(async () => {
+        const q = input.value.trim();
+        if (q.length < 2) { S.search = null; renderChatList(); return; }
+        const seq = ++searchSeq;
+        try { const r = await api("/api/search?q=" + encodeURIComponent(q)); if (seq === searchSeq) { S.search = { q, results: r.results }; renderChatList(); } }
+        catch (e) { failed(e); }
+      }, 250);
+    });
+    input.addEventListener("keydown", (e) => { if (e.key === "Escape") { input.value = ""; S.search = null; renderChatList(); } });
+    return input;
+  }
+  // The matching words, marked (built from text, never as HTML).
+  function marked(text, q) {
+    const out = [];
+    const low = text.toLowerCase(), ql = q.toLowerCase();
+    let i = 0;
+    for (let at = low.indexOf(ql); at >= 0 && out.length < 20; at = low.indexOf(ql, i)) {
+      out.push(text.slice(i, at), h("mark", { text: text.slice(at, at + q.length) }));
+      i = at + q.length;
+    }
+    out.push(text.slice(i));
+    return out;
+  }
+  function renderSearch(list) {
+    const { q, results } = S.search;
+    list.replaceChildren(
+      h("div", { class: "chat-group", text: results.length ? `${results.length}${results.length === 50 ? "+" : ""} chat${results.length === 1 ? "" : "s"} match` : "No chat matches" }),
+      ...results.map((r) => h("div", { class: "chat-item hit" + (r.id === S.chatId ? " on" : ""), title: r.title, onclick: () => openChat(r.id) },
+        h("span", { class: "t" }, ...marked(r.title, q)),
+        r.snippet ? h("span", { class: "snip" }, ...marked(r.snippet, q)) : null)));
+  }
+
   function renderChatList() {
     const list = $("#chatList");
     if (!list) return;
+    if (S.search) { renderSearch(list); renderConvoHead(); return; }
     const items = [];
     if (!S.history) items.push(h("div", { class: "empty", text: "Chat history is off, so chats are not kept. Turn it on in Settings." }));
     else if (!S.chats.length) items.push(h("div", { class: "empty", text: "Your chats will be listed here." }));
@@ -1279,7 +1365,10 @@
         h("p", { text: "Every new chat starts with these (a system prompt). Change them for one chat with Instructions above the conversation." })),
       h("div", { class: "setting" }, h("h3", { text: "Chat history" }),
         h("label", { class: "check" }, h("input", { type: "checkbox", checked: s.history, onchange: (e) => patchSettings({ history: e.target.checked }, e.target.checked ? "Chats will be kept on this computer." : "Chats will not be kept.").then(loadChats) }), "Keep my chats on this computer"),
-        h("p", { text: "The cost ledger never keeps what you wrote, only token counts and costs." })),
+        h("div", { class: "row" }, runButton("Export all chats", exportEverything),
+          h("label", { class: "btn", title: "Leanfare's export, or the .zip (or conversations.json) ChatGPT or Claude emails you" }, "Import chats",
+            h("input", { type: "file", hidden: true, accept: ".json,.zip,application/json,application/zip", onchange: (e) => { importFile(e.target.files[0]); e.target.value = ""; } }))),
+        h("p", { text: "Export saves every chat, with its files, as one file. Import reads that file, or the export ChatGPT or Claude emails you (the .zip, or the conversations.json inside it). The cost ledger never keeps what you wrote, only token counts and costs." })),
       h("div", { class: "setting" }, h("h3", { text: "Use Leanfare from your other apps" }),
         h("p", { text: "Point any app or script that speaks OpenAI's or Anthropic's format here. Any API key works. Model: auto, auto-save, auto-best, or a model id such as google/gemini-3.8-flash." }),
         h("div", { class: "addr" }, h("span", { class: "grow", text: `OpenAI address: ${addr}/v1` }), copyBtn(`${addr}/v1`)),
