@@ -4,6 +4,9 @@
   "description": "Every top AI model in one app on your own computer. See what each message costs, let it pick the cheapest model that does the job, and keep a budget.",
   "license": "MIT",
   "type": "module",
+  "bin": {
+    "leanfare": "src/cli.ts"
+  },
   "files": [
     "src",
     "ui",
@@ -16,8 +19,11 @@
   },
   "packageManager": "bun@1.4.3",
   "scripts": {
+    "start": "bun src/cli.ts",
     "test": "bun test",
     "typecheck": "tsc -p .",
+    "smoke": "bun scripts/smoke.ts",
+    "preflight": "bun scripts/preflight.ts",
     "licences": "bun scripts/licences.ts",
     "data": "bun scripts/build-data.ts"
   },
