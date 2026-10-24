@@ -122,6 +122,7 @@ export interface PlanInput {
   tools?: unknown; // tool definitions: counted in the budget reservation
   hasTools?: boolean; // the request uses tools (Claude takes those only through /v1/messages)
   effort?: string | null; // thinking effort asked for (the chat screen); sent only to models that take it
+  copies?: number; // answers asked for at once (OpenAI's n): each is billed
 }
 
 export interface Plan {
@@ -144,6 +145,8 @@ export interface Plan {
   asked: string | null;
   effortAsked: string | null;
   capOverride?: number | null; // a second try with a higher answer limit (the first one spent it thinking)
+  copies: number;
+  cheapestId: string | null; // the cheapest model this request could use (the only one allowed past the budget)
 }
 
 const AUTO = /^(leanfare\/)?(auto|leanfare)(-(save|balanced|best))?$/i;
@@ -162,9 +165,23 @@ export const outCap = (m: Model) => (m.skills.includes("reasoning") ? 8192 : 409
 
 // The most a request can cost: everything it sends at one token per byte, plus
 // the longest answer it can get.
-export function reserveFor(m: Model, inMax: number, maxOut: number | null): number {
+export function reserveFor(m: Model, inMax: number, maxOut: number | null, copies = 1): number {
   if (!chargeable(m)) return 0;
-  return estimateFor(m, inMax, maxOut ?? outCap(m)) ?? 0;
+  return estimateFor(m, inMax, (maxOut ?? outCap(m)) * Math.max(1, copies)) ?? 0;
+}
+
+// A new try (Auto's next pick, or a second try) needs room in the budget of its
+// own, and is never forced past it: with "keep going on the cheapest model",
+// only the cheapest model may go past the budget, as for a first try.
+function reserveAgain(p: Plan, m: Model, maxOut: number | null): boolean {
+  release(p.reservation);
+  p.reservation = null;
+  const s = settings();
+  if (s.budget === null) return true;
+  const amount = reserveFor(m, p.inMax, maxOut, p.copies);
+  p.reservation = tryReserve(amount);
+  if (!p.reservation && s.atLimit === "cheapest" && p.cheapestId === m.id) p.reservation = tryReserve(amount, true);
+  return !!p.reservation;
 }
 
 function cheapest(only: ((m: Model) => boolean) | undefined, inTok: number): Model | null {
@@ -191,6 +208,7 @@ export async function plan(input: PlanInput): Promise<Plan> {
   const inTok = promptTokens(input.messages as any, input.system);
   const inMax = promptMax(input.messages, input.system, input.tools);
   const capped = s.budget !== null && input.maxOut === null;
+  const copies = Math.max(1, Math.min(128, Math.floor(input.copies ?? 1)));
   let model: Model, guess: Guess, reason: string, candidates: Model[] = [];
   let alternatives: Plan["alternatives"] = [];
   if (amode) {
@@ -248,7 +266,7 @@ export async function plan(input: PlanInput): Promise<Plan> {
   // The budget.
   let reservation: string | null = null;
   if (s.budget !== null) {
-    const most = reserveFor(model, inMax, input.maxOut);
+    const most = reserveFor(model, inMax, input.maxOut, copies);
     const fits = input.dry ? wouldFit(most) : !!(reservation = tryReserve(most));
     if (!fits) {
       const b = budgetState();
@@ -264,12 +282,13 @@ export async function plan(input: PlanInput): Promise<Plan> {
         model = cheap;
         candidates = [cheap];
       }
-      if (!input.dry) reservation = tryReserve(reserveFor(model, inMax, input.maxOut), true);
+      if (!input.dry) reservation = tryReserve(reserveFor(model, inMax, input.maxOut, copies), true);
     }
   }
   const effortAsked = input.effort && input.effort !== "auto" ? input.effort : null;
   const estimate = chargeOf(model, estimateFor(model, inTok, expectedOutput(guess.task, model, (t, mid) => outputHistory(t, mid, effortFor(model, effortAsked))))).cost;
-  return { model, auto: !!amode, mode, guess, reason, estimate, candidates, alternatives, usual: usualModel(), switchedFrom, notes, reservation, inTok, inMax, maxOut: input.maxOut, capped, asked: input.asked, effortAsked };
+  const cheapestId = s.budget !== null ? cheapest(only, inTok)?.id ?? null : null;
+  return { model, auto: !!amode, mode, guess, reason, estimate, candidates, alternatives, usual: usualModel(), switchedFrom, notes, reservation, inTok, inMax, maxOut: input.maxOut, capped, asked: input.asked, effortAsked, copies, cheapestId };
 }
 
 // ---- the ledger --------------------------------------------------------------
@@ -353,12 +372,7 @@ async function sendWithFallback(p: Plan, source: string, body: any, stream: bool
   for (let i = 0; i < Math.min(tries.length, 3); i++) {
     const m = tries[i];
     if (i > 0) {
-      release(p.reservation);
-      p.reservation = null;
-      if (settings().budget !== null) {
-        p.reservation = tryReserve(reserveFor(m, p.inMax, p.maxOut), settings().atLimit === "cheapest");
-        if (!p.reservation) break;
-      }
+      if (!reserveAgain(p, m, p.maxOut)) break;
       p.model = m;
     }
     const t0 = performance.now();
@@ -507,7 +521,7 @@ export async function handleOpenAI(req: Request, body: any): Promise<Response> {
   let p: Plan;
   try {
     const hasTools = !!(body.tools || body.functions || body.tool_choice || body.messages.some((m: any) => m?.role === "tool" || m?.role === "function" || m?.tool_calls));
-    p = await plan({ source: "openai", asked: typeof body.model === "string" ? body.model : null, messages: body.messages, tools: body.tools ?? body.functions, hasTools, maxOut: toNum(body.max_completion_tokens ?? body.max_tokens), mode: headerMode(req), signal: ac.signal });
+    p = await plan({ source: "openai", asked: typeof body.model === "string" ? body.model : null, messages: body.messages, tools: body.tools ?? body.functions, hasTools, maxOut: toNum(body.max_completion_tokens ?? body.max_tokens), mode: headerMode(req), signal: ac.signal, copies: toNum(body.n) ?? 1 });
   } catch (e) { return errorResponse(e); }
   const rid = register("openai", p.model.label, ac);
   let sent: { res: Response; model: Model; t0: number };
@@ -538,11 +552,19 @@ export async function handleOpenAI(req: Request, body: any): Promise<Response> {
       };
       let a = await read(res, t0);
       if (a.empty && !ac.signal.aborted) {
-        record(p, model, "openai", a.usage ?? estimatedUsage(p, 0), { status: "error", error: "came back empty", ms: performance.now() - a.t, reportedCost: a.reported, estimated: !a.usage });
-        p.notes.push(`The first try came back empty, so Leanfare asked ${model.label} once more.`);
-        p.candidates = [model];
-        const again = await sendWithFallback(p, "openai", body, false, ac.signal);
-        a = await read(again.res, again.t0);
+        const firstTry = record(p, model, "openai", a.usage ?? estimatedUsage(p, 0), { status: "error", error: "came back empty", ms: performance.now() - a.t, reportedCost: a.reported, estimated: !a.usage });
+        if (reserveAgain(p, model, p.maxOut)) {
+          p.notes.push(`The first try came back empty, so Leanfare asked ${model.label} once more.`);
+          p.candidates = [model];
+          const again = await sendWithFallback(p, "openai", body, false, ac.signal);
+          a = await read(again.res, again.t0);
+        } else {
+          // The empty answer goes back as it came (it is already in the ledger, at what it cost).
+          p.notes.push("The answer came back empty, and the budget does not leave room to ask again.");
+          Object.assign(headers, leanHeaders(p, model));
+          headers["x-leanfare-cost-usd"] = firstTry.cost === null ? "unknown" : usd8(firstTry.cost);
+          return new Response(a.out, { status: 200, headers: { ...headers, "content-type": "application/json" } });
+        }
         Object.assign(headers, leanHeaders(p, model));
       }
       const r = record(p, model, "openai", a.usage ?? estimatedUsage(p, a.answer.length), { status: "ok", ms: performance.now() - a.t, reportedCost: a.reported, estimated: !a.usage });
@@ -735,8 +757,10 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
   } catch (e: any) {
     const status = e instanceof UserError ? e.status : 500;
     const message = e instanceof UserError ? e.message : String(e?.message ?? e);
+    const meta = { error: message, status: status === 499 ? "stopped" : "error", refused: true };
     emit({ type: "error", message, status });
-    return { text: "", meta: { error: message, status: status === 499 ? "stopped" : "error" }, status: status === 499 ? "stopped" : "error" };
+    emit({ type: "done", result: meta }); // the page always learns how it ended
+    return { text: "", meta, status: status === 499 ? "stopped" : "error" };
   }
   const rid = register("chat", `${label} · ${p.model.label}`, ac);
   emit({ type: "meta", plan: planView(p) });
@@ -780,6 +804,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
 
   let t = await attempt(null);
   let retried = false;
+  let written: ReturnType<typeof recordTry> | undefined; // the first try, when it was not asked again (already in the ledger)
   // An answer that came back empty, or was cut off on the way, is asked once more (noted on the answer).
   if (t.answered && !ac.signal.aborted) {
     let why: { note: string; ledger: string; cap: number | null } | null = null;
@@ -790,19 +815,18 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
       if (limit) why = { note: `${name} spent its whole ${limit.toLocaleString("en-US")}-token answer limit thinking and wrote nothing, so Leanfare asked again with ${Math.min(2 * limit, 64000).toLocaleString("en-US")}.`, ledger: "spent the answer limit thinking", cap: Math.min(2 * limit, 64000) };
     } else if (!t.text.trim() && t.finish !== "content_filter") why = { note: `The first try came back empty, so Leanfare asked ${name} once more.`, ledger: "came back empty", cap: null };
     if (why) {
-      recordTry(t, "error", why.ledger);
-      release(p.reservation);
-      p.reservation = null;
-      const s = settings();
-      if (s.budget !== null) p.reservation = tryReserve(reserveFor(t.model, p.inMax, why.cap ?? p.maxOut), s.atLimit === "cheapest");
-      if (s.budget === null || p.reservation) {
+      const first = recordTry(t, "error", why.ledger);
+      if (reserveAgain(p, t.model, why.cap ?? p.maxOut)) {
         p.notes.push(why.note);
         p.model = t.model; p.candidates = [t.model]; // the same model again: the first try did reach it
         emit({ type: "retry", message: why.note });
         emit({ type: "meta", plan: planView(p) });
         retried = true;
         t = await attempt(why.cap);
-      } else p.notes.push(`${why.note.replace(/, so Leanfare .*$/, ".")} The budget does not leave room to ask again.`);
+      } else {
+        p.notes.push(`${why.note.replace(/, so Leanfare .*$/, ".")} The budget does not leave room to ask again.`);
+        written = first;
+      }
     }
   }
   let { text, thinking, usage, firstMs, failed, finish: finishReason, model, t0 } = t;
@@ -816,7 +840,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
   const status: "ok" | "stopped" | "error" = ac.signal.aborted ? "stopped" : failed ? "error" : "ok";
   release(p.reservation);
   running.delete(rid);
-  const r = recordTry(t, status, failed ?? undefined);
+  const r = written !== undefined ? written : recordTry(t, status, failed ?? undefined);
   const cat = store.catalog;
   const meta = {
     ...planView(p),
