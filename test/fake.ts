@@ -6,6 +6,7 @@
 // A message can steer the answer:
 //   [usage 2000 500]        report exactly 2,000 input and 500 output tokens
 //   [cached 1500]           of the input, 1,500 came from the cache
+//   [write1h 1000]          of the input, 1,000 were written to Claude's cache for an hour
 //   [nousage]               report no token counts at all
 //   [slow 3000]             wait 3 seconds before answering
 //   [chunks 40]             stream the answer in 40 pieces, 50 ms apart
@@ -128,7 +129,8 @@ export function startFake() {
       const enc = new TextEncoder();
 
       if (provider === "anthropic" && url.pathname.endsWith("/v1/messages")) {
-        const usage = { input_tokens: inTok - cached, cache_read_input_tokens: cached, cache_creation_input_tokens: 0, output_tokens: outTok };
+        const hour = directive(text, "write1h")?.[0] ?? 0;
+        const usage = { input_tokens: inTok - cached - hour, cache_read_input_tokens: cached, cache_creation_input_tokens: hour, ...(hour ? { cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: hour } } : {}), output_tokens: outTok };
         if (!body.stream) {
           return Response.json({ id: "msg_fake", type: "message", role: "assistant", model: body.model, content: [...(think ? [{ type: "thinking", thinking: think, signature: "sig" }] : []), ...(answer ? [{ type: "text", text: answer }] : [])], stop_reason: stopReason, usage: nousage ? undefined : usage });
         }

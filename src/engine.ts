@@ -305,7 +305,7 @@ export function record(p: Plan, m: Model, source: string, usage: Usage | null, o
   const row = [
     d.toISOString(), month, localDay(d), source, m.provider, m.id, p.asked ?? "auto", p.guess.task, p.auto ? p.mode : null, p.auto ? 1 : 0,
     p.auto ? `${p.guess.task}: ${ledgerWhy(p.guess)}` : null, p.usual?.id ?? null, usualCost,
-    u.uncached + u.cacheRead + u.cacheWrite, u.cacheRead, u.cacheWrite, u.output,
+    u.uncached + u.cacheRead + u.cacheWrite + (u.cacheWrite1h ?? 0), u.cacheRead, u.cacheWrite + (u.cacheWrite1h ?? 0), u.output,
     billed ? charge.cost : 0, billed ? list : 0, priceStatus, o.estimated ? "estimated" : "reported",
     o.status, o.error ? redact(o.error).slice(0, 300) : null, Math.round(o.ms), o.firstMs == null ? null : Math.round(o.firstMs), p.switchedFrom,
     effortFor(m, p.effortAsked),
@@ -648,7 +648,7 @@ export async function handleAnthropic(req: Request, body: any): Promise<Response
     else if (t === "message_delta" && j.usage) {
       // The final counts are running totals; server tools (web search) can add input on the way.
       const u = fromAnthropicUsage(j.usage)!;
-      usage = { uncached: Math.max(usage.uncached, u.uncached), cacheRead: Math.max(usage.cacheRead, u.cacheRead), cacheWrite: Math.max(usage.cacheWrite, u.cacheWrite), output: typeof j.usage.output_tokens === "number" ? j.usage.output_tokens : usage.output };
+      usage = { uncached: Math.max(usage.uncached, u.uncached), cacheRead: Math.max(usage.cacheRead, u.cacheRead), cacheWrite: Math.max(usage.cacheWrite, u.cacheWrite), cacheWrite1h: Math.max(usage.cacheWrite1h ?? 0, u.cacheWrite1h ?? 0), output: typeof j.usage.output_tokens === "number" ? j.usage.output_tokens : usage.output };
       gotUsage = true;
     }
     else if (t === "message_stop") stopped = true;
@@ -830,7 +830,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
     estimatedUsage: !usage,
     ms: Math.round(performance.now() - t0),
     firstMs: firstMs === null ? null : Math.round(firstMs),
-    price: { input: model.input, output: model.output, cacheRead: model.cacheRead, cacheWrite: model.cacheWrite },
+    price: { input: model.input, output: model.output, cacheRead: model.cacheRead, cacheWrite: model.cacheWrite, cacheWrite1h: model.cacheWrite1h ?? null, above200k: model.above200k ?? null },
     priceSource: model.source === "openrouter" ? "OpenRouter's model list" : model.local ? "runs on this computer" : `llmledger data built ${cat.built.slice(0, 10)} (LiteLLM price list${cat.litellmCommit ? ` at ${cat.litellmCommit.slice(0, 7)}` : ""})`,
     priceCommit: model.source === "openrouter" || model.local ? null : cat.litellmCommit,
     thinkingChars: thinking.length,

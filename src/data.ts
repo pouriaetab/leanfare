@@ -14,7 +14,9 @@ export interface Prices {
   input: number | null; // US dollars per 1M tokens
   output: number | null;
   cacheRead: number | null;
-  cacheWrite: number | null;
+  cacheWrite: number | null; // writes kept 5 minutes (Claude); the only kind elsewhere
+  cacheWrite1h?: number | null; // Claude's writes kept an hour; when not listed, twice the input price
+  above200k?: { input: number | null; output: number | null; cacheRead: number | null; cacheWrite: number | null } | null; // a request of more than 200k input tokens, when listed
 }
 
 export interface Model extends Prices {
@@ -208,6 +210,10 @@ export function buildCatalog(raw: any, asOf = now()): Catalog {
       input, output,
       cacheRead: num(r.cache_read),
       cacheWrite: num(r.cache_write),
+      ...(num(r.cache_write_1h) !== null ? { cacheWrite1h: num(r.cache_write_1h) } : {}),
+      ...(num(r.input_above_200k) !== null || num(r.output_above_200k) !== null
+        ? { above200k: { input: num(r.input_above_200k), output: num(r.output_above_200k), cacheRead: num(r.cache_read_above_200k), cacheWrite: num(r.cache_write_above_200k) } }
+        : {}),
       context: num(r.context),
       skills: Array.isArray(r.skills) ? r.skills.filter((s: unknown) => typeof s === "string") : [],
       ...(Array.isArray(r.effort) && r.effort.length ? { effort: r.effort.filter((s: unknown) => typeof s === "string") } : {}),
