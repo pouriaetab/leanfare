@@ -400,6 +400,12 @@ describe("security", () => {
   test("the screens' API needs Leanfare's own header", async () => {
     expect((await fetch(`${url}/api/state`)).status).toBe(403);
   });
+  test("the page carries a content security policy and loads nothing from the internet", async () => {
+    const r = await fetch(`${url}/`);
+    expect(r.headers.get("content-security-policy")).toContain("default-src 'self'");
+    const html = await r.text();
+    expect(html).not.toMatch(/(src|href)="https?:/);
+  });
   test("the stop command needs the control token", async () => {
     const r = await fetch(`${url}/api/control/stop`, { method: "POST", headers: { "x-leanfare-token": "wrong" } });
     expect(r.status).toBe(403);
