@@ -23,6 +23,7 @@ const HELP = `Leanfare ${VERSION}: every top AI model in one app on your own com
   leanfare            start it and open http://127.0.0.1:${PORT}
   leanfare stop       stop it
   leanfare status     is it running, where, and how old are its prices
+  leanfare mcp        Leanfare as an MCP server (stdio), for Claude Desktop and other MCP clients
 
   --port 4748         use another port
   --no-open           do not open the browser
@@ -184,4 +185,5 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) { console.error("The po
 if (command === "start") await start();
 else if (command === "stop") await stop();
 else if (command === "status") await status();
+else if (command === "mcp") { const { runMcp } = await import("./mcp"); await runMcp(); }
 else { console.error(`Unknown command "${command}".\n\n${HELP}`); process.exit(2); }

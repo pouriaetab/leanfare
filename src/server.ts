@@ -119,6 +119,20 @@ export function state() {
   };
 }
 
+// What the menu bar and the MCP door show: today, this month, the budget. Small, so it can be asked often.
+const barMoney = (v: number) => (v <= 0 ? "$0" : v < 0.01 ? "<$0.01" : v < 100 ? `$${v.toFixed(2)}` : `$${Math.round(v)}`);
+export function summary() {
+  const v = savings();
+  const b = budgetState();
+  return {
+    app: "leanfare", version: VERSION, address: `http://127.0.0.1:${serverPort}`,
+    today: v.today, month: v.spent, answers: v.answers, saved: v.saved.amount, top: v.top?.label ?? null,
+    todayText: barMoney(v.today), monthText: barMoney(v.spent),
+    budget: b.budget === null ? null : { amount: b.budget, left: b.left, pct: b.pct, warn: b.warn, reached: b.reached },
+    paused: pauseState().paused, running: runningList().length, locked: locked(),
+  };
+}
+
 // ---- chats -------------------------------------------------------------------------
 
 function chatList() {
@@ -283,6 +297,7 @@ async function api(req: Request, url: URL): Promise<Response> {
   const p = url.pathname;
   const m = req.method;
   if (p === "/api/state" && m === "GET") return json(state());
+  if (p === "/api/summary" && m === "GET") return json(summary());
   if (p === "/api/chat" && m === "POST") return chatRoute(req, await readBody(req));
   if (p === "/api/settings" && m === "POST") {
     const v = validatePatch(await readBody(req));

@@ -1,0 +1,119 @@
+// leanfare mcp, the real command over stdio, against the test server: both eras
+// of the protocol, and every tool.
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { ALL_TICKED, boot, keys, ledger, reset } from "./app";
+
+let url = "";
+let child: ReturnType<typeof Bun.spawn> | null = null;
+let buffer = "";
+const waiting = new Map<number | string, (m: any) => void>();
+let nextId = 1;
+
+beforeAll(async () => {
+  url = (await boot()).url;
+  child = Bun.spawn([process.execPath, new URL("../src/cli.ts", import.meta.url).pathname, "mcp"], {
+    stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    env: { ...process.env, LEANFARE_URL: url, LEANFARE_TOKEN: "test-token" },
+  });
+  (async () => {
+    const dec = new TextDecoder();
+    for await (const chunk of child!.stdout as ReadableStream<Uint8Array>) {
+      buffer += dec.decode(chunk, { stream: true });
+      let i: number;
+      while ((i = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, i); buffer = buffer.slice(i + 1);
+        const msg = JSON.parse(line);
+        waiting.get(msg.id)?.(msg);
+        waiting.delete(msg.id);
+      }
+    }
+  })();
+});
+afterAll(() => { try { child?.kill(); } catch {} });
+beforeEach(async () => { await reset({ ticked: ALL_TICKED }); });
+
+const write = (msg: unknown) => { (child!.stdin as any).write(JSON.stringify(msg) + "\n"); (child!.stdin as any).flush?.(); };
+function rpc(method: string, params?: unknown, id: number | string = nextId++): Promise<any> {
+  return new Promise((resolve, reject) => {
+    waiting.set(id, resolve);
+    write({ jsonrpc: "2.0", id, method, ...(params !== undefined ? { params } : {}) });
+    setTimeout(() => { if (waiting.has(id)) { waiting.delete(id); reject(new Error(`no answer to ${method}`)); } }, 8000);
+  });
+}
+const modern = (extra: Record<string, unknown> = {}) => ({ ...extra, _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {}, "io.modelcontextprotocol/clientInfo": { name: "test", version: "1" } } });
+
+describe("the protocol", () => {
+  test("an older client opens with initialize and gets the version it asked for", async () => {
+    const r = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "old", version: "1" } });
+    expect(r.result).toMatchObject({ protocolVersion: "2025-06-18", serverInfo: { name: "leanfare" }, capabilities: { tools: { listChanged: false } } });
+    write({ jsonrpc: "2.0", method: "notifications/initialized" }); // never answered
+    const unknown = await rpc("initialize", { protocolVersion: "2019-01-01", capabilities: {} });
+    expect(unknown.result.protocolVersion).toBe("2025-11-25");
+    const list = await rpc("tools/list", {});
+    expect(list.result.tools.map((t: any) => t.name)).toEqual(["ask", "spend", "models", "estimate"]);
+    expect(list.result.resultType).toBeUndefined();
+  });
+
+  test("a 2026 client: server/discover, and every result says it is complete", async () => {
+    const d = await rpc("server/discover", modern());
+    expect(d.result).toMatchObject({ resultType: "complete", supportedVersions: ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"], capabilities: { tools: {} } });
+    expect(d.result._meta["io.modelcontextprotocol/serverInfo"].name).toBe("leanfare");
+    const list = await rpc("tools/list", modern());
+    expect(list.result.resultType).toBe("complete");
+    expect(list.result.tools).toHaveLength(4);
+    for (const t of list.result.tools) expect(t.inputSchema.type).toBe("object");
+  });
+
+  test("an unknown version, a missing capability field and an unknown method are errors with their codes", async () => {
+    const v = await rpc("tools/list", { _meta: { "io.modelcontextprotocol/protocolVersion": "2030-01-01", "io.modelcontextprotocol/clientCapabilities": {} } });
+    expect(v.error).toMatchObject({ code: -32022, data: { requested: "2030-01-01" } });
+    expect(v.error.data.supported).toContain("2026-07-28");
+    const c = await rpc("tools/list", { _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } });
+    expect(c.error.code).toBe(-32602);
+    const m = await rpc("resources/list", {});
+    expect(m.error.code).toBe(-32601);
+    const t = await rpc("tools/call", { name: "nope", arguments: {} });
+    expect(t.error.code).toBe(-32602);
+  });
+});
+
+describe("the tools", () => {
+  test("ask: the answer, the model, the cost, and it counts in the ledger", async () => {
+    await keys("openai");
+    const r = await rpc("tools/call", modern({ name: "ask", arguments: { prompt: "Hi [usage 2000 500]", model: "openai/gpt-5-mini" } }));
+    expect(r.result.isError).toBeUndefined();
+    expect(r.result.content[0].text).toContain("Hello from gpt-5-mini.");
+    expect(r.result.content[0].text).toContain("(Leanfare: openai/gpt-5-mini, $0.0015.");
+    expect(r.result.structuredContent).toMatchObject({ answer: "Hello from gpt-5-mini.", model: "openai/gpt-5-mini", cost_usd: 0.0015 });
+    expect(ledger()).toHaveLength(1);
+    expect(ledger()[0].source).toBe("openai");
+  });
+
+  test("ask without a ready model says why, as a tool error", async () => {
+    const r = await rpc("tools/call", { name: "ask", arguments: { prompt: "Hi" } });
+    expect(r.result.isError).toBe(true);
+    expect(r.result.content[0].text).toContain("No model is ready");
+  });
+
+  test("spend, models and estimate", async () => {
+    await keys("openai");
+    await rpc("tools/call", { name: "ask", arguments: { prompt: "Hi [usage 2000 500]", model: "openai/gpt-5-mini" } });
+    const s = await rpc("tools/call", { name: "spend", arguments: {} });
+    expect(s.result.content[0].text).toContain("This month: $0.0015 over 1 answers.");
+    expect(s.result.structuredContent.month_usd).toBeCloseTo(0.0015, 8);
+    const m = await rpc("tools/call", { name: "models", arguments: { provider: "openai" } });
+    expect(m.result.content[0].text).toContain("openai/gpt-5-mini: GPT-5 mini, $0.25 in / $2 out per 1M tokens");
+    const e = await rpc("tools/call", { name: "estimate", arguments: { prompt: "Write a Python function to sort a list" } });
+    expect(e.result.content[0].text).toMatch(/^About \$[\d.]+ on GPT-5 mini \(an estimate\)\./);
+    expect(ledger()).toHaveLength(1); // estimating sends nothing
+  });
+
+  test("works while Leanfare is locked (the door uses the control token)", async () => {
+    await keys("openai");
+    await fetch(`${url}/api/lock`, { method: "POST", headers: { "x-leanfare": "1", "content-type": "application/json" }, body: JSON.stringify({ on: true }) });
+    const r = await rpc("tools/call", { name: "ask", arguments: { prompt: "Hi", model: "openai/gpt-5-mini" } });
+    expect(r.result.isError).toBeUndefined();
+    const s = await rpc("tools/call", { name: "spend", arguments: {} });
+    expect(s.result.isError).toBeUndefined();
+  });
+});
