@@ -182,6 +182,25 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
 .err-box .grow { flex: 1; }
 
 .composer { flex: none; padding: 10px 22px 16px; }
+.convo { position: relative; }
+.convo.drop::after { content: "Drop files to attach them"; position: absolute; inset: 10px; border: 2px dashed var(--accent); border-radius: 16px; background: var(--accent-soft); opacity: 0.94; display: grid; place-items: center; font-weight: 600; color: var(--accent); z-index: 6; pointer-events: none; }
+.attach { border: 1px solid var(--line-strong); background: var(--panel); color: var(--muted); width: 32px; height: 32px; border-radius: 9px; font-size: 19px; line-height: 1; cursor: pointer; flex: none; padding: 0; }
+.attach:hover { color: var(--text); border-color: var(--faint); }
+.files { display: flex; flex-wrap: wrap; gap: 6px; }
+.pending .files { padding: 2px 0 6px; }
+.file { display: inline-flex; align-items: center; gap: 6px; max-width: 260px; border: 1px solid var(--line); background: var(--panel-2); border-radius: 10px; padding: 3px 8px 3px 3px; font-size: 12px; color: var(--muted); }
+.file img { width: 30px; height: 30px; object-fit: cover; border-radius: 7px; cursor: zoom-in; display: block; background: var(--line); }
+.file .ico { width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center; font-size: 9.5px; font-weight: 700; letter-spacing: 0.03em; background: var(--panel); color: var(--accent); border: 1px solid var(--line); }
+.file.pdf .ico { color: var(--bad); }
+.file .fn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); min-width: 0; }
+.file .fs { white-space: nowrap; color: var(--faint); }
+.file .x { border: 0; background: none; color: var(--faint); cursor: pointer; padding: 0 2px; font-size: 11px; }
+.file .x:hover { color: var(--text); }
+.msg.user .ucol { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; max-width: 78%; }
+.msg.user .ucol .bubble { max-width: 100%; }
+.msg.user .files { justify-content: flex-end; }
+.lightbox { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.72); display: grid; place-items: center; z-index: 60; cursor: zoom-out; padding: 24px; }
+.lightbox img { max-width: 100%; max-height: 100%; border-radius: 10px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4); }
 .composer .box { max-width: 820px; margin: 0 auto; border: 1px solid var(--line-strong); background: var(--panel); border-radius: 16px; box-shadow: var(--shadow); padding: 8px 10px 8px 14px; }
 .composer .box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .composer textarea { border: 0; padding: 6px 0; min-height: 24px; max-height: 220px; resize: none; background: none; box-shadow: none !important; line-height: 1.5; display: block; }
@@ -310,6 +329,8 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
   .composer .hint { display: none; }
   .sv-head h2 { font-size: 17px; }
   .msg.user .bubble { max-width: 90%; }
+  .msg.user .ucol { max-width: 90%; }
+  .attach { width: 40px; height: 40px; }
   .starts { grid-template-columns: 1fr; }
   .savings { padding: 12px; }
   .cards6 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
