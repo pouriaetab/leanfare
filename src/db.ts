@@ -75,6 +75,7 @@ CREATE INDEX IF NOT EXISTS files_chat ON files(chat_id, message_id);
 // Columns added after 0.1: an older file gets them on its first start.
 const ADDED: [table: string, column: string, type: string][] = [
   ["chats", "system", "TEXT"], // the chat's own instructions
+  ["chats", "source", "TEXT"], // where an imported chat came from (so importing twice adds nothing)
 ];
 
 function addColumns(d: Database) {

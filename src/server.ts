@@ -16,6 +16,7 @@ import { savings } from "./savings";
 import { checkKey, UserError } from "./upstream";
 import { FILE_LIMITS, checkFile, prepareMessages, takesImages, takesPdfs, type Attachment, type ChatMsg } from "./files";
 import type { Msg } from "./router";
+import { exportAll, importChats, readArchive, searchChats } from "./archive";
 import { chargeOf, errorResponse, handleAnthropic, handleOpenAI, idle, pauseState, plan, planView, providerReady, runChat, runningList, setPaused, stopRunning, usableModels, usualModel } from "./engine";
 import { guessTask } from "./router";
 import { dollars, localDay, now, randomId, redact } from "./util";
@@ -351,6 +352,18 @@ async function api(req: Request, url: URL): Promise<Response> {
     }
   }
   if (p === "/api/chats" && m === "GET") return json({ chats: chatList(), history: settings().history });
+  if (p === "/api/search" && m === "GET") return json({ results: searchChats(url.searchParams.get("q") ?? "") });
+  if (p === "/api/export" && m === "GET") {
+    return json(exportAll(), 200, { "content-disposition": `attachment; filename="leanfare-chats-${localDay()}.json"` });
+  }
+  if (p === "/api/import" && m === "POST") {
+    const bytes = new Uint8Array(await req.arrayBuffer());
+    if (!bytes.length) return fail(400, "The file is empty.");
+    const read = readArchive(bytes);
+    if (typeof read === "string") return fail(400, read);
+    const result = importChats(read.from, read.chats);
+    return json({ ...result, chats: chatList(), imported: result.chats });
+  }
   const fileMatch = /^\/api\/files\/(\d+)$/.exec(p);
   if (fileMatch && m === "GET") {
     const f = db.query("SELECT id, name, type, kind, size, pages, data FROM files WHERE id = ?").get(Number(fileMatch[1])) as any;
@@ -467,7 +480,7 @@ export async function handle(req: Request, server: { timeout(r: Request, s: numb
   if (url.pathname.startsWith("/api/")) {
     if (!ownOrigin) return fail(403, "Only Leanfare's own page can use this.");
     if (url.pathname !== "/api/control/stop" && req.headers.get("x-leanfare") !== "1") return fail(403, "Missing the x-leanfare header.");
-    if (url.pathname === "/api/chat" || url.pathname === "/api/keys" || url.pathname === "/api/refresh") server?.timeout(req, 0);
+    if (url.pathname === "/api/chat" || url.pathname === "/api/keys" || url.pathname === "/api/refresh" || url.pathname === "/api/import") server?.timeout(req, 0);
     try { return await api(req, url); }
     catch (e: any) { return fail(e instanceof UserError ? e.status : 500, e instanceof UserError ? e.message : `Leanfare hit an unexpected problem: ${String(e?.message ?? e)}`); }
   }
@@ -509,6 +522,7 @@ export function startServer(port = PORT, token = randomId(24)) {
     hostname: HOST,
     port,
     idleTimeout: 120,
+    maxRequestBodySize: 300 * 1024 * 1024, // a ChatGPT export can be large
     fetch: (req, server) => handle(req, server),
     error: (e) => errorResponse(e),
   });
