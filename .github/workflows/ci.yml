@@ -22,3 +22,9 @@ jobs:
       - run: bun scripts/smoke.ts
       - run: bun scripts/licences.ts --offline
 
+  mac:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - run: bash mac/build.sh
+      - run: test -x mac/build/Leanfare.app/Contents/MacOS/Leanfare
