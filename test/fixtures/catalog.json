@@ -82,7 +82,13 @@
     "coding": 1490,
     "math": 1450
    },
-   "top": true
+   "top": true,
+   "effort": [
+    "low",
+    "medium",
+    "high",
+    "max"
+   ]
   },
   {
    "id": "anthropic/claude-haiku-4-5",
@@ -131,7 +137,12 @@
    "ratings": {
     "overall": 1456
    },
-   "top": false
+   "top": false,
+   "effort": [
+    "low",
+    "medium",
+    "high"
+   ]
   },
   {
    "id": "openai/gpt-5-mini",
@@ -156,7 +167,13 @@
     "overall": 1440,
     "coding": 1460
    },
-   "top": true
+   "top": true,
+   "effort": [
+    "minimal",
+    "low",
+    "medium",
+    "high"
+   ]
   },
   {
    "id": "openai/gpt-4o",
@@ -246,7 +263,12 @@
     "coding": 1470,
     "math": 1500
    },
-   "top": true
+   "top": true,
+   "effort": [
+    "low",
+    "medium",
+    "high"
+   ]
   },
   {
    "id": "deepseek/deepseek-v4-flash",
@@ -267,7 +289,12 @@
    "ratings": {
     "overall": 1438
    },
-   "top": true
+   "top": true,
+   "effort": [
+    "low",
+    "medium",
+    "high"
+   ]
   },
   {
    "id": "xai/grok-4.20-beta",
@@ -290,7 +317,11 @@
    "ratings": {
     "overall": 1471
    },
-   "top": true
+   "top": true,
+   "effort": [
+    "low",
+    "high"
+   ]
   },
   {
    "id": "mistral/mistral-large-4",

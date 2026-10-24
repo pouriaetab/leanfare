@@ -170,7 +170,15 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
 .msg.ai .body th, .msg.ai .body td { border: 1px solid var(--line); padding: 5px 9px; text-align: left; }
 .msg.ai .body th { background: var(--panel-2); }
 .msg.ai .body hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
-.thinking { font-size: 12px; color: var(--faint); margin-bottom: 6px; }
+.thinking-note { font-size: 12px; color: var(--faint); margin-bottom: 6px; }
+.thinking { margin: 0 0 8px; border-left: 2px solid var(--line-strong); padding: 0 0 0 10px; }
+.thinking summary { cursor: pointer; font-size: 12.5px; color: var(--muted); list-style: none; display: inline-flex; align-items: center; gap: 6px; user-select: none; }
+.thinking summary::-webkit-details-marker { display: none; }
+.thinking summary::before { content: "›"; display: inline-block; transition: transform 0.15s; color: var(--faint); }
+.thinking[open] summary::before { transform: rotate(90deg); }
+.thinking.live summary { color: var(--accent); }
+.thinking .tbody { margin-top: 6px; font-size: 13px; color: var(--muted); white-space: pre-wrap; word-wrap: break-word; max-height: 260px; overflow-y: auto; line-height: 1.5; }
+.composer select.effort { max-width: 160px; }
 .meta { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .chip { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; padding: 1px 9px; background: var(--panel-2); color: var(--muted); font-size: 12px; white-space: nowrap; border: 1px solid transparent; }
 .chip.model { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
@@ -343,8 +351,10 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
   .composer { padding: 8px 10px 12px; }
   .composer .bar { flex-wrap: wrap; }
   .composer select { max-width: none; flex: 1 1 0; min-width: 0; width: 0; }
+  .composer select.effort { flex: 0 0 auto; width: auto; max-width: 150px; order: 3; }
+  .composer .send { order: 2; }
   .composer .send { min-width: 64px; }
-  .composer .est { order: 3; flex-basis: 100%; }
+  .composer .est { order: 4; flex: 1 1 140px; }
   .composer .hint { display: none; }
   .sv-head h2 { font-size: 17px; }
   .msg.user .bubble { max-width: 90%; }

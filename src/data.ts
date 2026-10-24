@@ -27,6 +27,7 @@ export interface Model extends Prices {
   label: string;
   context: number | null;
   skills: string[];
+  effort?: string[]; // thinking effort levels the model takes, from llmledger ("low", "medium", "high"...)
   added: string | null;
   retire: string | null; // YYYY-MM-DD
   ratings: Record<string, number>; // task -> Arena rating
@@ -209,6 +210,7 @@ export function buildCatalog(raw: any, asOf = now()): Catalog {
       cacheWrite: num(r.cache_write),
       context: num(r.context),
       skills: Array.isArray(r.skills) ? r.skills.filter((s: unknown) => typeof s === "string") : [],
+      ...(Array.isArray(r.effort) && r.effort.length ? { effort: r.effort.filter((s: unknown) => typeof s === "string") } : {}),
       added: r.added || null,
       retire: r.retire || null,
       ratings: latest ? {} : ratings.byKey.get(rkey) ?? {}, // a "-latest" alias moves; its name matches old ratings
@@ -285,6 +287,7 @@ export function buildOpenRouter(list: any, ratingsFrom: Catalog, asOf = now()): 
       cacheWrite: free ? 0 : perM(p.input_cache_write),
       context: typeof r.context_length === "number" ? r.context_length : null,
       skills: openRouterSkills(r),
+      ...(openRouterSkills(r).includes("reasoning") ? { effort: ["low", "medium", "high"] } : {}), // OpenRouter maps these for every thinking model
       added: typeof r.created === "number" ? new Date(r.created * 1000).toISOString().slice(0, 10) : null,
       retire: exp,
       ratings: byName.get(rkey) ?? {},

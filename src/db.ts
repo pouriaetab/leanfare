@@ -76,6 +76,7 @@ CREATE INDEX IF NOT EXISTS files_chat ON files(chat_id, message_id);
 const ADDED: [table: string, column: string, type: string][] = [
   ["chats", "system", "TEXT"], // the chat's own instructions
   ["chats", "source", "TEXT"], // where an imported chat came from (so importing twice adds nothing)
+  ["ledger", "effort", "TEXT"], // the thinking effort sent with the request, if any
 ];
 
 function addColumns(d: Database) {

@@ -10,7 +10,7 @@ import { MODES, settings, type Mode } from "./settings";
 import { estimateFor, expectedOutput, guessTask, ledgerWhy, pickModel, resolveModel, type Guess, type Msg } from "./router";
 import { successor } from "./retire";
 import { addSpent, budgetState, release, tryReserve, wouldFit } from "./budget";
-import { AnthropicStreamTranslator, UserError, anthropicToOpenAI, headersFor, networkError, openaiBody, plainError, toAnthropic } from "./upstream";
+import { AnthropicStreamTranslator, UserError, anthropicToOpenAI, effortFor, headersFor, networkError, openaiBody, plainError, toAnthropic } from "./upstream";
 import { SSEParser, dollars, localDay, localMonth, median, now, providerMessage, randomId, redact, usd8 } from "./util";
 import { takesImages, takesPdfs } from "./files";
 
@@ -52,15 +52,20 @@ export function chargeOf(m: Model, listCost: number | null): { cost: number | nu
 
 // ---- answer lengths seen before (for estimates) --------------------------------
 
+// Answers sent with a thinking effort are compared with answers at the same effort first.
 let hist = { at: 0, map: new Map<string, number | null>() };
-export function outputHistory(task: string, model: string | null): number | null {
+export function outputHistory(task: string, model: string | null, effort: string | null = null): number | null {
+  if (effort) { const v = lengthsSeen(task, model, effort); if (v !== null) return v; }
+  return lengthsSeen(task, model, null);
+}
+function lengthsSeen(task: string, model: string | null, effort: string | null): number | null {
   if (Date.now() - hist.at > 60_000) hist = { at: Date.now(), map: new Map() };
-  const k = `${task}|${model ?? ""}`;
+  const k = `${task}|${model ?? ""}|${effort ?? ""}`;
   if (hist.map.has(k)) return hist.map.get(k)!;
   const since = new Date(now().getTime() - 30 * 86_400_000).toISOString();
-  const rows = (model
-    ? db.query("SELECT out_tokens AS o FROM ledger WHERE task = ? AND model = ? AND status = 'ok' AND ts >= ? ORDER BY id DESC LIMIT 200").all(task, model, since)
-    : db.query("SELECT out_tokens AS o FROM ledger WHERE task = ? AND status = 'ok' AND ts >= ? ORDER BY id DESC LIMIT 200").all(task, since)) as { o: number }[];
+  const where = ["task = ?", "status = 'ok'", "ts >= ?", ...(model ? ["model = ?"] : []), ...(effort ? ["effort = ?"] : [])].join(" AND ");
+  const args = [task, since, ...(model ? [model] : []), ...(effort ? [effort] : [])];
+  const rows = db.query(`SELECT out_tokens AS o FROM ledger WHERE ${where} ORDER BY id DESC LIMIT 200`).all(...args) as { o: number }[];
   const v = rows.length >= 5 ? median(rows.map((r) => r.o)) : null;
   hist.map.set(k, v);
   return v;
@@ -116,6 +121,7 @@ export interface PlanInput {
   dry?: boolean; // an estimate for the screen: no waiting, nothing reserved
   tools?: unknown; // tool definitions: counted in the budget reservation
   hasTools?: boolean; // the request uses tools (Claude takes those only through /v1/messages)
+  effort?: string | null; // thinking effort asked for (the chat screen); sent only to models that take it
 }
 
 export interface Plan {
@@ -136,6 +142,7 @@ export interface Plan {
   maxOut: number | null;
   capped: boolean; // a budget is set and the request has no answer limit of its own: Leanfare sends one
   asked: string | null;
+  effortAsked: string | null;
 }
 
 const AUTO = /^(leanfare\/)?(auto|leanfare)(-(save|balanced|best))?$/i;
@@ -197,7 +204,8 @@ export async function plan(input: PlanInput): Promise<Plan> {
           ? "No model that takes tools on this address is ready. Claude models take tools through /v1/messages; tick a model from another provider for this address."
           : `No model is ready yet. Open Leanfare at http://127.0.0.1:${runtime.port}, add a key and tick a model, or start Ollama.`, "no_model_ready");
     }
-    const p = pickModel(input.messages, usable, amode, outputHistory, input.system);
+    const effortAsked = input.effort ?? null;
+    const p = pickModel(input.messages, usable, amode, (t, mid) => outputHistory(t, mid, effortAsked && mid ? effortFor(getModel(mid)!, effortAsked) : null), input.system);
     if (p) {
       model = p.model; guess = p.guess; reason = p.reason;
       candidates = p.candidates.map((c) => c.model);
@@ -258,8 +266,9 @@ export async function plan(input: PlanInput): Promise<Plan> {
       if (!input.dry) reservation = tryReserve(reserveFor(model, inMax, input.maxOut), true);
     }
   }
-  const estimate = chargeOf(model, estimateFor(model, inTok, expectedOutput(guess.task, model, outputHistory))).cost;
-  return { model, auto: !!amode, mode, guess, reason, estimate, candidates, alternatives, usual: usualModel(), switchedFrom, notes, reservation, inTok, inMax, maxOut: input.maxOut, capped, asked: input.asked };
+  const effortAsked = input.effort && input.effort !== "auto" ? input.effort : null;
+  const estimate = chargeOf(model, estimateFor(model, inTok, expectedOutput(guess.task, model, (t, mid) => outputHistory(t, mid, effortFor(model, effortAsked))))).cost;
+  return { model, auto: !!amode, mode, guess, reason, estimate, candidates, alternatives, usual: usualModel(), switchedFrom, notes, reservation, inTok, inMax, maxOut: input.maxOut, capped, asked: input.asked, effortAsked };
 }
 
 // ---- the ledger --------------------------------------------------------------
@@ -267,8 +276,8 @@ export async function plan(input: PlanInput): Promise<Plan> {
 export interface LedgerResult { cost: number | null; listCost: number | null; priceStatus: string; usage: Usage; usualCost: number | null }
 
 const INSERT = `INSERT INTO ledger(ts, month, day, source, provider, model, asked, task, mode, auto, reason, usual, usual_cost,
-    in_tokens, cached, cache_write, out_tokens, cost, list_cost, price_status, usage_status, status, error, ms, first_ms, switched_from)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    in_tokens, cached, cache_write, out_tokens, cost, list_cost, price_status, usage_status, status, error, ms, first_ms, switched_from, effort)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 // Rows that could not be written yet (another program had the database
 // locked): kept in memory and written as soon as it is free, in order.
 const unwritten: any[][] = [];
@@ -298,6 +307,7 @@ export function record(p: Plan, m: Model, source: string, usage: Usage | null, o
     u.uncached + u.cacheRead + u.cacheWrite, u.cacheRead, u.cacheWrite, u.output,
     billed ? charge.cost : 0, billed ? list : 0, priceStatus, o.estimated ? "estimated" : "reported",
     o.status, o.error ? redact(o.error).slice(0, 300) : null, Math.round(o.ms), o.firstMs == null ? null : Math.round(o.firstMs), p.switchedFrom,
+    effortFor(m, p.effortAsked),
   ];
   unwritten.push(row);
   if (!retryTimer) writeRows();
@@ -311,8 +321,9 @@ export function record(p: Plan, m: Model, source: string, usage: Usage | null, o
 
 const RETRYABLE = new Set([408, 409, 425, 429, 500, 502, 503, 504, 529]);
 
-function send(m: Model, body: any, stream: boolean, signal: AbortSignal, native: boolean, extraHeaders: Record<string, string>, cap: number | null): Promise<Response> {
+function send(m: Model, body: any, stream: boolean, signal: AbortSignal, native: boolean, extraHeaders: Record<string, string>, cap: number | null, effortAsked: string | null = null): Promise<Response> {
   const def = provider(m.provider)!;
+  const effort = effortFor(m, effortAsked);
   const base = baseOf(m.provider);
   let url: string, payload: any;
   if (native) {
@@ -321,10 +332,10 @@ function send(m: Model, body: any, stream: boolean, signal: AbortSignal, native:
     if (cap && payload.max_tokens == null) payload.max_tokens = cap;
   } else if (def.kind === "anthropic") {
     url = `${base}/v1/messages`;
-    payload = toAnthropic(cap && body.max_tokens == null && body.max_completion_tokens == null ? { ...body, max_tokens: cap } : body, m, stream);
+    payload = toAnthropic(cap && body.max_tokens == null && body.max_completion_tokens == null ? { ...body, max_tokens: cap } : body, m, stream, effort);
   } else {
     url = `${base}/chat/completions`;
-    payload = openaiBody(m, body, stream);
+    payload = openaiBody(m, body, stream, effort);
     // OpenAI's newer models take only max_completion_tokens; the others take max_tokens.
     if (cap && payload.max_tokens == null && payload.max_completion_tokens == null) payload[m.provider === "openai" ? "max_completion_tokens" : "max_tokens"] = cap;
   }
@@ -351,7 +362,7 @@ async function sendWithFallback(p: Plan, source: string, body: any, stream: bool
     }
     const t0 = performance.now();
     try {
-      const res = await send(m, body, stream, signal, native, extraHeaders, p.capped ? outCap(m) : null);
+      const res = await send(m, body, stream, signal, native, extraHeaders, p.capped ? outCap(m) : null, p.effortAsked);
       const type = res.headers.get("content-type") ?? "";
       if (res.ok && !/text\/html/i.test(type)) return { res, model: m, t0 };
       const text = await res.text();
@@ -414,10 +425,25 @@ async function* openaiChunks(res: Response, m: Model, modelName: string): AsyncG
 }
 
 // What a chunk adds: text, token counts, a provider-reported cost, an error.
+// Thinking arrives as reasoning_content (DeepSeek, Grok, Claude through
+// Leanfare), reasoning (OpenRouter, Ollama), or as "thinking" parts of the
+// content (Mistral's thinking models).
+function contentParts(c: unknown): { text: string; thinking: string } {
+  if (typeof c === "string") return { text: c, thinking: "" };
+  if (!Array.isArray(c)) return { text: "", thinking: "" };
+  let text = "", thinking = "";
+  for (const p of c as any[]) {
+    if (p?.type === "text" && typeof p.text === "string") text += p.text;
+    else if (p?.type === "thinking") thinking += Array.isArray(p.thinking) ? p.thinking.map((t: any) => (typeof t?.text === "string" ? t.text : "")).join("") : typeof p.thinking === "string" ? p.thinking : "";
+  }
+  return { text, thinking };
+}
+
 function readChunk(j: any) {
   const delta = j?.choices?.[0]?.delta ?? {};
-  const text: string = typeof delta.content === "string" ? delta.content : "";
-  const thinking: string = typeof delta.reasoning_content === "string" ? delta.reasoning_content : typeof delta.reasoning === "string" ? delta.reasoning : "";
+  const parts = contentParts(delta.content);
+  const text: string = parts.text;
+  const thinking: string = (typeof delta.reasoning_content === "string" ? delta.reasoning_content : typeof delta.reasoning === "string" ? delta.reasoning : "") + parts.thinking;
   return {
     text, thinking,
     usage: j?.usage ? fromOpenAIUsage(j.usage) : null,
@@ -670,10 +696,12 @@ export function planView(p: Plan) {
     alternatives: p.alternatives,
     usual: p.usual ? { id: p.usual.id, label: p.usual.label } : null,
     switchedFrom: p.switchedFrom,
+    effort: effortFor(p.model, p.effortAsked),
   };
 }
 
 export interface ChatOptions {
+  effort?: string | null; // thinking effort (auto: each model's default)
   system?: string; // the chat's instructions, sent first as a system message
   meta?: Record<string, unknown>; // added to the answer's details (the answer it is compared with)
 }
@@ -686,7 +714,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
   if (paused) emit({ type: "waiting", message: "Paused. This message goes out when you press Start again." });
   let p: Plan;
   try {
-    p = await plan({ source: "chat", asked, messages, system: opts.system || undefined, maxOut: null, signal: ac.signal });
+    p = await plan({ source: "chat", asked, messages, system: opts.system || undefined, maxOut: null, signal: ac.signal, effort: opts.effort ?? null });
   } catch (e: any) {
     const status = e instanceof UserError ? e.status : 500;
     const message = e instanceof UserError ? e.message : String(e?.message ?? e);
@@ -742,6 +770,8 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
     priceSource: model.source === "openrouter" ? "OpenRouter's model list" : model.local ? "runs on this computer" : `llmledger data built ${cat.built.slice(0, 10)} (LiteLLM price list${cat.litellmCommit ? ` at ${cat.litellmCommit.slice(0, 7)}` : ""})`,
     priceCommit: model.source === "openrouter" || model.local ? null : cat.litellmCommit,
     thinkingChars: thinking.length,
+    thinking: thinking ? thinking.slice(0, 200_000) : undefined,
+    effort: effortFor(model, p.effortAsked),
     ...(opts.meta ?? {}),
   };
   if (status === "error") emit({ type: "error", message: failed ?? "The answer failed.", status: 502 });

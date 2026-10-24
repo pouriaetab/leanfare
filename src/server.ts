@@ -13,7 +13,7 @@ import { MAX_INSTRUCTIONS, MODES, saveSettings, settings, validatePatch } from "
 import { budgetState } from "./budget";
 import { retirementNotices } from "./retire";
 import { savings } from "./savings";
-import { checkKey, UserError } from "./upstream";
+import { checkKey, effortLevels, UserError } from "./upstream";
 import { FILE_LIMITS, checkFile, prepareMessages, takesImages, takesPdfs, type Attachment, type ChatMsg } from "./files";
 import type { Msg } from "./router";
 import { exportAll, importChats, readArchive, searchChats } from "./archive";
@@ -21,6 +21,7 @@ import { chargeOf, errorResponse, handleAnthropic, handleOpenAI, idle, pauseStat
 import { guessTask } from "./router";
 import { dollars, localDay, now, randomId, redact } from "./util";
 
+const EFFORTS = ["auto", "low", "medium", "high"];
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...headers } });
 const fail = (status: number, message: string) => json({ error: message }, status);
@@ -45,7 +46,7 @@ function modelView(m: Model, ticked: Set<string>, day: string) {
     rating: m.ratings.overall ?? null, ratings: m.ratings,
     top: !!m.top, ticked: ticked.has(m.id), free: !!m.free, local: !!m.local,
     retire: m.retire, retired: isRetired(m, day), retiringSoon: retiresWithin(m, day, 30),
-    reasoning: m.skills.includes("reasoning"), vision: takesImages(m), pdf: takesPdfs(m),
+    reasoning: m.skills.includes("reasoning"), vision: takesImages(m), pdf: takesPdfs(m), effort: effortLevels(m),
     context: m.context, added: m.added,
   };
 }
@@ -215,6 +216,7 @@ async function chatRoute(req: Request, body: any): Promise<Response> {
   if (action === "another" && !compare) compare = cleanCompare(body.compare); // history off: the page says what it is compared with
   const { messages, dropped } = prepareMessages(msgs);
   const asked = typeof body.model === "string" ? body.model : "auto";
+  const effort = EFFORTS.includes(body.effort) ? body.effort : s.effort;
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const enc = new TextEncoder();
@@ -225,7 +227,7 @@ async function chatRoute(req: Request, body: any): Promise<Response> {
         if (dropped.length) send({ type: "notice", message: `Left out of this message to stay within the providers' size limits: ${dropped.join(", ")} (attached earlier).` });
         let title = "Chat";
         try { if (chatId) title = (db.query("SELECT title FROM chats WHERE id = ?").get(chatId) as any)?.title ?? title; } catch {}
-        const out = await runChat(messages, asked, req.signal, send, title, { system, meta: compare ? { compare } : undefined });
+        const out = await runChat(messages, asked, req.signal, send, title, { system, effort, meta: compare ? { compare } : undefined });
         if (s.history && chatId && (out.text || out.status !== "error")) {
           try {
             const id = Number(db.query("INSERT INTO messages(chat_id, role, content, meta, ts) VALUES (?, 'assistant', ?, ?, ?)").run(chatId, out.text, JSON.stringify(out.meta), now().toISOString()).lastInsertRowid);
@@ -345,7 +347,7 @@ async function api(req: Request, url: URL): Promise<Response> {
     if (!messages.length) return json({ estimate: null });
     try {
       const system = typeof b.system === "string" && b.system.trim() ? b.system.slice(0, MAX_INSTRUCTIONS) : undefined;
-      const pl = await plan({ source: "chat", asked: typeof b.model === "string" ? b.model : "auto", messages, system, maxOut: null, signal: req.signal, dry: true });
+      const pl = await plan({ source: "chat", asked: typeof b.model === "string" ? b.model : "auto", messages, system, maxOut: null, signal: req.signal, dry: true, effort: EFFORTS.includes(b.effort) ? b.effort : settings().effort });
       return json({ estimate: pl.estimate, plan: planView(pl) });
     } catch (e: any) {
       return json({ estimate: null, error: e instanceof UserError ? e.message : String(e?.message ?? e), guess: guessTask(messages) });

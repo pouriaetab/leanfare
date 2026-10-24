@@ -4,6 +4,7 @@ import type { ProviderId } from "./config";
 import { getSetting, putSetting } from "./db";
 
 export type Mode = "save" | "balanced" | "best";
+export type Effort = "auto" | "low" | "medium" | "high"; // auto: each model's own default
 export type AtLimit = "cheapest" | "stop";
 
 export interface ProviderSettings { on: boolean; free?: boolean }
@@ -20,6 +21,7 @@ export interface Settings {
   successors: Record<string, string>; // your own choice of replacement for a retiring model
   allowOrigins: string[]; // web pages allowed to call the engine addresses (empty: none)
   instructions: string; // given to every new chat as its instructions (a system prompt); empty: none
+  effort: Effort; // how hard thinking models think on the chat screen
 }
 
 export const DEFAULTS: Settings = {
@@ -34,6 +36,7 @@ export const DEFAULTS: Settings = {
   successors: {},
   allowOrigins: [],
   instructions: "",
+  effort: "auto",
 };
 
 export const MAX_INSTRUCTIONS = 20_000; // characters
@@ -83,6 +86,7 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
     if (!Array.isArray(p.allowOrigins) || p.allowOrigins.some((o: unknown) => typeof o !== "string" || !/^https?:\/\/[^/]+$/.test(o as string))) return { error: "allowOrigins must be a list like http://localhost:3000" };
     out.allowOrigins = p.allowOrigins;
   }
+  if ("effort" in p) { if (!["auto", "low", "medium", "high"].includes(p.effort)) return { error: "effort must be auto, low, medium or high" }; out.effort = p.effort; }
   if ("instructions" in p) {
     if (typeof p.instructions !== "string" || p.instructions.length > MAX_INSTRUCTIONS) return { error: `instructions must be text of at most ${MAX_INSTRUCTIONS.toLocaleString("en-US")} characters` };
     out.instructions = p.instructions.trim();
