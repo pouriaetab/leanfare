@@ -57,6 +57,19 @@ CREATE TABLE IF NOT EXISTS messages(
   deleted TEXT
 );
 CREATE INDEX IF NOT EXISTS messages_chat ON messages(chat_id, id);
+CREATE TABLE IF NOT EXISTS files(
+  id INTEGER PRIMARY KEY,
+  chat_id TEXT NOT NULL,
+  message_id INTEGER,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  pages INTEGER,
+  data BLOB NOT NULL,
+  ts TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS files_chat ON files(chat_id, message_id);
 `;
 
 // Columns added after 0.1: an older file gets them on its first start.

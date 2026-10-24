@@ -71,7 +71,10 @@
    "cacheRead": 0.3,
    "cacheWrite": 3.75,
    "context": 1000000,
-   "skills": [],
+   "skills": [
+    "vision",
+    "pdf"
+   ],
    "added": "2026-02-17",
    "retire": null,
    "ratings": {
@@ -94,7 +97,10 @@
    "cacheRead": 0.1,
    "cacheWrite": 1.25,
    "context": 1000000,
-   "skills": [],
+   "skills": [
+    "vision",
+    "pdf"
+   ],
    "added": "2025-10-16",
    "retire": null,
    "ratings": {
@@ -116,7 +122,10 @@
    "cacheRead": 0.3,
    "cacheWrite": 3.75,
    "context": 1000000,
-   "skills": [],
+   "skills": [
+    "vision",
+    "pdf"
+   ],
    "added": "2025-09-30",
    "retire": "2026-11-10",
    "ratings": {
@@ -137,7 +146,10 @@
    "cacheRead": 0.025,
    "cacheWrite": null,
    "context": 1000000,
-   "skills": [],
+   "skills": [
+    "vision",
+    "pdf"
+   ],
    "added": "2025-08-07",
    "retire": null,
    "ratings": {
@@ -180,7 +192,10 @@
    "cacheRead": 0.5,
    "cacheWrite": null,
    "context": 1000000,
-   "skills": [],
+   "skills": [
+    "vision",
+    "pdf"
+   ],
    "added": "2025-04-14",
    "retire": null,
    "ratings": {
@@ -220,7 +235,10 @@
    "cacheRead": 0.075,
    "cacheWrite": null,
    "context": 1000000,
-   "skills": [],
+   "skills": [
+    "vision",
+    "pdf"
+   ],
    "added": "2026-09-03",
    "retire": null,
    "ratings": {
@@ -264,7 +282,9 @@
    "cacheRead": 0.2,
    "cacheWrite": null,
    "context": 1000000,
-   "skills": [],
+   "skills": [
+    "vision"
+   ],
    "added": "2026-09-22",
    "retire": null,
    "ratings": {
@@ -285,7 +305,9 @@
    "cacheRead": 0.068,
    "cacheWrite": null,
    "context": 1000000,
-   "skills": [],
+   "skills": [
+    "vision"
+   ],
    "added": "2026-10-07",
    "retire": null,
    "ratings": {
