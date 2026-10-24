@@ -14,7 +14,7 @@ import { budgetState } from "./budget";
 import { retirementNotices } from "./retire";
 import { savings } from "./savings";
 import { checkKey, UserError } from "./upstream";
-import { FILE_LIMITS, checkFile, prepareMessages, type Attachment, type ChatMsg } from "./files";
+import { FILE_LIMITS, checkFile, prepareMessages, takesImages, takesPdfs, type Attachment, type ChatMsg } from "./files";
 import type { Msg } from "./router";
 import { chargeOf, errorResponse, handleAnthropic, handleOpenAI, idle, pauseState, plan, planView, providerReady, runChat, runningList, setPaused, stopRunning, usableModels, usualModel } from "./engine";
 import { guessTask } from "./router";
@@ -44,7 +44,7 @@ function modelView(m: Model, ticked: Set<string>, day: string) {
     rating: m.ratings.overall ?? null, ratings: m.ratings,
     top: !!m.top, ticked: ticked.has(m.id), free: !!m.free, local: !!m.local,
     retire: m.retire, retired: isRetired(m, day), retiringSoon: retiresWithin(m, day, 30),
-    reasoning: m.skills.includes("reasoning"), vision: m.skills.includes("vision"),
+    reasoning: m.skills.includes("reasoning"), vision: takesImages(m), pdf: takesPdfs(m),
     context: m.context, added: m.added,
   };
 }
@@ -166,6 +166,15 @@ async function chatRoute(req: Request, body: any): Promise<Response> {
   const total = last.files.reduce((n, f) => n + f.size, 0);
   if (total > FILE_LIMITS.total) return fail(400, `These files add up to ${(total / 1048576).toFixed(1)} MB; one message takes at most ${FILE_LIMITS.total / 1048576} MB.`);
   const system = typeof body.system === "string" ? body.system.trim().slice(0, MAX_INSTRUCTIONS) : "";
+  // send: a new question. again: answer the question again (the old answer goes).
+  // another: answer it on another model too (both answers stay, with both costs).
+  // edit: the question was changed (it and everything after it go).
+  const action: "send" | "again" | "another" | "edit" = ["again", "another", "edit"].includes(body.action) ? body.action : typeof body.retryOf === "number" ? "again" : "send";
+  const target: number | null = typeof body.target === "number" ? body.target : typeof body.retryOf === "number" ? body.retryOf : null;
+  let compare: { model: { id: string; label: string }; cost: number | null } | null = null;
+  const cleanCompare = (c: any) => (c && typeof c === "object" && typeof c.model?.id === "string"
+    ? { model: { id: String(c.model.id).slice(0, 200), label: String(c.model.label ?? c.model.id).slice(0, 200) }, cost: typeof c.cost === "number" && Number.isFinite(c.cost) ? c.cost : null }
+    : null);
   const ts = now().toISOString();
   let userMessageId: number | null = null;
   let savedFiles: any[] = [];
@@ -177,15 +186,22 @@ async function chatRoute(req: Request, body: any): Promise<Response> {
       db.query("INSERT INTO chats(id, title, created, updated, system) VALUES (?, ?, ?, ?, ?)").run(chatId, first.replace(/\s+/g, " ").trim().slice(0, 60) || "New chat", ts, ts, system || null);
     } else if (typeof body.system === "string") db.query("UPDATE chats SET system = ? WHERE id = ?").run(system || null, chatId);
     const lastSaved = db.query("SELECT id, role, content FROM messages WHERE chat_id = ? AND deleted IS NULL ORDER BY id DESC LIMIT 1").get(chatId) as any;
-    if (typeof body.retryOf === "number") db.query("UPDATE messages SET deleted = ? WHERE id = ? AND chat_id = ? AND role = 'assistant'").run(ts, body.retryOf, chatId);
-    else if (lastSaved?.role === "user" && lastSaved.content === last.content) userMessageId = lastSaved.id; // a retry after a failed send
-    else userMessageId = Number(db.query("INSERT INTO messages(chat_id, role, content, ts) VALUES (?, 'user', ?, ?)").run(chatId, last.content, ts).lastInsertRowid);
-    if (userMessageId !== null) {
+    if (action === "again") {
+      if (target !== null) db.query("UPDATE messages SET deleted = ? WHERE id = ? AND chat_id = ? AND role = 'assistant'").run(ts, target, chatId);
+    } else if (action === "another") {
+      const row = target === null ? null : db.query("SELECT meta FROM messages WHERE id = ? AND chat_id = ? AND role = 'assistant' AND deleted IS NULL").get(target, chatId) as any;
+      if (row?.meta) { try { compare = cleanCompare(JSON.parse(row.meta)); } catch {} }
+    } else {
+      if (action === "edit" && target !== null && db.query("SELECT 1 FROM messages WHERE id = ? AND chat_id = ? AND role = 'user' AND deleted IS NULL").get(target, chatId)) {
+        db.query("UPDATE messages SET deleted = ? WHERE chat_id = ? AND id >= ? AND deleted IS NULL").run(ts, chatId, target);
+      } else if (action === "send" && lastSaved?.role === "user" && lastSaved.content === last.content) userMessageId = lastSaved.id; // a retry after a failed send
+      userMessageId ??= Number(db.query("INSERT INTO messages(chat_id, role, content, ts) VALUES (?, 'user', ?, ?)").run(chatId, last.content, ts).lastInsertRowid);
       const already = db.query("SELECT COUNT(*) AS n FROM files WHERE message_id = ?").get(userMessageId) as { n: number };
       if (!already.n) {
         const put = db.query("INSERT INTO files(chat_id, message_id, name, type, kind, size, pages, data, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        const move = db.query("UPDATE files SET message_id = ? WHERE id = ? AND chat_id = ?");
         for (const f of last.files) {
-          if (f.id !== undefined) continue;
+          if (f.id !== undefined) { move.run(userMessageId, f.id, chatId); continue; } // a kept file goes with the edited question
           f.id = Number(put.run(chatId, userMessageId, f.name, f.type, f.kind, f.size, f.pages ?? null, Buffer.from(f.data, "base64"), ts).lastInsertRowid);
           savedFiles.push(fileView(f));
         }
@@ -195,6 +211,7 @@ async function chatRoute(req: Request, body: any): Promise<Response> {
   } catch (e) {
     return fail(503, `Leanfare's history file is busy or locked by another program (${String((e as any)?.message ?? e)}). Close that program, or turn chat history off, and send again.`);
   }
+  if (action === "another" && !compare) compare = cleanCompare(body.compare); // history off: the page says what it is compared with
   const { messages, dropped } = prepareMessages(msgs);
   const asked = typeof body.model === "string" ? body.model : "auto";
   const stream = new ReadableStream<Uint8Array>({
@@ -207,7 +224,7 @@ async function chatRoute(req: Request, body: any): Promise<Response> {
         if (dropped.length) send({ type: "notice", message: `Left out of this message to stay within the providers' size limits: ${dropped.join(", ")} (attached earlier).` });
         let title = "Chat";
         try { if (chatId) title = (db.query("SELECT title FROM chats WHERE id = ?").get(chatId) as any)?.title ?? title; } catch {}
-        const out = await runChat(messages, asked, req.signal, send, title, { system });
+        const out = await runChat(messages, asked, req.signal, send, title, { system, meta: compare ? { compare } : undefined });
         if (s.history && chatId && (out.text || out.status !== "error")) {
           try {
             const id = Number(db.query("INSERT INTO messages(chat_id, role, content, meta, ts) VALUES (?, 'assistant', ?, ?, ?)").run(chatId, out.text, JSON.stringify(out.meta), now().toISOString()).lastInsertRowid);
