@@ -1,0 +1,83 @@
+// Your choices: which models appear, how Auto picks, the budget and the
+// subscription price to compare against. Stored as one row in the database.
+import type { ProviderId } from "./config";
+import { getSetting, putSetting } from "./db";
+
+export type Mode = "save" | "balanced" | "best";
+export type AtLimit = "cheapest" | "stop";
+
+export interface ProviderSettings { on: boolean; free?: boolean }
+
+export interface Settings {
+  mode: Mode;
+  usual: string | null; // the model you would use without Leanfare; null: the best rated ticked model
+  budget: number | null; // US dollars a month
+  atLimit: AtLimit;
+  subscription: number | null; // US dollars a month, to compare against
+  history: boolean; // keep chats on this computer
+  ticked: string[]; // model ids shown in the chat and used by Auto
+  providers: Partial<Record<ProviderId, ProviderSettings>>;
+  successors: Record<string, string>; // your own choice of replacement for a retiring model
+  allowOrigins: string[]; // web pages allowed to call the engine addresses (empty: none)
+}
+
+export const DEFAULTS: Settings = {
+  mode: "balanced",
+  usual: null,
+  budget: null,
+  atLimit: "cheapest",
+  subscription: null,
+  history: true,
+  ticked: [],
+  providers: {},
+  successors: {},
+  allowOrigins: [],
+};
+
+export const MODES: Record<Mode, { label: string; margin: number; blurb: string }> = {
+  save: { label: "Save more", margin: 80, blurb: "the cheapest model rated within 80 points of the best you ticked" },
+  balanced: { label: "Balanced", margin: 40, blurb: "the cheapest model rated within 40 points of the best you ticked" },
+  best: { label: "Best quality", margin: 15, blurb: "the cheapest model rated within 15 points of the best you ticked" },
+};
+
+let cache: Settings | null = null;
+
+export function settings(): Settings {
+  if (!cache) cache = { ...DEFAULTS, ...getSetting<Partial<Settings>>("settings", {}) };
+  return cache;
+}
+
+export function saveSettings(patch: Partial<Settings>): Settings {
+  const next = { ...settings(), ...patch };
+  putSetting("settings", next);
+  cache = next;
+  return next;
+}
+
+export const resetSettingsCache = () => { cache = null; };
+
+// Checks a change coming from the screen. Returns the clean patch or a sentence
+// saying what is wrong.
+export function validatePatch(p: any): { patch: Partial<Settings> } | { error: string } {
+  const out: Partial<Settings> = {};
+  if (p === null || typeof p !== "object") return { error: "expected an object of settings" };
+  if ("mode" in p) { if (!(p.mode in MODES)) return { error: "mode must be save, balanced or best" }; out.mode = p.mode; }
+  if ("usual" in p) { if (p.usual !== null && typeof p.usual !== "string") return { error: "usual must be a model id or null" }; out.usual = p.usual; }
+  for (const k of ["budget", "subscription"] as const) {
+    if (k in p) {
+      if (p[k] === null || p[k] === "") out[k] = null;
+      else { const v = Number(p[k]); if (!Number.isFinite(v) || v < 0 || v > 1_000_000) return { error: `${k} must be a dollar amount from 0 to 1,000,000` }; out[k] = Math.round(v * 100) / 100; }
+    }
+  }
+  if ("atLimit" in p) { if (p.atLimit !== "cheapest" && p.atLimit !== "stop") return { error: "atLimit must be cheapest or stop" }; out.atLimit = p.atLimit; }
+  if ("history" in p) out.history = !!p.history;
+  if ("successors" in p) {
+    if (typeof p.successors !== "object" || p.successors === null) return { error: "successors must be an object" };
+    out.successors = Object.fromEntries(Object.entries(p.successors).filter(([a, b]) => typeof a === "string" && typeof b === "string")) as Record<string, string>;
+  }
+  if ("allowOrigins" in p) {
+    if (!Array.isArray(p.allowOrigins) || p.allowOrigins.some((o: unknown) => typeof o !== "string" || !/^https?:\/\/[^/]+$/.test(o as string))) return { error: "allowOrigins must be a list like http://localhost:3000" };
+    out.allowOrigins = p.allowOrigins;
+  }
+  return { patch: out };
+}
