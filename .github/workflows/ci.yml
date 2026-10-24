@@ -19,5 +19,6 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun x tsc -p .
       - run: bun test
+      - run: bun scripts/smoke.ts
       - run: bun scripts/licences.ts --offline
 
