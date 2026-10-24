@@ -34,6 +34,8 @@
 	<string>MIT licence</string>
 	<key>LeanfareNotesFile</key>
 	<string>__NOTES__</string>
+	<key>LeanfareBun</key>
+	<string>__BUN__</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

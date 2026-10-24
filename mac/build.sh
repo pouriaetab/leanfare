@@ -35,12 +35,23 @@ SDK="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
 echo "SDK: $SDK"
 BUN="$(command -v bun || true)"
 [ -z "$BUN" ] && [ -x "$HOME/.bun/bin/bun" ] && BUN="$HOME/.bun/bin/bun"
-if [ -n "$BUN" ]; then echo "Bun: $BUN ($("$BUN" --version))"; else echo "Bun is not installed: the app will say how to install it when it opens."; fi
+# The app records this Bun, so it finds it when opened from Finder, the Dock or at
+# login (where your shell's PATH is not set). Bun names its own file, past any shim.
+BUN_PATH=""
+if [ -n "$BUN" ]; then
+  BUN_PATH="$("$BUN" -e 'console.log(process.execPath)' 2>/dev/null || true)"
+  [ -x "$BUN_PATH" ] || BUN_PATH="$BUN"
+  echo "Bun: $BUN_PATH ($("$BUN_PATH" --version))"
+else
+  echo "Bun is not installed: the app will say how to install it when it opens."
+fi
 
 VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$ROOT/package.json" | head -1)"
 BUILD="$(date +%Y%m%d%H%M)"
 APP="$HERE/build/Leanfare.app"
-# Notes jotted in the menu go to a notes folder next to this copy, when there is one.
+# Notes jotted in the menu go to annoyances.md in the notes folder: the folder this
+# copy sits in when that folder is named notes, or a notes folder inside this copy.
+# Otherwise they go to ~/.leanfare/notes.md. LEANFARE_NOTES_FILE names another file.
 NOTES="${LEANFARE_NOTES_FILE:-}"
 if [ -z "$NOTES" ]; then
   if [ "$(basename "$(dirname "$ROOT")")" = "notes" ]; then NOTES="$(dirname "$ROOT")/annoyances.md"
@@ -58,6 +69,7 @@ cp "$HERE/Info.plist" "$APP/Contents/Info.plist"
 plutil -replace CFBundleShortVersionString -string "$VERSION" "$APP/Contents/Info.plist"
 plutil -replace CFBundleVersion -string "$BUILD" "$APP/Contents/Info.plist"
 plutil -replace LeanfareNotesFile -string "$NOTES" "$APP/Contents/Info.plist"
+plutil -replace LeanfareBun -string "$BUN_PATH" "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist"
 cp "$HERE/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cp -R "$ROOT/src" "$ROOT/ui" "$APP/Contents/Resources/leanfare/"
