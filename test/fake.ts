@@ -10,6 +10,7 @@
 //   [slow 3000]             wait 3 seconds before answering
 //   [chunks 40]             stream the answer in 40 pieces, 50 ms apart
 //   [fail 429]              answer with this HTTP status
+//   [think]                 think first ("Let me think."), in each provider's own way
 export const KEYS: Record<string, string> = {
   openai: "sk-test-openai-0001", anthropic: "sk-ant-test-0002", google: "AIzaTestGoogleKey0000000000003", openrouter: "sk-or-test-0004",
   deepseek: "sk-test-deepseek-05", xai: "xai-test-key-000006", mistral: "test-mistral-key-07",
@@ -81,7 +82,7 @@ export function startFake() {
       const keyOk = provider === "ollama" || auth === KEYS[provider];
       if (url.pathname.endsWith("/models") || url.pathname.endsWith("/key") || url.pathname.includes("/v1/models")) {
         if (provider === "openrouter" && url.pathname.endsWith("/models")) return Response.json({ data: [
-          { id: "acme/acme-large", name: "Acme: Large", pricing: { prompt: "0.000001", completion: "0.000004" }, context_length: 100000, created: 1790000000, architecture: { output_modalities: ["text"] } },
+          { id: "acme/acme-large", name: "Acme: Large", pricing: { prompt: "0.000001", completion: "0.000004" }, context_length: 100000, created: 1790000000, architecture: { input_modalities: ["text", "image"], output_modalities: ["text"] }, supported_parameters: ["tools", "reasoning"] },
           { id: "acme/acme-small:free", name: "Acme: Small (free)", pricing: { prompt: "0", completion: "0" }, context_length: 32000, created: 1790000000, architecture: { output_modalities: ["text"] } },
         ] });
         if (!keyOk) return provider === "anthropic"
@@ -107,6 +108,7 @@ export function startFake() {
       const nousage = !!directive(text, "nousage");
       const pieces = directive(text, "chunks")?.[0] ?? 3;
       const answer = text.includes("[md]") ? MARKDOWN : `Hello from ${body?.model ?? "?"}.`;
+      const think = text.includes("[think]") ? "Let me think." : "";
       const split = Array.from({ length: pieces }, (_, i) => answer.slice(Math.floor((i * answer.length) / pieces), Math.floor(((i + 1) * answer.length) / pieces)));
       const gap = pieces > 3 ? 50 : 0;
       const enc = new TextEncoder();
@@ -114,13 +116,19 @@ export function startFake() {
       if (provider === "anthropic" && url.pathname.endsWith("/v1/messages")) {
         const usage = { input_tokens: inTok - cached, cache_read_input_tokens: cached, cache_creation_input_tokens: 0, output_tokens: outTok };
         if (!body.stream) {
-          return Response.json({ id: "msg_fake", type: "message", role: "assistant", model: body.model, content: [{ type: "text", text: answer }], stop_reason: capped ? "max_tokens" : "end_turn", usage: nousage ? undefined : usage });
+          return Response.json({ id: "msg_fake", type: "message", role: "assistant", model: body.model, content: [...(think ? [{ type: "thinking", thinking: think, signature: "sig" }] : []), { type: "text", text: answer }], stop_reason: capped ? "max_tokens" : "end_turn", usage: nousage ? undefined : usage });
         }
         const events: [string, any][] = [
           ["message_start", { type: "message_start", message: { id: "msg_fake", type: "message", role: "assistant", model: body.model, content: [], usage: nousage ? undefined : { ...usage, output_tokens: 1 } } }],
-          ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
-          ...split.map((t): [string, any] => ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: t } }]),
-          ["content_block_stop", { type: "content_block_stop", index: 0 }],
+          ...(think ? [
+            ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } }],
+            ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: think } }],
+            ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig" } }],
+            ["content_block_stop", { type: "content_block_stop", index: 0 }],
+          ] as [string, any][] : []),
+          ["content_block_start", { type: "content_block_start", index: think ? 1 : 0, content_block: { type: "text", text: "" } }],
+          ...split.map((t): [string, any] => ["content_block_delta", { type: "content_block_delta", index: think ? 1 : 0, delta: { type: "text_delta", text: t } }]),
+          ["content_block_stop", { type: "content_block_stop", index: think ? 1 : 0 }],
           ["message_delta", { type: "message_delta", delta: { stop_reason: capped ? "max_tokens" : "end_turn" }, usage: nousage ? undefined : { output_tokens: outTok } }],
           ["message_stop", { type: "message_stop" }],
         ];
@@ -139,7 +147,7 @@ export function startFake() {
       if (url.pathname.endsWith("/chat/completions")) {
         const usage = { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok, prompt_tokens_details: { cached_tokens: cached }, ...(provider === "openrouter" ? { cost: 0.00042 } : {}) };
         if (!body.stream) {
-          return Response.json({ id: "chatcmpl-fake", object: "chat.completion", created: 1, model: body.model, choices: [{ index: 0, message: { role: "assistant", content: answer }, finish_reason: capped ? "length" : "stop" }], ...(nousage ? {} : { usage }) });
+          return Response.json({ id: "chatcmpl-fake", object: "chat.completion", created: 1, model: body.model, choices: [{ index: 0, message: { role: "assistant", content: answer, ...(think ? { reasoning_content: think } : {}) }, finish_reason: capped ? "length" : "stop" }], ...(nousage ? {} : { usage }) });
         }
         const wantsUsage = body.stream_options?.include_usage === true || provider === "mistral" || provider === "google";
         return new Response(new ReadableStream({
@@ -147,9 +155,11 @@ export function startFake() {
             const send = (o: any) => c.enqueue(enc.encode(`data: ${JSON.stringify(o)}\n\n`));
             try {
               send({ id: "c1", object: "chat.completion.chunk", model: body.model, choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] });
+              // Thinking, the way each provider sends it: Mistral as content parts, OpenRouter and Ollama as "reasoning", the rest as "reasoning_content".
+              if (think) send({ id: "c1", object: "chat.completion.chunk", model: body.model, choices: [{ index: 0, delta: provider === "mistral" ? { content: [{ type: "thinking", thinking: [{ type: "text", text: think }] }] } : provider === "openrouter" || provider === "ollama" ? { reasoning: think } : { reasoning_content: think }, finish_reason: null }] });
               for (const t of split) {
                 if (rec.aborted) return;
-                send({ id: "c1", object: "chat.completion.chunk", model: body.model, choices: [{ index: 0, delta: { content: t }, finish_reason: null }] });
+                send({ id: "c1", object: "chat.completion.chunk", model: body.model, choices: [{ index: 0, delta: provider === "mistral" && think ? { content: [{ type: "text", text: t }] } : { content: t }, finish_reason: null }] });
                 if (gap) await Bun.sleep(gap);
               }
               send({ id: "c1", object: "chat.completion.chunk", model: body.model, choices: [{ index: 0, delta: {}, finish_reason: capped ? "length" : "stop" }] });

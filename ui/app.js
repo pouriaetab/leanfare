@@ -692,9 +692,23 @@
     const el = h("div", { class: "msg ai", "data-i": index });
     const body = h("div", { class: "body" });
     if (m.content) body.innerHTML = markdown(m.content);
-    if (m.meta?.thinkingChars && !m.content) el.append(h("div", { class: "thinking", text: `Thinking… (${num(m.meta.thinkingChars)} characters)` }));
+    const th = m.live ? m.thinking ?? "" : m.meta?.thinking ?? "";
+    if (th) el.append(thinkingEl(m, th));
+    else if (m.meta?.thinkingChars && !m.content) el.append(h("div", { class: "thinking-note", text: `Thinking… (${num(m.meta.thinkingChars)} characters)` }));
     el.append(body, metaEl(m, index));
     return el;
+  }
+
+  // What the model thought before answering: open while it is still thinking, folded after.
+  function thinkingEl(m, text) {
+    const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+    const still = m.live && !m.content;
+    const d = h("details", { class: "thinking" + (still ? " live" : ""), ...(still || m.thinkOpen ? { open: true } : {}) },
+      h("summary", { text: still ? `Thinking… ${num(words)} words` : `Thought ${num(words)} words${m.meta?.effort ? ` · effort ${m.meta.effort}` : ""}` }),
+      h("div", { class: "tbody", text }));
+    d.addEventListener("toggle", () => { if (!still) m.thinkOpen = d.open; });
+    if (still) requestAnimationFrame(() => { const b = d.querySelector(".tbody"); if (b) b.scrollTop = b.scrollHeight; });
+    return d;
   }
 
   function metaEl(m, index) {
@@ -767,6 +781,12 @@
   function buildComposer() {
     const ta = h("textarea", { rows: 1, placeholder: "Ask anything", "aria-label": "Message" });
     const pick = h("select", { "aria-label": "Model" });
+    const effort = h("select", { class: "effort", "aria-label": "Thinking effort", title: "How hard thinking models think before they answer. Thinking is billed as output: higher costs more and takes longer. Models that do not take a level think as they always do." },
+      ...[["auto", "Thinking: auto"], ["low", "Thinking: low"], ["medium", "Thinking: medium"], ["high", "Thinking: high"]].map(([v, t]) => h("option", { value: v, text: t })));
+    effort.addEventListener("change", async () => {
+      try { S.st = await api("/api/settings", { body: { effort: effort.value } }); toast(effort.value === "auto" ? "Thinking models think as they do by default." : `Thinking effort: ${effort.value}.`, "done"); scheduleEstimate(); }
+      catch (e) { failed(e); }
+    });
     const est = h("div", { class: "est" });
     const send = h("button", { class: "btn primary send", type: "submit", text: "Send" });
     const back = h("button", { class: "btn small back", type: "button", text: "Chats", onclick: () => chatEl().classList.add("list-open") });
@@ -774,9 +794,9 @@
     const attach = h("button", { class: "attach", type: "button", "aria-label": "Attach files", title: "Attach images, PDFs or text files (or drop them here, or paste an image)", text: "+", onclick: () => picker.click() });
     const pending = h("div", { class: "pending" });
     const form = h("form", { class: "composer" },
-      h("div", { class: "box" }, pending, ta, h("div", { class: "bar" }, back, attach, picker, pick, est, send)),
+      h("div", { class: "box" }, pending, ta, h("div", { class: "bar" }, back, attach, picker, pick, effort, est, send)),
       h("div", { class: "hint", text: "Enter sends · Shift+Enter adds a line · Esc stops an answer · drop or paste files to attach" }));
-    composer = { form, ta, pick, est, send, pending };
+    composer = { form, ta, pick, est, send, pending, effort };
     ta.addEventListener("paste", (e) => {
       const files = [...(e.clipboardData?.files ?? [])];
       if (files.length) { e.preventDefault(); addFiles(files); }
@@ -861,6 +881,9 @@
     if (S.model !== "auto" && !shown.has(S.model)) { S.model = "auto"; store.set("model", "auto"); }
     pick.value = S.model === "auto" ? "auto-" + mode : S.model;
     pick.disabled = !ready();
+    const thinkers = Object.values(st.models).flat().some((m) => ticked.has(m.id) && m.effort?.length);
+    composer.effort.hidden = !thinkers;
+    if (document.activeElement !== composer.effort) composer.effort.value = st.settings.effort ?? "auto";
     send.disabled = !ready() && !S.live;
     send.textContent = S.live ? "Stop" : "Send";
     send.classList.toggle("stop", !!S.live);
@@ -884,7 +907,7 @@
       if (r.error) { composer.est.textContent = r.error; return; }
       const p = r.plan;
       const nf = S.pending.length;
-      composer.est.textContent = `≈ ${money(r.estimate)} on ${p.model.label}${p.auto ? ` · ${S.st.tasks.find((t) => t[0] === p.task)?.[1] ?? p.task}` : ""}${nf ? ` · ${nf} file${nf === 1 ? "" : "s"}` : ""} · estimate`;
+      composer.est.textContent = `≈ ${money(r.estimate)} on ${p.model.label}${p.auto ? ` · ${S.st.tasks.find((t) => t[0] === p.task)?.[1] ?? p.task}` : ""}${p.effort ? ` · thinking ${p.effort}` : ""}${nf ? ` · ${nf} file${nf === 1 ? "" : "s"}` : ""} · estimate`;
       composer.est.title = p.reason;
     } catch {}
   }
@@ -995,7 +1018,7 @@
     } else if (e.type === "waiting") { live.meta.waiting = e.message; paintLive(); }
     else if (e.type === "meta") { live.meta = { ...live.meta, ...e.plan, status: "running", waiting: null }; paintLive(); }
     else if (e.type === "delta") { live.content += e.text; paintLiveSoon(); }
-    else if (e.type === "thinking") { live.meta.thinkingChars = (live.meta.thinkingChars ?? 0) + e.text.length; paintLiveSoon(); }
+    else if (e.type === "thinking") { live.thinking = (live.thinking ?? "") + e.text; live.meta.thinkingChars = live.thinking.length; paintLiveSoon(); }
     else if (e.type === "error") { live.meta.error = e.message; }
     else if (e.type === "done") { live.meta = e.result; live.live = false; }
     else if (e.type === "saved") { live.id = e.messageId; }
@@ -1349,6 +1372,10 @@
       h("div", { class: "section-title", text: "Choices" }),
       h("div", { class: "setting" }, h("h3", { text: "How Auto picks" }), modeSeg,
         h("p", { text: `${st.modes[s.mode].label}: ${st.modes[s.mode].blurb}, for the task Leanfare guesses from your message (coding, math, writing, long prompts and more). Ratings come from the Arena leaderboard.` })),
+      h("div", { class: "setting" }, h("h3", { text: "Thinking effort" }),
+        h("div", { class: "seg", role: "group", "aria-label": "Thinking effort" }, ...[["auto", "Model's default"], ["low", "Low"], ["medium", "Medium"], ["high", "High"]].map(([k, label]) =>
+          h("button", { type: "button", "aria-pressed": String((s.effort ?? "auto") === k), text: label, onclick: () => patchSettings({ effort: k }, k === "auto" ? "Thinking models think as they do by default." : `Thinking effort: ${label.toLowerCase()}.`) }))),
+        h("p", { text: "For models that think before they answer, at the levels each one takes. Thinking is billed as output, so a higher effort costs more and takes longer; the estimate learns from your answers at each level." })),
       h("div", { class: "setting" }, h("h3", { text: "Your usual model" }), usualSel,
         h("p", { text: "The model you would use without Leanfare. Savings are measured against it." })),
       h("div", { class: "setting" }, h("h3", { text: "Monthly budget" }),
