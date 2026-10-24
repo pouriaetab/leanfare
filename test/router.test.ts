@@ -93,3 +93,17 @@ describe("model names", () => {
     expect(resolveModel("no-such-model")).toBeNull();
   });
 });
+
+describe("speed", () => {
+  test("a long pasted line is guessed in milliseconds, not seconds", () => {
+    const dna = Array.from({ length: 250_000 }, (_, i) => "ACGT"[(i * 7 + (i >> 3)) % 4]).join("");
+    let t0 = performance.now();
+    guessTask([{ role: "user", content: "Find the start codons in this sequence:\n" + dna }]);
+    expect(performance.now() - t0).toBeLessThan(250);
+    for (const text of ["a.b(" + "x".repeat(250_000), "SELECT " + "x ".repeat(120_000), "a.".repeat(120_000)]) {
+      t0 = performance.now();
+      guessTask([{ role: "user", content: text }]);
+      expect(performance.now() - t0).toBeLessThan(250);
+    }
+  });
+});

@@ -1,4 +1,5 @@
 // What a request costs, and what it is likely to cost before it is sent (the estimate).
+import { inflateSync } from "node:zlib";
 import type { Prices } from "./data";
 
 // Token counts in one shape, whichever provider reported them.
@@ -83,11 +84,44 @@ export const PDF_PAGE_TOKENS = { est: 2000, max: 3000 };
 
 const B64 = /^data:([^;,]+);base64,/;
 
-// Pages in a PDF, counted from its page objects (an estimate: no PDF library).
+// Pages in a PDF, without a PDF library: the page tree's /Count, or else the
+// page objects. Newer PDFs keep those inside compressed object streams
+// (/Type /ObjStm), which are opened to look. When nothing can be read, the
+// size gives a rough count, so a long document is never taken for one page.
+function pageCountIn(text: string): number {
+  let count = 0;
+  for (const m of text.matchAll(/<<((?:(?!<<|>>)[\s\S]){0,4000})>>/g)) {
+    const d = m[1];
+    if (/\/Type\s*\/Pages(?![a-zA-Z])/.test(d)) {
+      const c = /\/Count\s+(\d{1,6})/.exec(d);
+      if (c) count = Math.max(count, Number(c[1]));
+    }
+  }
+  if (count) return count;
+  return (text.match(/\/Type\s*\/Page(?![a-zA-Z])/g) ?? []).length;
+}
+
 export function pdfPages(bytes: Uint8Array): number {
-  const text = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("latin1");
-  const n = (text.match(/\/Type\s*\/Page(?![a-zA-Z])/g) ?? []).length;
-  return Math.max(1, n);
+  const raw = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("latin1");
+  const direct = pageCountIn(raw);
+  if (direct) return direct;
+  let inner = "", opened = 0, size = 0;
+  for (const m of raw.matchAll(/\/Type\s*\/ObjStm[\s\S]{0,400}?>>\s*stream\r?\n/g)) {
+    if (opened++ >= 500 || size > 64 * 1024 * 1024) break;
+    const dict = m[0];
+    const start = m.index! + dict.length;
+    const len = /\/Length\s+(\d+)(?!\s+\d+\s+R)/.exec(dict);
+    const end = len ? start + Number(len[1]) : raw.indexOf("endstream", start);
+    if (end <= start || end > raw.length) continue;
+    try {
+      const out = inflateSync(Buffer.from(raw.slice(start, end), "latin1"), { maxOutputLength: 16 * 1024 * 1024 });
+      size += out.length;
+      inner += out.toString("latin1") + "\n";
+    } catch {}
+  }
+  const packed = inner ? pageCountIn(inner) : 0;
+  if (packed) return packed;
+  return Math.max(1, Math.round(bytes.length / 50_000)); // about 50 KB a page
 }
 const pagesCache = new Map<string, number>();
 function pagesOfBase64(b64: string): number {
@@ -140,13 +174,23 @@ export function promptTokens(messages: { role: string; content: unknown }[], sys
 
 // The budget reservation's input: the most tokens a request can be. Everything it sends at one
 // token per byte, except images and documents, which count at their high figure
-// instead of their size (a 2 MB photo is not 2 million tokens).
-export function promptMax(messages: unknown[], system?: unknown, tools?: unknown): number {
-  const json = JSON.stringify([messages, system ?? null, tools ?? null], (k, v) => {
-    if (typeof v !== "string" || v.length < 200) return v;
-    if (B64.test(v)) return "";
-    if (k === "data" || k === "file_data") return "";
-    return v;
+// instead of their size (a 2 MB photo is not 2 million tokens). Only real image
+// and document parts are taken out: text that happens to look like base64 counts in full.
+function withoutMedia(c: unknown): unknown {
+  if (!Array.isArray(c)) return c;
+  return c.map((p: any) => {
+    if (!p || typeof p !== "object") return p;
+    const t = p.type;
+    if (t === "image_url" || t === "input_image") return { type: t };
+    if (t === "image" && p.source) return { type: t };
+    if ((t === "file" || t === "input_file") && (p.file?.file_data || p.file_data)) return { type: t, filename: p.file?.filename ?? p.filename };
+    if (t === "document" && p.source?.type === "base64") return { type: t };
+    if (t === "tool_result" && Array.isArray(p.content)) return { ...p, content: withoutMedia(p.content) };
+    return p;
   });
-  return Buffer.byteLength(json) + mediaIn(messages as { content: unknown }[]).max;
+}
+
+export function promptMax(messages: unknown[], system?: unknown, tools?: unknown): number {
+  const bare = (messages as any[]).map((m) => (m && typeof m === "object" && Array.isArray(m.content) ? { ...m, content: withoutMedia(m.content) } : m));
+  return Buffer.byteLength(JSON.stringify([bare, withoutMedia(system) ?? null, tools ?? null])) + mediaIn(messages as { content: unknown }[]).max;
 }

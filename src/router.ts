@@ -16,7 +16,7 @@ const taskLabel = (t: string) => TASKS.find(([id]) => id === t)?.[1] ?? t;
 
 const CODE_FENCE = /```/;
 // Case matters here: "Let me know" is not `let x = 1`.
-const CODE_SIGNS = /(Traceback \(most recent call last\)|^\s*(def \w+\(|class \w+[:(]|import \w|from [\w.]+ import |function \w*\(|const \w+ = |let \w+ = |var \w+ = |#include <|SELECT .+ FROM |public (static |class )|async def )|\w+\.\w+\([^)]*\);\s*$|<\/?(div|span|html|body|script)\b)/m;
+const CODE_SIGNS = /(Traceback \(most recent call last\)|^\s*(def \w+\(|class \w+[:(]|import \w|from [\w.]+ import |function \w*\(|const \w+ = |let \w+ = |var \w+ = |#include <|SELECT .{1,400} FROM |public (static |class )|async def )|\b\w{1,60}\.\w{1,60}\([^)\n]{0,300}\);\s*$|<\/?(div|span|html|body|script)\b)/m;
 const CODE_WORDS = /\b(python|javascript|typescript|java|rust|golang|kotlin|swift|c\+\+|sql|regex|bash|html|css|react|node\.?js|npm|pip|docker|kubernetes|git|github|api|endpoint|json|yaml|csv|compile|compiler|debug|debugging|bug|stack trace|exception|refactor|unit tests?|code|codebase|repo)\b/gi;
 // Names that only ever mean programming: one is enough. ("Swift" and "Rust"
 // are left out: a singer and a metal.)
@@ -31,10 +31,15 @@ const MEDICINE = /\b(symptoms?|diagnosis|disease|medication|medicine|dose|dosage
 
 const distinct = (text: string, re: RegExp) => [...new Set((text.match(re) ?? []).map((w) => w.toLowerCase()))];
 
+// The rules read at most the first and last 20,000 characters of a message, so
+// a pasted file of a megabyte is guessed as fast as a line.
+const sample = (t: string) => (t.length > 40_000 ? `${t.slice(0, 20_000)}\n${t.slice(-20_000)}` : t);
+
 export function guessTask(messages: Msg[]): Guess {
   const users = messages.filter((m) => m.role === "user");
-  const last = textOfContent(users.at(-1)?.content ?? "");
-  const recent = users.slice(-3).map((m) => textOfContent(m.content)).join("\n");
+  const full = textOfContent(users.at(-1)?.content ?? "");
+  const last = sample(full);
+  const recent = users.slice(-3).map((m) => sample(textOfContent(m.content))).join("\n");
   const turns = users.length;
 
   if (CODE_FENCE.test(recent)) return { task: "coding", why: "the conversation has a code block", alt: turns > 5 ? "multi_turn" : "overall" };
@@ -47,7 +52,7 @@ export function guessTask(messages: Msg[]): Guess {
     return { task: "math", why: MATH_SIGNS.test(last) ? "numbers with operators" : `math words (${mathWords.slice(0, 3).join(", ")})`, alt: "overall" };
   }
   if (CREATIVE.test(last)) return { task: "creative_writing", why: "it asks for a story, poem or song", alt: "overall" };
-  if (last.length >= 2000) return { task: "longer_query", why: `a long message (${last.length.toLocaleString("en-US")} characters)`, alt: "overall" };
+  if (full.length >= 2000) return { task: "longer_query", why: `a long message (${full.length.toLocaleString("en-US")} characters)`, alt: "overall" };
   const doc = mediaOf(users.at(-1)?.content);
   if (doc.pdfs) return { task: "longer_query", why: `a PDF is attached (${doc.pdfPages} page${doc.pdfPages === 1 ? "" : "s"})`, alt: "overall" };
   if (turns > 5) return { task: "multi_turn", why: `follow-up number ${turns - 1}`, alt: "overall" };

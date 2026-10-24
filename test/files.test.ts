@@ -1,6 +1,7 @@
 // Files attached on the chat screen: what is accepted, what each provider gets,
 // what is kept, and how they count in estimates and the budget.
 import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { deflateSync } from "node:zlib";
 import { db } from "../src/db";
 import { checkFile, kindOf, prepareMessages, type Attachment } from "../src/files";
 import { mediaIn, pdfPages, promptMax, promptTokens } from "../src/cost";
@@ -219,5 +220,40 @@ describe("estimates and the budget", () => {
     expect((await est([{ kind: "image" }])) - plain).toBeCloseTo(1600 * 0.25 / 1e6, 8);
     // A PDF also makes the task "long prompts", whose answers run 600 tokens instead of 400.
     expect((await est([{ kind: "pdf", pages: 3 }])) - plain).toBeCloseTo(6000 * 0.25 / 1e6 + 200 * 2 / 1e6, 8);
+  });
+});
+
+// A PDF the way pdflatex and most newer writers make one: the page tree sits
+// inside a compressed object stream, so no "/Type /Page" is readable as is.
+function packedPdf(pages: number): Uint8Array {
+  const objs = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    `<< /Type /Pages /Kids [${Array.from({ length: pages }, (_, i) => `${i + 3} 0 R`).join(" ")}] /Count ${pages} >>`,
+    ...Array.from({ length: pages }, () => "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>"),
+  ];
+  let index = "", body = "";
+  objs.forEach((o, i) => { index += `${i + 1} ${body.length} `; body += o + "\n"; });
+  const packed = deflateSync(Buffer.from(index + body, "latin1"));
+  const head = Buffer.from(`%PDF-1.5\n${objs.length + 1} 0 obj\n<< /Type /ObjStm /N ${objs.length} /First ${index.length} /Filter /FlateDecode /Length ${packed.length} >>\nstream\n`, "latin1");
+  return new Uint8Array(Buffer.concat([head, packed, Buffer.from("\nendstream\nendobj\n%%EOF\n", "latin1")]));
+}
+const doneOf = (events: any[]) => events.find((e) => e.type === "done")?.result;
+
+describe("PDFs written with object streams", () => {
+  test("a PDF with its pages in object streams counts every page, in the estimate and the budget", async () => {
+    expect(pdfPages(packedPdf(40))).toBe(40);
+    expect(pdfPages(packedPdf(1))).toBe(1);
+    await reset({ ticked: ALL_TICKED, budget: 0.10, atLimit: "stop" });
+    await keys("anthropic");
+    const data = Buffer.from(packedPdf(40)).toString("base64");
+    const { events } = await readSSE(await chatScreen({ model: "anthropic/claude-sonnet-4-6", messages: [{ role: "user", content: "Summarise this paper [usage 80000 300]", files: [{ name: "paper.pdf", type: "application/pdf", data }] }] }));
+    // 40 pages at up to 3,000 tokens each is about $0.36 on Sonnet: more than $0.10.
+    expect(doneOf(events)?.status).toBe("error");
+    expect(doneOf(events)?.error).toContain("budget");
+    expect(ledger()).toHaveLength(0);
+    await reset({ ticked: ALL_TICKED });
+    await keys("anthropic");
+    const e = await ui(url, "/api/estimate", { model: "anthropic/claude-sonnet-4-6", messages: [{ role: "user", content: "Summarise this paper", files: [{ kind: "pdf", pages: pdfPages(packedPdf(40)), size: 9000 }] }] });
+    expect(e.json.plan.why).toContain("40 pages");
   });
 });
