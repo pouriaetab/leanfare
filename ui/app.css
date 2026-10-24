@@ -321,6 +321,13 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
 .addr { font-family: var(--mono); font-size: 12.5px; background: var(--panel-2); border-radius: 8px; padding: 6px 9px; display: flex; align-items: center; gap: 8px; overflow-x: auto; white-space: nowrap; }
 .addr .grow { flex: 1; }
 
+/* ---- locked ---------------------------------------------------------------------------- */
+.lock { position: fixed; inset: 0; background: var(--bg); display: grid; place-items: center; z-index: 40; padding: 16px; }
+.lock-card { width: min(460px, 100%); border: 1px solid var(--line); background: var(--panel); border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px; display: grid; gap: 12px; }
+.lock-card h2 { margin: 0; font-size: 18px; }
+.lock-card p { margin: 0; color: var(--muted); font-size: 13px; }
+.lock-card .row { display: flex; gap: 8px; }
+
 /* ---- toasts (fixed to the window) -------------------------------------------------- */
 #toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 50; max-width: min(420px, calc(100vw - 32px)); }
 .toast { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line-strong); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12); font-size: 13px; }

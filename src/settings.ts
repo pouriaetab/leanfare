@@ -22,6 +22,7 @@ export interface Settings {
   allowOrigins: string[]; // web pages allowed to call the engine addresses (empty: none)
   instructions: string; // given to every new chat as its instructions (a system prompt); empty: none
   effort: Effort; // how hard thinking models think on the chat screen
+  accessKey: string | null; // when set, other apps must send it (see lock.ts); null: no key needed
 }
 
 export const DEFAULTS: Settings = {
@@ -37,6 +38,7 @@ export const DEFAULTS: Settings = {
   allowOrigins: [],
   instructions: "",
   effort: "auto",
+  accessKey: null,
 };
 
 export const MAX_INSTRUCTIONS = 20_000; // characters

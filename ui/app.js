@@ -157,8 +157,28 @@
     const text = await res.text();
     let j = null;
     try { j = text ? JSON.parse(text) : null; } catch {}
-    if (!res.ok) throw new Error((j && (j.error?.message ?? j.error)) || text || `HTTP ${res.status}`);
+    if (!res.ok) {
+      const err = new Error((j && (j.error?.message ?? j.error)) || text || `HTTP ${res.status}`);
+      if (res.status === 401 && j?.locked && path !== "/api/unlock") { err.locked = true; renderLocked(); }
+      throw err;
+    }
     return j;
+  }
+
+  // A locked Leanfare (Settings: Other apps need a key) asks a new browser for its key once.
+  function renderLocked() {
+    if (document.getElementById("lockScreen")) return;
+    const input = h("input", { type: "password", placeholder: "lf-…", autocomplete: "off", "aria-label": "Access key" });
+    const go = async () => {
+      try { await api("/api/unlock", { body: { key: input.value } }); location.reload(); }
+      catch (e) { failed(e); input.select(); }
+    };
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+    document.body.append(h("div", { id: "lockScreen", class: "lock" }, h("div", { class: "lock-card" },
+      h("h2", { text: "Leanfare is locked" }),
+      h("p", { text: "Leanfare is set to ask for its access key. Paste it to open Leanfare in this browser. Opened from its menu bar icon, or with leanfare in Terminal, it opens unlocked." }),
+      h("div", { class: "row" }, input, h("button", { class: "btn primary", type: "button", text: "Unlock", onclick: go })))));
+    input.focus();
   }
 
   // ---- toasts: in progress, done (clears itself), failed (stays) ----------
@@ -324,7 +344,7 @@
       if (S.tab === "settings") renderSettings();
       if (S.tab === "chat") { renderComposerBar(); if (!S.messages.length && !busyIn($("#messages"))) renderMessages(); }
     } catch (e) {
-      renderOffline(e);
+      if (!e?.locked) renderOffline(e);
     }
   }
 
@@ -1338,6 +1358,14 @@
     return h("span", { class: "money" }, h("span", { text: "$" }), h("input", { type: "number", min: "0", step: "0.01", value: value ?? "", placeholder: "none", "aria-label": label, "data-keep": label }));
   }
 
+  async function setLock(on, rotate = false) {
+    try {
+      S.st = await api("/api/lock", { body: { on, rotate } });
+      renderSettings();
+      toast(!on ? "Apps on this computer no longer need a key." : rotate ? "New key made. The old one stopped working." : "Apps now need the access key shown in Settings.", "done");
+    } catch (e) { failed(e); }
+  }
+
   function copyBtn(text) {
     return h("button", { class: "btn small", type: "button", text: "Copy", onclick: () => navigator.clipboard?.writeText(text).then(() => toast("Copied.", "done"), () => failed("Could not copy.")) });
   }
@@ -1367,7 +1395,8 @@
       h("button", { type: "button", "aria-pressed": String(s.atLimit === "stop"), text: "Stop", onclick: () => patchSettings({ atLimit: "stop" }, "Saved.") }));
     const b = st.budget;
     const addr = st.address;
-    const curl = `curl ${addr}/v1/chat/completions -H "content-type: application/json" -d '{"model":"auto","messages":[{"role":"user","content":"Hello"}]}'`;
+    const lock = st.lock ?? { on: false, key: null };
+    const curl = `curl ${addr}/v1/chat/completions -H "content-type: application/json"${lock.on ? ` -H "authorization: Bearer ${lock.key}"` : ""} -d '{"model":"auto","messages":[{"role":"user","content":"Hello"}]}'`;
     const d = st.data;
     const theme = store.get("theme", "auto");
     const right = h("div", { class: "colR" },
@@ -1399,10 +1428,16 @@
             h("input", { type: "file", hidden: true, accept: ".json,.zip,application/json,application/zip", onchange: (e) => { importFile(e.target.files[0]); e.target.value = ""; } }))),
         h("p", { text: "Export saves every chat, with its files, as one file. Import reads that file, or the export ChatGPT or Claude emails you (the .zip, or the conversations.json inside it). The cost ledger never keeps what you wrote, only token counts and costs." })),
       h("div", { class: "setting" }, h("h3", { text: "Use Leanfare from your other apps" }),
-        h("p", { text: "Point any app or script that speaks OpenAI's or Anthropic's format here. Any API key works. Model: auto, auto-save, auto-best, or a model id such as google/gemini-3.8-flash." }),
+        h("p", { text: `Point any app or script that speaks OpenAI's or Anthropic's format here. ${lock.on ? "Use the access key below as its API key." : "Any API key works."} Model: auto, auto-save, auto-best, or a model id such as google/gemini-3.8-flash.` }),
         h("div", { class: "addr" }, h("span", { class: "grow", text: `OpenAI address: ${addr}/v1` }), copyBtn(`${addr}/v1`)),
         h("div", { class: "addr" }, h("span", { class: "grow", text: `Anthropic address: ${addr}` }), copyBtn(addr)),
         h("div", { class: "addr" }, h("span", { class: "grow", text: curl }), copyBtn(curl))),
+      h("div", { class: "setting" }, h("h3", { text: "Other apps need a key" }),
+        h("label", { class: "check" }, h("input", { type: "checkbox", checked: lock.on, onchange: (e) => setLock(e.target.checked) }), "Ask apps for Leanfare's access key"),
+        lock.on ? h("div", { class: "addr" }, h("span", { class: "grow", text: lock.key }), copyBtn(lock.key), h("button", { class: "btn small", type: "button", text: "New key", onclick: () => setLock(true, true) })) : null,
+        h("p", { text: lock.on
+          ? "Apps send it as their API key (OpenAI's and Anthropic's clients both do). A new key stops the old one at once. This page stays open; another browser asks for the key once."
+          : "Off: any app on this computer can use Leanfare's addresses with any key. Turn it on if other people use this computer." })),
       h("div", { class: "setting" }, h("h3", { text: "Prices and ratings" }),
         h("p", { text: `${d.modelCount} models from llmledger's data, built ${dayLabel(d.built)} (${d.from === "built-in" ? "the copy inside this release" : "downloaded"}); ratings from ${d.ratingsDate ?? "—"}. ${d.status.state === "ok" ? `Last checked ${ago(d.status.at)}.` : d.status.state === "failed" ? `The last update failed: tried ${d.status.tried}: ${d.status.error}.` : "Checked once a day."}` }),
         h("div", { class: "row" }, runButton("Update now", (signal) => refreshList("data", signal)))),
