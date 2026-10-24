@@ -233,6 +233,13 @@ export async function runMcp() {
       job.finally(() => pending.delete(job));
     }
   }
+  // A last message with no newline after it still counts.
+  const rest = buf.trim();
+  if (rest) {
+    let msg: any = null;
+    try { msg = JSON.parse(rest); } catch { error(null, -32700, "Not JSON."); }
+    if (msg) { const job = handleMessage(msg).catch(() => {}); pending.add(job); }
+  }
   // stdin closed: the client is done sending. Answer what is still running (at most 60 s), then exit.
   await Promise.race([Promise.all([...pending]), Bun.sleep(60_000)]);
   for (const ac of inflight.values()) ac.abort();

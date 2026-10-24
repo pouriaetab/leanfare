@@ -69,10 +69,10 @@ export function exportAll() {
 interface InChat { source: string; title: string; created: string; updated: string; system?: string | null; messages: { role: "user" | "assistant"; content: string; ts: string; meta?: any; files?: any[] }[] }
 export interface ImportResult { from: "leanfare" | "chatgpt" | "claude"; chats: number; messages: number; skipped: number }
 
+// A time from an export, or the fallback when it is missing or makes no sense.
 const iso = (v: unknown, fallback: string): string => {
-  if (typeof v === "number" && Number.isFinite(v)) return new Date(v > 1e12 ? v : v * 1000).toISOString();
-  if (typeof v === "string" && !Number.isNaN(Date.parse(v))) return new Date(v).toISOString();
-  return fallback;
+  const d = typeof v === "number" && Number.isFinite(v) ? new Date(v > 1e12 ? v : v * 1000) : typeof v === "string" ? new Date(v) : null;
+  return d && Number.isFinite(d.getTime()) && d.getUTCFullYear() > 1990 && d.getUTCFullYear() < 2200 ? d.toISOString() : fallback;
 };
 const cut = (s: unknown, n: number) => (typeof s === "string" ? s : "").replace(/\u0000/g, "").slice(0, n);
 
@@ -144,9 +144,19 @@ function fromLeanfare(j: any): InChat[] {
   })).filter((c: InChat) => c.messages.length);
 }
 
+// The most an export may hold once unzipped: more than any real chat history,
+// less than what would run a laptop out of memory (a small .zip can unpack to gigabytes).
+export const MAX_UNZIPPED = 200 * 1024 * 1024;
+
 // The one file Leanfare wants from an export .zip: conversations.json (ChatGPT,
 // Claude) or a Leanfare export. A small reader: no library needed for this.
-export function fromZip(buf: Uint8Array): Uint8Array | null {
+export function fromZip(buf: Uint8Array): Uint8Array | null | "too big" {
+  try { return readZip(buf); }
+  catch (e: any) { return e?.code === "ERR_BUFFER_TOO_LARGE" || e instanceof RangeError ? "too big" : null; }
+}
+
+function readZip(buf: Uint8Array): Uint8Array | null | "too big" {
+  if (buf.length < 22) return null;
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   let eocd = -1;
   for (let i = buf.length - 22; i >= Math.max(0, buf.length - 66_000); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
@@ -154,33 +164,39 @@ export function fromZip(buf: Uint8Array): Uint8Array | null {
   const count = dv.getUint16(eocd + 10, true);
   let p = dv.getUint32(eocd + 16, true);
   const dec = new TextDecoder();
-  let best: { score: number; method: number; size: number; local: number } | null = null;
+  let best: { score: number; method: number; size: number; full: number; local: number } | null = null;
   for (let i = 0; i < count && p + 46 <= buf.length; i++) {
     if (dv.getUint32(p, true) !== 0x02014b50) return null;
-    const method = dv.getUint16(p + 10, true), size = dv.getUint32(p + 20, true);
+    const method = dv.getUint16(p + 10, true), size = dv.getUint32(p + 20, true), full = dv.getUint32(p + 24, true);
     const nameLen = dv.getUint16(p + 28, true), extraLen = dv.getUint16(p + 30, true), commentLen = dv.getUint16(p + 32, true);
     const local = dv.getUint32(p + 42, true);
     const name = dec.decode(buf.subarray(p + 46, p + 46 + nameLen));
     const base = name.split("/").pop() ?? "";
     const score = base === "conversations.json" ? 2 : /^leanfare.*\.json$/i.test(base) ? 1 : 0;
-    if (score && (!best || score > best.score)) best = { score, method, size, local };
+    if (score && (!best || score > best.score)) best = { score, method, size, full, local };
     p += 46 + nameLen + extraLen + commentLen;
   }
-  if (!best || dv.getUint32(best.local, true) !== 0x04034b50) return null;
+  if (!best || best.local + 30 > buf.length || dv.getUint32(best.local, true) !== 0x04034b50) return null;
+  if (best.full > MAX_UNZIPPED) return "too big";
   const start = best.local + 30 + dv.getUint16(best.local + 26, true) + dv.getUint16(best.local + 28, true);
+  if (start + best.size > buf.length) return null;
   const data = buf.subarray(start, start + best.size);
   if (best.method === 0) return data;
-  if (best.method === 8) return new Uint8Array(inflateRawSync(data));
+  // The size a zip declares can lie: the unpacking itself stops at the limit.
+  if (best.method === 8) return new Uint8Array(inflateRawSync(data, { maxOutputLength: MAX_UNZIPPED }));
   return null;
 }
 
 export function readArchive(bytes: Uint8Array): { from: ImportResult["from"]; chats: InChat[] } | string {
   let raw = bytes;
+  const tooBig = `This export is over ${MAX_UNZIPPED / 1048576} MB unzipped, more than Leanfare imports at once.`;
   if (bytes[0] === 0x50 && bytes[1] === 0x4b) {
     const inner = fromZip(bytes);
-    if (!inner) return "This .zip has no conversations.json (ChatGPT, Claude) or Leanfare export in it.";
+    if (inner === "too big") return tooBig;
+    if (!inner) return "This .zip has no conversations.json (ChatGPT, Claude) or Leanfare export in it, or it is damaged.";
     raw = inner;
   }
+  if (raw.length > MAX_UNZIPPED) return tooBig;
   let j: any;
   try { j = JSON.parse(new TextDecoder().decode(raw)); } catch { return "This file is not JSON. Choose Leanfare's export, or the conversations.json (or .zip) from ChatGPT or Claude."; }
   if (j?.app === "leanfare") return { from: "leanfare", chats: fromLeanfare(j) };
@@ -194,12 +210,14 @@ export function readArchive(bytes: Uint8Array): { from: ImportResult["from"]; ch
 export function importChats(from: ImportResult["from"], chats: InChat[]): ImportResult {
   let added = 0, messages = 0, skipped = 0;
   const has = db.query("SELECT 1 FROM chats WHERE source = ?");
+  const sameId = db.query("SELECT 1 FROM chats WHERE id = ?");
   const putChat = db.query("INSERT INTO chats(id, title, created, updated, system, source) VALUES (?, ?, ?, ?, ?, ?)");
   const putMsg = db.query("INSERT INTO messages(chat_id, role, content, meta, ts) VALUES (?, ?, ?, ?, ?)");
   const putFile = db.query("INSERT INTO files(chat_id, message_id, name, type, kind, size, pages, data, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
   db.transaction(() => {
     for (const c of chats) {
-      if (has.get(c.source)) { skipped++; continue; }
+      // Already here: imported before, or (a Leanfare export of this same Leanfare) the very chat.
+      if (has.get(c.source) || (c.source.startsWith("leanfare:") && sameId.get(c.source.slice(9)))) { skipped++; continue; }
       const id = randomId();
       putChat.run(id, c.title, c.created, c.updated, c.system || null, c.source);
       for (const m of c.messages) {
