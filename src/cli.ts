@@ -34,6 +34,10 @@ function readPid(): PidFile | null {
   try { return JSON.parse(readFileSync(paths.pid, "utf8")); } catch { return null; }
 }
 
+const readToken = () => { try { return readFileSync(paths.token, "utf8").trim(); } catch { return ""; } };
+// A locked Leanfare opens through its unlock link (the control token only you can read).
+const pageUrl = (base: string, isLocked: boolean, token: string) => (isLocked && token ? `${base}/unlock?t=${token}` : base);
+
 async function health(p: number): Promise<any | null> {
   try {
     const r = await fetch(`http://127.0.0.1:${p}/healthz`, { signal: AbortSignal.timeout(1500) });
@@ -61,7 +65,7 @@ async function start() {
     if (h) {
       const url = `http://127.0.0.1:${existing.port}`;
       console.log(`Leanfare is already running at ${url}`);
-      openBrowser(url);
+      openBrowser(pageUrl(url, !!h.locked, readToken()));
       process.exit(0);
     }
     try { unlinkSync(paths.pid); } catch {}
@@ -101,7 +105,9 @@ async function start() {
   console.log(`Other apps: OpenAI address ${url}/v1 · Anthropic address ${url} · any API key works`);
   console.log(`Prices: ${data.store.catalogFrom} copy from ${data.store.catalog.built.slice(0, 10)} · data folder ${paths.db.replace(/\/leanfare\.db$/, "")}`);
   console.log("Stop: press Ctrl+C here, or run: leanfare stop");
-  openBrowser(url);
+  const { locked } = await import("./lock");
+  if (locked()) console.log("Other apps need Leanfare's access key (Settings, Other apps need a key).");
+  openBrowser(pageUrl(url, locked(), token));
 
   process.on("SIGINT", () => shutdown("Ctrl+C"));
   process.on("SIGTERM", () => shutdown("stop signal"));
@@ -138,7 +144,7 @@ async function stop() {
     if (pf) { try { unlinkSync(paths.pid); } catch {} }
     process.exit(0);
   }
-  const token = existsSync(paths.token) ? readFileSync(paths.token, "utf8").trim() : "";
+  const token = readToken();
   const r = await fetch(`http://127.0.0.1:${p}/api/control/stop`, { method: "POST", headers: { "x-leanfare-token": token } }).catch(() => null);
   if (!r || !r.ok) {
     // No usable token: stop it by its process id, after checking the id is Leanfare's.
@@ -163,7 +169,7 @@ async function status() {
   const p = pf?.port ?? port;
   const h = await health(p);
   if (!h) { console.log(`Leanfare is not running. ${versionLine().text}`); process.exit(3); }
-  const st: any = await fetch(`http://127.0.0.1:${p}/api/state`, { headers: { "x-leanfare": "1" } }).then((r) => r.json()).catch(() => null);
+  const st: any = await fetch(`http://127.0.0.1:${p}/api/state`, { headers: { "x-leanfare": "1", "x-leanfare-token": readToken() } }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
   console.log(`Leanfare ${h.version} is running at http://127.0.0.1:${p} (process ${h.pid}).`);
   if (st) {
     console.log(`Prices from ${st.data.built.slice(0, 10)} (${st.data.from} copy). Providers ready: ${st.readyCount}. Models ticked and ready: ${st.usableCount}.`);

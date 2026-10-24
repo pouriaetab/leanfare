@@ -17,6 +17,7 @@ import { checkKey, effortLevels, UserError } from "./upstream";
 import { FILE_LIMITS, checkFile, prepareMessages, takesImages, takesPdfs, type Attachment, type ChatMsg } from "./files";
 import type { Msg } from "./router";
 import { exportAll, importChats, readArchive, searchChats } from "./archive";
+import { clearCookie, controlOk, engineAllowed, keyOk, locked, newAccessKey, pageAllowed, sessionCookie } from "./lock";
 import { chargeOf, errorResponse, handleAnthropic, handleOpenAI, idle, pauseState, plan, planView, providerReady, runChat, runningList, setPaused, stopRunning, usableModels, usualModel } from "./engine";
 import { guessTask } from "./router";
 import { dollars, localDay, now, randomId, redact } from "./util";
@@ -114,6 +115,7 @@ export function state() {
     running: runningList(),
     keyStore: storeName(),
     keychainNote: keychainNote(),
+    lock: { on: locked(), key: s.accessKey },
   };
 }
 
@@ -405,6 +407,20 @@ async function api(req: Request, url: URL): Promise<Response> {
   if (p === "/api/recent" && m === "GET") {
     return json({ rows: db.query("SELECT ts, source, model, task, auto, mode, in_tokens, cached, out_tokens, cost, usual, usual_cost, price_status, usage_status, status, error, ms, switched_from FROM ledger ORDER BY id DESC LIMIT 50").all() });
   }
+  if (p === "/api/lock" && m === "POST") {
+    // On: other apps need the key (a new one if asked); this page keeps working (it gets the cookie).
+    const b = await readBody(req);
+    if (b.on === false) { saveSettings({ accessKey: null }); return json(state(), 200, { "set-cookie": clearCookie() }); }
+    const key = b.rotate || !settings().accessKey ? newAccessKey() : settings().accessKey!;
+    saveSettings({ accessKey: key });
+    return json(state(), 200, { "set-cookie": sessionCookie(key) });
+  }
+  if (p === "/api/unlock" && m === "POST") {
+    const b = await readBody(req);
+    if (!locked()) return json({ ok: true });
+    if (!keyOk(typeof b.key === "string" ? b.key.trim() : null)) { await Bun.sleep(400); return json({ error: "That is not Leanfare's access key.", locked: true }, 401); }
+    return json({ ok: true }, 200, { "set-cookie": sessionCookie(settings().accessKey!) });
+  }
   if (p === "/api/pause" && m === "POST") {
     const b = await readBody(req);
     setPaused(!!b.paused);
@@ -427,7 +443,7 @@ async function api(req: Request, url: URL): Promise<Response> {
     return json({ status: st, state: state() });
   }
   if (p === "/api/control/stop" && m === "POST") {
-    if (req.headers.get("x-leanfare-token") !== controlToken) return fail(403, "Wrong control token.");
+    if (!controlOk(req, controlToken)) return fail(403, "Wrong control token.");
     setTimeout(() => shutdown("stop command"), 10);
     return json({ ok: true, running: runningList().length });
   }
@@ -460,12 +476,24 @@ export async function handle(req: Request, server: { timeout(r: Request, s: numb
   const origin = req.headers.get("origin");
   const ownOrigin = !origin || own.some((h) => origin === `http://${h}`);
 
-  if (url.pathname === "/healthz") return json({ ok: true, app: "leanfare", version: VERSION, pid: process.pid });
+  if (url.pathname === "/healthz") return json({ ok: true, app: "leanfare", version: VERSION, pid: process.pid, locked: locked() });
+  // Leanfare's own command and Mac app open the page through this link, so a locked page opens unlocked.
+  if (url.pathname === "/unlock" && req.method === "GET") {
+    const t = url.searchParams.get("t") ?? "";
+    const ok = locked() && (keyOk(t) || controlOk(new Request(req.url, { headers: { "x-leanfare-token": t } }), controlToken));
+    return new Response(null, { status: 302, headers: { location: "/", "cache-control": "no-store", "referrer-policy": "no-referrer", ...(ok ? { "set-cookie": sessionCookie(settings().accessKey!) } : {}) } });
+  }
 
   if (url.pathname.startsWith("/v1/")) {
     const cors = corsFor(origin);
     if (!ownOrigin && !cors["access-control-allow-origin"]) return json({ error: { message: `Leanfare does not answer web pages from ${origin}. Allow it in Settings if you trust it.`, type: "origin_not_allowed" } }, 403);
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+    if (!engineAllowed(req, controlToken)) {
+      const message = "Leanfare needs its access key: send it as the API key (Authorization: Bearer lf-..., or x-api-key). It is in Leanfare's Settings, under Other apps need a key.";
+      const res = url.pathname.startsWith("/v1/messages") ? json({ type: "error", error: { type: "authentication_error", message } }, 401) : json({ error: { message, type: "authentication_error", code: "invalid_api_key" } }, 401);
+      for (const [k, v] of Object.entries(cors)) res.headers.set(k, v);
+      return res;
+    }
     server?.timeout(req, 0); // answers can take minutes; no idle cut-off
     let res: Response;
     try {
@@ -482,6 +510,7 @@ export async function handle(req: Request, server: { timeout(r: Request, s: numb
   if (url.pathname.startsWith("/api/")) {
     if (!ownOrigin) return fail(403, "Only Leanfare's own page can use this.");
     if (url.pathname !== "/api/control/stop" && req.headers.get("x-leanfare") !== "1") return fail(403, "Missing the x-leanfare header.");
+    if (url.pathname !== "/api/unlock" && !url.pathname.startsWith("/api/control/") && !pageAllowed(req, controlToken)) return json({ error: "Leanfare is locked. Paste its access key to open it.", locked: true }, 401);
     if (url.pathname === "/api/chat" || url.pathname === "/api/keys" || url.pathname === "/api/refresh" || url.pathname === "/api/import") server?.timeout(req, 0);
     try { return await api(req, url); }
     catch (e: any) { return fail(e instanceof UserError ? e.status : 500, e instanceof UserError ? e.message : `Leanfare hit an unexpected problem: ${String(e?.message ?? e)}`); }
