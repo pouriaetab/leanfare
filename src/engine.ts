@@ -659,12 +659,19 @@ export function planView(p: Plan) {
   };
 }
 
-export async function runChat(messages: Msg[], asked: string | null, signal: AbortSignal, emit: (e: ChatEvent) => void, label = "Chat"): Promise<{ text: string; meta: any; status: "ok" | "stopped" | "error" }> {
+export interface ChatOptions {
+  system?: string; // the chat's instructions, sent first as a system message
+}
+
+// The chat's instructions go first, as a system message (Claude's translation moves it to "system").
+export const withSystem = (messages: Msg[], system?: string): Msg[] => (system ? [{ role: "system", content: system }, ...messages] : messages);
+
+export async function runChat(messages: Msg[], asked: string | null, signal: AbortSignal, emit: (e: ChatEvent) => void, label = "Chat", opts: ChatOptions = {}): Promise<{ text: string; meta: any; status: "ok" | "stopped" | "error" }> {
   const ac = linked(signal);
   if (paused) emit({ type: "waiting", message: "Paused. This message goes out when you press Start again." });
   let p: Plan;
   try {
-    p = await plan({ source: "chat", asked, messages, maxOut: null, signal: ac.signal });
+    p = await plan({ source: "chat", asked, messages, system: opts.system || undefined, maxOut: null, signal: ac.signal });
   } catch (e: any) {
     const status = e instanceof UserError ? e.status : 500;
     const message = e instanceof UserError ? e.message : String(e?.message ?? e);
@@ -677,7 +684,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
   let model = p.model, t0 = performance.now(), ended = false, finishReason: string | null = null;
   const notesBefore = p.notes.length;
   try {
-    const sent = await sendWithFallback(p, "chat", { messages }, true, ac.signal);
+    const sent = await sendWithFallback(p, "chat", { messages: withSystem(messages, opts.system) }, true, ac.signal);
     model = sent.model; t0 = sent.t0;
     if (p.notes.length > notesBefore) emit({ type: "meta", plan: planView(p) }); // Auto passed it on: say so
     for await (const { j, data } of openaiChunks(sent.res, model, model.apiId)) {

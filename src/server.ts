@@ -9,7 +9,7 @@ import { BUN_TESTED, HOST, PORT, PROVIDERS, UI_DIR, VERSION, baseOf, paths, prov
 import { TASKS, allModels, getModel, isRetired, refreshCatalog, refreshOllama, refreshOpenRouter, retiresWithin, store, type Model } from "./data";
 import { db, lastRepair } from "./db";
 import { allKeys, getKey, keyWhere, keychainNote, removeKey, saveKey, storeName } from "./keys";
-import { MODES, saveSettings, settings, validatePatch } from "./settings";
+import { MAX_INSTRUCTIONS, MODES, saveSettings, settings, validatePatch } from "./settings";
 import { budgetState } from "./budget";
 import { retirementNotices } from "./retire";
 import { savings } from "./savings";
@@ -127,6 +127,7 @@ async function chatRoute(req: Request, body: any): Promise<Response> {
   const s = settings();
   const messages = Array.isArray(body?.messages) ? body.messages.filter((m: any) => (m.role === "user" || m.role === "assistant" || m.role === "system") && typeof m.content === "string") : [];
   if (!messages.length || messages.at(-1).role !== "user") return fail(400, "The chat needs a message to send.");
+  const system = typeof body.system === "string" ? body.system.trim().slice(0, MAX_INSTRUCTIONS) : "";
   const ts = now().toISOString();
   let chatId: string | null = typeof body.chatId === "string" ? body.chatId : null;
   let userMessageId: number | null = null;
@@ -134,8 +135,8 @@ async function chatRoute(req: Request, body: any): Promise<Response> {
     if (!chatId || !db.query("SELECT 1 FROM chats WHERE id = ?").get(chatId)) {
       chatId = chatId ?? randomId();
       const first = messages.find((m: any) => m.role === "user")?.content ?? "New chat";
-      db.query("INSERT INTO chats(id, title, created, updated) VALUES (?, ?, ?, ?)").run(chatId, first.replace(/\s+/g, " ").trim().slice(0, 60) || "New chat", ts, ts);
-    }
+      db.query("INSERT INTO chats(id, title, created, updated, system) VALUES (?, ?, ?, ?, ?)").run(chatId, first.replace(/\s+/g, " ").trim().slice(0, 60) || "New chat", ts, ts, system || null);
+    } else if (typeof body.system === "string") db.query("UPDATE chats SET system = ? WHERE id = ?").run(system || null, chatId);
     const lastSaved = db.query("SELECT id, role, content FROM messages WHERE chat_id = ? AND deleted IS NULL ORDER BY id DESC LIMIT 1").get(chatId) as any;
     if (typeof body.retryOf === "number") db.query("UPDATE messages SET deleted = ? WHERE id = ? AND chat_id = ? AND role = 'assistant'").run(ts, body.retryOf, chatId);
     else if (lastSaved?.role === "user" && lastSaved.content === messages.at(-1).content) userMessageId = lastSaved.id; // a retry after a failed send
@@ -154,7 +155,7 @@ async function chatRoute(req: Request, body: any): Promise<Response> {
         send({ type: "chat", chatId, userMessageId, history: s.history });
         let title = "Chat";
         try { if (chatId) title = (db.query("SELECT title FROM chats WHERE id = ?").get(chatId) as any)?.title ?? title; } catch {}
-        const out = await runChat(messages, asked, req.signal, send, title);
+        const out = await runChat(messages, asked, req.signal, send, title, { system });
         if (s.history && chatId && (out.text || out.status !== "error")) {
           try {
             const id = Number(db.query("INSERT INTO messages(chat_id, role, content, meta, ts) VALUES (?, 'assistant', ?, ?, ?)").run(chatId, out.text, JSON.stringify(out.meta), now().toISOString()).lastInsertRowid);
@@ -261,7 +262,8 @@ async function api(req: Request, url: URL): Promise<Response> {
     const messages = Array.isArray(b.messages) ? b.messages : [];
     if (!messages.length) return json({ estimate: null });
     try {
-      const pl = await plan({ source: "chat", asked: typeof b.model === "string" ? b.model : "auto", messages, maxOut: null, signal: req.signal, dry: true });
+      const system = typeof b.system === "string" && b.system.trim() ? b.system.slice(0, MAX_INSTRUCTIONS) : undefined;
+      const pl = await plan({ source: "chat", asked: typeof b.model === "string" ? b.model : "auto", messages, system, maxOut: null, signal: req.signal, dry: true });
       return json({ estimate: pl.estimate, plan: planView(pl) });
     } catch (e: any) {
       return json({ estimate: null, error: e instanceof UserError ? e.message : String(e?.message ?? e), guess: guessTask(messages) });
@@ -272,13 +274,19 @@ async function api(req: Request, url: URL): Promise<Response> {
   if (chatMatch) {
     const id = chatMatch[1];
     if (chatMatch[2] && m === "POST") { db.query("UPDATE chats SET deleted = NULL WHERE id = ?").run(id); return json({ ok: true, chats: chatList() }); }
-    if (m === "GET") return json({ chat: db.query("SELECT id, title, created, updated FROM chats WHERE id = ?").get(id), messages: chatMessages(id) });
+    if (m === "GET") return json({ chat: db.query("SELECT id, title, created, updated, system FROM chats WHERE id = ?").get(id), messages: chatMessages(id) });
     if (m === "PATCH") {
       const b = await readBody(req);
-      const title = String(b.title ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
-      if (!title) return fail(400, "A chat needs a name.");
-      db.query("UPDATE chats SET title = ? WHERE id = ?").run(title, id);
-      return json({ ok: true, chats: chatList() });
+      if ("title" in b) {
+        const title = String(b.title ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
+        if (!title) return fail(400, "A chat needs a name.");
+        db.query("UPDATE chats SET title = ? WHERE id = ?").run(title, id);
+      }
+      if ("system" in b) {
+        if (typeof b.system !== "string" || b.system.length > MAX_INSTRUCTIONS) return fail(400, `Instructions are text of at most ${MAX_INSTRUCTIONS.toLocaleString("en-US")} characters.`);
+        db.query("UPDATE chats SET system = ? WHERE id = ?").run(b.system.trim() || null, id);
+      }
+      return json({ ok: true, chats: chatList(), chat: db.query("SELECT id, title, created, updated, system FROM chats WHERE id = ?").get(id) });
     }
     if (m === "DELETE") { db.query("UPDATE chats SET deleted = ? WHERE id = ?").run(now().toISOString(), id); return json({ ok: true, chats: chatList() }); }
   }
