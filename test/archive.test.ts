@@ -132,3 +132,60 @@ describe("export and import", () => {
     expect((await r3.json()).error).toContain("has no conversations.json");
   });
 });
+
+// A one-file .zip: conversations.json, stored as given or deflated, with the
+// sizes it declares (which can lie).
+function zipOf(raw: Buffer, declared = raw.length): Blob {
+  const comp = deflateRawSync(raw, { level: 1 });
+  const name = Buffer.from("conversations.json");
+  const local = Buffer.alloc(30); local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(8, 8); local.writeUInt32LE(comp.length, 18); local.writeUInt32LE(declared >>> 0, 22); local.writeUInt16LE(name.length, 26);
+  const central = Buffer.alloc(46); central.writeUInt32LE(0x02014b50, 0); central.writeUInt16LE(20, 4); central.writeUInt16LE(20, 6); central.writeUInt16LE(8, 10); central.writeUInt32LE(comp.length, 20); central.writeUInt32LE(declared >>> 0, 24); central.writeUInt16LE(name.length, 28);
+  const cd = Buffer.concat([central, name]);
+  const eocd = Buffer.alloc(22); eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(1, 8); eocd.writeUInt16LE(1, 10); eocd.writeUInt32LE(cd.length, 12); eocd.writeUInt32LE(local.length + name.length + comp.length, 16);
+  return new Blob([new Uint8Array(Buffer.concat([local, name, comp, cd, eocd]))]);
+}
+
+describe("imports that go wrong", () => {
+  test("a damaged .zip gets a plain answer, not an internal error", async () => {
+    const name = Buffer.from("conversations.json");
+    const cd = Buffer.alloc(46); cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt16LE(8, 10); cd.writeUInt32LE(10, 20); cd.writeUInt16LE(name.length, 28); cd.writeUInt32LE(0x7fffffff, 42);
+    const head = Buffer.from("PK\u0003\u0004 not much here");
+    const eocd = Buffer.alloc(22); eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(1, 8); eocd.writeUInt16LE(1, 10); eocd.writeUInt32LE(46 + name.length, 12); eocd.writeUInt32LE(head.length, 16);
+    const r = await fetch(`${url}/api/import`, { method: "POST", headers: { "x-leanfare": "1" }, body: new Blob([new Uint8Array(Buffer.concat([head, cd, name, eocd]))]) });
+    const j: any = await r.json();
+    expect(r.status).toBe(400);
+    expect(j.error).toContain("damaged");
+  });
+
+  test("a .zip that unpacks to more than 200 MB is refused, whatever size it declares", async () => {
+    const raw = Buffer.alloc(210 * 1024 * 1024, 0x61);
+    for (const declared of [raw.length, 1000]) {
+      const r = await fetch(`${url}/api/import`, { method: "POST", headers: { "x-leanfare": "1" }, body: zipOf(raw, declared) });
+      const j: any = await r.json();
+      expect(r.status).toBe(400);
+      expect(j.error).toContain("over 200 MB");
+    }
+  }, 30000);
+
+  test("one conversation with a time out of range does not sink the import", async () => {
+    const list = [
+      { title: "good", create_time: 1760000000, mapping: { a: { message: { author: { role: "user" }, content: { content_type: "text", parts: ["hello"] }, create_time: 1760000000 } } } },
+      { title: "bad time", create_time: 1e20, mapping: { b: { message: { author: { role: "user" }, content: { content_type: "text", parts: ["hi"] } } } } },
+    ];
+    const r = await fetch(`${url}/api/import`, { method: "POST", headers: { "x-leanfare": "1" }, body: JSON.stringify(list) });
+    const j: any = await r.json();
+    expect(r.status).toBe(200);
+    expect(j.imported).toBe(2);
+  });
+
+  test("importing this Leanfare's own export adds nothing twice", async () => {
+    await keys("openai");
+    await readSSE(await chatScreen({ model: "openai/gpt-5-mini", messages: [{ role: "user", content: "First chat" }] }));
+    await readSSE(await chatScreen({ model: "openai/gpt-5-mini", messages: [{ role: "user", content: "Second chat" }] }));
+    const exported = (await ui(url, "/api/export")).json;
+    const r = await fetch(`${url}/api/import`, { method: "POST", headers: { "x-leanfare": "1" }, body: JSON.stringify(exported) });
+    const j: any = await r.json();
+    expect(j).toMatchObject({ imported: 0, skipped: 2 });
+    expect((await ui(url, "/api/chats")).json.chats).toHaveLength(2);
+  });
+});

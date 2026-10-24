@@ -117,3 +117,20 @@ describe("the tools", () => {
     expect(s.result.isError).toBeUndefined();
   });
 });
+
+describe("the end of the input", () => {
+  test("the door answers a last message that has no newline before its input closes", async () => {
+    const run = async (input: string) => {
+      const p = Bun.spawn([process.execPath, new URL("../src/cli.ts", import.meta.url).pathname, "mcp"], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...process.env, LEANFARE_URL: "http://127.0.0.1:9", LEANFARE_TOKEN: "x" } });
+      (p.stdin as any).write(input);
+      await (p.stdin as any).end();
+      const out = await new Response(p.stdout as ReadableStream).text();
+      await p.exited;
+      return out.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    };
+    expect((await run('{"jsonrpc":"2.0","id":1,"method":"ping"}')).map((m) => m.id)).toEqual([1]);
+    const two = await run('{"jsonrpc":"2.0","id":1,"method":"ping"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}');
+    expect(two.map((m) => m.id)).toEqual([1, 2]);
+    expect(two[1].result.tools).toHaveLength(4);
+  }, 20000);
+});
