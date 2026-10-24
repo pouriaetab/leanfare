@@ -1,0 +1,130 @@
+// The local database: settings, the cost ledger and (if kept) chat history.
+//
+// SQLite in WAL mode with synchronous=NORMAL: each write costs microseconds
+// instead of a disk flush (a crash of Leanfare loses nothing; a power cut can
+// lose the last few writes). The file heals itself: a damaged file is moved
+// aside, never deleted, and the newest daily backup or an empty file takes its
+// place, with a note on the Settings screen.
+import { Database } from "bun:sqlite";
+import { existsSync, readdirSync, renameSync, statSync, copyFileSync, unlinkSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { localDay, now } from "./util";
+
+export let db: Database;
+export interface Repair { at: string; moved: string; bytes: number; restored: "backup" | "empty"; reason: string }
+export let lastRepair: Repair | null = null;
+
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ledger(
+  id INTEGER PRIMARY KEY,
+  ts TEXT NOT NULL,
+  month TEXT NOT NULL,
+  day TEXT NOT NULL,
+  source TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  asked TEXT,
+  task TEXT,
+  mode TEXT,
+  auto INTEGER NOT NULL DEFAULT 0,
+  reason TEXT,
+  usual TEXT,
+  usual_cost REAL,
+  in_tokens INTEGER NOT NULL DEFAULT 0,
+  cached INTEGER NOT NULL DEFAULT 0,
+  cache_write INTEGER NOT NULL DEFAULT 0,
+  out_tokens INTEGER NOT NULL DEFAULT 0,
+  cost REAL,
+  list_cost REAL,
+  price_status TEXT NOT NULL,
+  usage_status TEXT NOT NULL,
+  status TEXT NOT NULL,
+  error TEXT,
+  ms INTEGER,
+  first_ms INTEGER,
+  switched_from TEXT
+);
+CREATE INDEX IF NOT EXISTS ledger_month ON ledger(month);
+CREATE TABLE IF NOT EXISTS chats(id TEXT PRIMARY KEY, title TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL, deleted TEXT);
+CREATE TABLE IF NOT EXISTS messages(
+  id INTEGER PRIMARY KEY,
+  chat_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  meta TEXT,
+  ts TEXT NOT NULL,
+  deleted TEXT
+);
+CREATE INDEX IF NOT EXISTS messages_chat ON messages(chat_id, id);
+`;
+
+function configure(d: Database) {
+  d.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=250; PRAGMA foreign_keys=ON;");
+  d.exec(SCHEMA);
+}
+
+const backupsOf = (path: string) => {
+  const dir = dirname(path), stem = basename(path, ".db");
+  try {
+    return readdirSync(dir).filter((f) => f.startsWith(`${stem}-backup-`) && f.endsWith(".db")).sort().reverse().map((f) => join(dir, f));
+  } catch { return []; }
+};
+
+function healthy(path: string): { ok: boolean; reason: string } {
+  try {
+    const d = new Database(path, { readonly: true }); // check without writing anything
+    try {
+      const row = d.query("PRAGMA quick_check").get() as any;
+      const v = row ? Object.values(row)[0] : "no answer";
+      return v === "ok" ? { ok: true, reason: "" } : { ok: false, reason: String(v) };
+    } finally { d.close(); }
+  } catch (e: any) {
+    return { ok: false, reason: String(e?.message ?? e) };
+  }
+}
+
+export function openDb(path: string): Database {
+  if (existsSync(path)) {
+    const h = healthy(path);
+    if (!h.ok) {
+      const stamp = now().toISOString().replace(/[:.]/g, "-");
+      const moved = `${path}.damaged-${stamp}`;
+      const bytes = statSync(path).size;
+      renameSync(path, moved);
+      for (const side of ["-wal", "-shm"]) if (existsSync(path + side)) renameSync(path + side, moved + side);
+      let restored: Repair["restored"] = "empty";
+      for (const b of backupsOf(path)) {
+        if (healthy(b).ok) { copyFileSync(b, path); restored = "backup"; break; }
+      }
+      lastRepair = { at: now().toISOString(), moved, bytes, restored, reason: h.reason.slice(0, 200) };
+      console.error(`leanfare: the database was damaged (${lastRepair.reason}); moved it to ${moved} and started from ${restored === "backup" ? "the newest backup" : "an empty file"}.`);
+    }
+  }
+  db = new Database(path, { create: true });
+  configure(db);
+  return db;
+}
+
+// One copy a day, the newest three kept, so damage costs at most a day.
+export function dailyBackup(path: string) {
+  const dir = dirname(path), stem = basename(path, ".db");
+  const target = join(dir, `${stem}-backup-${localDay()}.db`);
+  if (existsSync(target)) return;
+  try {
+    db.exec(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
+    for (const old of backupsOf(path).slice(3)) { try { unlinkSync(old); } catch {} }
+  } catch (e) {
+    console.error("leanfare: daily backup failed:", String(e));
+  }
+}
+
+export function getSetting<T>(k: string, fallback: T): T {
+  const row = db.query("SELECT v FROM settings WHERE k = ?").get(k) as { v: string } | null;
+  if (!row) return fallback;
+  try { return JSON.parse(row.v) as T; } catch { return fallback; }
+}
+
+export function putSetting(k: string, v: unknown) {
+  db.query("INSERT INTO settings(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").run(k, JSON.stringify(v));
+}
