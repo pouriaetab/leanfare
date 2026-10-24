@@ -52,14 +52,87 @@ export function costOf(p: Prices, u: Usage): number | null {
 // as one wherever it is shown (L1).
 export const countTokens = (text: string) => Math.ceil(text.length / 4);
 
+// The words in a message (images and documents are counted separately, below).
 export function textOfContent(c: unknown): string {
   if (typeof c === "string") return c;
-  if (Array.isArray(c)) return c.map((p: any) => (typeof p === "string" ? p : typeof p?.text === "string" ? p.text : p?.type === "image_url" || p?.type === "image" ? " ".repeat(3000) : "")).join("\n");
+  if (Array.isArray(c)) return c.map((p: any) => (typeof p === "string" ? p : typeof p?.text === "string" ? p.text : "")).join("\n");
   return "";
 }
 
+// ---- images and documents ---------------------------------------------------
+// Providers count an image as a few hundred to about 1,600 tokens (Claude:
+// width x height / 750, at most about 1,600; GPT and Gemini less), and a PDF
+// page as about 1,500 to 3,000 (its text plus a picture of the page). The
+// estimate uses the typical figure; the budget reservation uses the high one.
+export const IMAGE_TOKENS = { est: 1600, max: 3000 };
+export const PDF_PAGE_TOKENS = { est: 2000, max: 3000 };
+
+const B64 = /^data:([^;,]+);base64,/;
+
+// Pages in a PDF, counted from its page objects (an estimate: no PDF library).
+export function pdfPages(bytes: Uint8Array): number {
+  const text = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("latin1");
+  const n = (text.match(/\/Type\s*\/Page(?![a-zA-Z])/g) ?? []).length;
+  return Math.max(1, n);
+}
+const pagesCache = new Map<string, number>();
+function pagesOfBase64(b64: string): number {
+  const k = `${b64.length}:${b64.slice(0, 64)}:${b64.slice(-64)}`;
+  let n = pagesCache.get(k);
+  if (n === undefined) {
+    try { n = pdfPages(Uint8Array.from(Buffer.from(b64, "base64"))); } catch { n = 1; }
+    if (pagesCache.size > 200) pagesCache.clear();
+    pagesCache.set(k, n);
+  }
+  return n;
+}
+
+export interface Media { images: number; pdfPages: number; pdfs: number; est: number; max: number }
+
+// Images and PDFs in a message, in OpenAI's parts or Anthropic's blocks. A part
+// may also be a description without its data ({ type: "image" } or
+// { type: "file", pages: 3 }), which the screen sends for estimates.
+export function mediaOf(c: unknown, acc: Media = { images: 0, pdfPages: 0, pdfs: 0, est: 0, max: 0 }): Media {
+  if (!Array.isArray(c)) return acc;
+  for (const p of c as any[]) {
+    if (!p || typeof p !== "object") continue;
+    const t = p.type;
+    if (t === "image_url" || t === "image" || t === "input_image") {
+      acc.images++; acc.est += IMAGE_TOKENS.est; acc.max += IMAGE_TOKENS.max;
+    } else if (t === "file" || t === "document" || t === "input_file") {
+      const data: string = p.file?.file_data ?? p.file_data ?? (p.source?.type === "base64" ? p.source.data : "") ?? "";
+      const media = (B64.exec(data)?.[1] ?? p.source?.media_type ?? (/\.pdf$/i.test(p.file?.filename ?? p.filename ?? "") ? "application/pdf" : "")) as string;
+      if (p.source?.type === "text" && typeof p.source.data === "string") { const n = Math.ceil(p.source.data.length / 4); acc.est += n; acc.max += Buffer.byteLength(p.source.data); continue; }
+      if (media !== "application/pdf" && !(typeof p.pages === "number")) continue;
+      const pages = typeof p.pages === "number" && p.pages > 0 ? Math.ceil(p.pages) : data ? pagesOfBase64(data.replace(B64, "")) : 1;
+      acc.pdfs++; acc.pdfPages += pages; acc.est += pages * PDF_PAGE_TOKENS.est; acc.max += pages * PDF_PAGE_TOKENS.max;
+    } else if (t === "tool_result" && Array.isArray(p.content)) mediaOf(p.content, acc);
+  }
+  return acc;
+}
+
+export function mediaIn(messages: { content: unknown }[]): Media {
+  const acc: Media = { images: 0, pdfPages: 0, pdfs: 0, est: 0, max: 0 };
+  for (const m of messages) mediaOf(m?.content, acc);
+  return acc;
+}
+
+// The estimate's input: about four characters a token, a few tokens of framing per message, plus images and documents.
 export function promptTokens(messages: { role: string; content: unknown }[], system?: unknown): number {
   let chars = textOfContent(system).length;
   for (const m of messages) chars += textOfContent(m.content).length + 16; // a few tokens of framing per message
-  return Math.ceil(chars / 4);
+  return Math.ceil(chars / 4) + mediaIn(messages).est;
+}
+
+// The budget reservation's input: the most tokens a request can be. Everything it sends at one
+// token per byte, except images and documents, which count at their high figure
+// instead of their size (a 2 MB photo is not 2 million tokens).
+export function promptMax(messages: unknown[], system?: unknown, tools?: unknown): number {
+  const json = JSON.stringify([messages, system ?? null, tools ?? null], (k, v) => {
+    if (typeof v !== "string" || v.length < 200) return v;
+    if (B64.test(v)) return "";
+    if (k === "data" || k === "file_data") return "";
+    return v;
+  });
+  return Buffer.byteLength(json) + mediaIn(messages as { content: unknown }[]).max;
 }

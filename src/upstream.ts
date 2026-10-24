@@ -30,6 +30,12 @@ export function openaiBody(m: Model, body: any, stream: boolean): any {
   if (!stream) delete out.stream_options;
   else if (def.streamUsage === "ask") out.stream_options = { ...(body.stream_options ?? {}), include_usage: true };
   if (m.provider === "openrouter") out.usage = { include: true }; // OpenRouter then reports the exact cost
+  // Mistral takes an image as a plain address string.
+  if (m.provider === "mistral" && Array.isArray(out.messages)) {
+    out.messages = out.messages.map((msg: any) => Array.isArray(msg?.content)
+      ? { ...msg, content: msg.content.map((p: any) => (p?.type === "image_url" && p.image_url && typeof p.image_url === "object" ? { ...p, image_url: p.image_url.url } : p)) }
+      : msg);
+  }
   return out;
 }
 
@@ -46,6 +52,11 @@ function anthropicContent(content: unknown): any[] | string {
       const url: string = typeof part.image_url === "string" ? part.image_url : part.image_url?.url ?? "";
       const m = /^data:([^;]+);base64,(.*)$/s.exec(url);
       blocks.push(m ? { type: "image", source: { type: "base64", media_type: m[1], data: m[2] } } : { type: "image", source: { type: "url", url } });
+    } else if (part?.type === "file") {
+      // A PDF in OpenAI's shape becomes Claude's document block.
+      const m = /^data:([^;]+);base64,(.*)$/s.exec(String(part.file?.file_data ?? ""));
+      if (m && m[1] === "application/pdf") blocks.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: m[2] } });
+      else throw new UserError(400, "Claude models take PDFs and images as files; this file is neither.");
     }
   }
   return blocks;
