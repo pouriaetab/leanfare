@@ -14,6 +14,8 @@ import { budgetState } from "./budget";
 import { retirementNotices } from "./retire";
 import { savings } from "./savings";
 import { checkKey, UserError } from "./upstream";
+import { FILE_LIMITS, checkFile, prepareMessages, type Attachment, type ChatMsg } from "./files";
+import type { Msg } from "./router";
 import { chargeOf, errorResponse, handleAnthropic, handleOpenAI, idle, pauseState, plan, planView, providerReady, runChat, runningList, setPaused, stopRunning, usableModels, usualModel } from "./engine";
 import { guessTask } from "./router";
 import { dollars, localDay, now, randomId, redact } from "./util";
@@ -118,33 +120,82 @@ export function state() {
 function chatList() {
   return db.query("SELECT id, title, created, updated FROM chats WHERE deleted IS NULL ORDER BY updated DESC LIMIT 200").all();
 }
+const fileView = (f: any) => ({ id: f.id, name: f.name, type: f.type, kind: f.kind, size: f.size, pages: f.pages ?? null });
 function chatMessages(id: string) {
+  const files = new Map<number, any[]>();
+  for (const f of db.query("SELECT id, message_id, name, type, kind, size, pages FROM files WHERE chat_id = ? ORDER BY id").all(id) as any[]) {
+    if (f.message_id !== null) (files.get(f.message_id) ?? files.set(f.message_id, []).get(f.message_id)!).push(fileView(f));
+  }
   return (db.query("SELECT id, role, content, meta, ts FROM messages WHERE chat_id = ? AND deleted IS NULL ORDER BY id").all(id) as any[])
-    .map((m) => ({ ...m, meta: m.meta ? JSON.parse(m.meta) : null }));
+    .map((m) => ({ ...m, meta: m.meta ? JSON.parse(m.meta) : null, files: files.get(m.id) ?? [] }));
+}
+
+// A message's files: ones kept from earlier (by id, from this chat) and new
+// ones (with their contents), checked the same way either way.
+function resolveFiles(list: unknown, chatId: string | null): Attachment[] | string {
+  if (!Array.isArray(list) || !list.length) return [];
+  if (list.length > FILE_LIMITS.count) return `At most ${FILE_LIMITS.count} files go with one message.`;
+  const out: Attachment[] = [];
+  for (const f of list as any[]) {
+    if (f && typeof f.id === "number" && typeof f.data !== "string") {
+      const row = chatId ? db.query("SELECT id, name, type, kind, size, pages, data FROM files WHERE id = ? AND chat_id = ?").get(f.id, chatId) as any : null;
+      if (!row) return `${String(f.name ?? "A file")} from earlier in this chat is no longer there. Remove it and send again.`;
+      out.push({ id: row.id, name: row.name, type: row.type, kind: row.kind, size: row.size, pages: row.pages ?? undefined, data: Buffer.from(row.data).toString("base64") });
+    } else {
+      const a = checkFile(f);
+      if (typeof a === "string") return a;
+      out.push(a);
+    }
+  }
+  return out;
 }
 
 async function chatRoute(req: Request, body: any): Promise<Response> {
   const s = settings();
-  const messages = Array.isArray(body?.messages) ? body.messages.filter((m: any) => (m.role === "user" || m.role === "assistant" || m.role === "system") && typeof m.content === "string") : [];
-  if (!messages.length || messages.at(-1).role !== "user") return fail(400, "The chat needs a message to send.");
+  let chatId: string | null = typeof body?.chatId === "string" ? body.chatId : null;
+  const raw: any[] = Array.isArray(body?.messages) ? body.messages.filter((m: any) => (m?.role === "user" || m?.role === "assistant" || m?.role === "system") && typeof m.content === "string") : [];
+  const known = s.history && chatId ? chatId : null;
+  const msgs: ChatMsg[] = [];
+  for (const m of raw) {
+    const files = m.role === "user" ? resolveFiles(m.files, known) : [];
+    if (typeof files === "string") return fail(400, files);
+    msgs.push({ role: m.role, content: m.content, files });
+  }
+  const last = msgs.at(-1);
+  if (!last || last.role !== "user" || (!last.content.trim() && !last.files.length)) return fail(400, "The chat needs a message to send.");
+  const total = last.files.reduce((n, f) => n + f.size, 0);
+  if (total > FILE_LIMITS.total) return fail(400, `These files add up to ${(total / 1048576).toFixed(1)} MB; one message takes at most ${FILE_LIMITS.total / 1048576} MB.`);
   const system = typeof body.system === "string" ? body.system.trim().slice(0, MAX_INSTRUCTIONS) : "";
   const ts = now().toISOString();
-  let chatId: string | null = typeof body.chatId === "string" ? body.chatId : null;
   let userMessageId: number | null = null;
+  let savedFiles: any[] = [];
   if (s.history) try {
     if (!chatId || !db.query("SELECT 1 FROM chats WHERE id = ?").get(chatId)) {
       chatId = chatId ?? randomId();
-      const first = messages.find((m: any) => m.role === "user")?.content ?? "New chat";
+      const firstUser = msgs.find((m) => m.role === "user")!;
+      const first = firstUser.content.trim() || firstUser.files[0]?.name || "New chat";
       db.query("INSERT INTO chats(id, title, created, updated, system) VALUES (?, ?, ?, ?, ?)").run(chatId, first.replace(/\s+/g, " ").trim().slice(0, 60) || "New chat", ts, ts, system || null);
     } else if (typeof body.system === "string") db.query("UPDATE chats SET system = ? WHERE id = ?").run(system || null, chatId);
     const lastSaved = db.query("SELECT id, role, content FROM messages WHERE chat_id = ? AND deleted IS NULL ORDER BY id DESC LIMIT 1").get(chatId) as any;
     if (typeof body.retryOf === "number") db.query("UPDATE messages SET deleted = ? WHERE id = ? AND chat_id = ? AND role = 'assistant'").run(ts, body.retryOf, chatId);
-    else if (lastSaved?.role === "user" && lastSaved.content === messages.at(-1).content) userMessageId = lastSaved.id; // a retry after a failed send
-    else userMessageId = Number(db.query("INSERT INTO messages(chat_id, role, content, ts) VALUES (?, 'user', ?, ?)").run(chatId, messages.at(-1).content, ts).lastInsertRowid);
+    else if (lastSaved?.role === "user" && lastSaved.content === last.content) userMessageId = lastSaved.id; // a retry after a failed send
+    else userMessageId = Number(db.query("INSERT INTO messages(chat_id, role, content, ts) VALUES (?, 'user', ?, ?)").run(chatId, last.content, ts).lastInsertRowid);
+    if (userMessageId !== null) {
+      const already = db.query("SELECT COUNT(*) AS n FROM files WHERE message_id = ?").get(userMessageId) as { n: number };
+      if (!already.n) {
+        const put = db.query("INSERT INTO files(chat_id, message_id, name, type, kind, size, pages, data, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        for (const f of last.files) {
+          if (f.id !== undefined) continue;
+          f.id = Number(put.run(chatId, userMessageId, f.name, f.type, f.kind, f.size, f.pages ?? null, Buffer.from(f.data, "base64"), ts).lastInsertRowid);
+          savedFiles.push(fileView(f));
+        }
+      }
+    }
     db.query("UPDATE chats SET updated = ?, deleted = NULL WHERE id = ?").run(ts, chatId);
   } catch (e) {
     return fail(503, `Leanfare's history file is busy or locked by another program (${String((e as any)?.message ?? e)}). Close that program, or turn chat history off, and send again.`);
   }
+  const { messages, dropped } = prepareMessages(msgs);
   const asked = typeof body.model === "string" ? body.model : "auto";
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -152,7 +203,8 @@ async function chatRoute(req: Request, body: any): Promise<Response> {
       const send = (e: unknown) => { try { controller.enqueue(enc.encode(`data: ${JSON.stringify(e)}\n\n`)); } catch {} };
       const keepAlive = setInterval(() => { try { controller.enqueue(enc.encode(": still here\n\n")); } catch {} }, 15_000);
       try {
-        send({ type: "chat", chatId, userMessageId, history: s.history });
+        send({ type: "chat", chatId, userMessageId, history: s.history, files: savedFiles });
+        if (dropped.length) send({ type: "notice", message: `Left out of this message to stay within the providers' size limits: ${dropped.join(", ")} (attached earlier).` });
         let title = "Chat";
         try { if (chatId) title = (db.query("SELECT title FROM chats WHERE id = ?").get(chatId) as any)?.title ?? title; } catch {}
         const out = await runChat(messages, asked, req.signal, send, title, { system });
@@ -173,6 +225,18 @@ async function chatRoute(req: Request, body: any): Promise<Response> {
     },
   });
   return new Response(stream, { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store" } });
+}
+
+// For an estimate the page sends what its files are, not their contents.
+function describeFiles(messages: any[]): Msg[] {
+  return messages.filter((m) => m && typeof m.content === "string").map((m) => {
+    const files: any[] = Array.isArray(m.files) ? m.files : [];
+    if (!files.length) return { role: m.role, content: m.content };
+    const texts = files.filter((f) => f?.kind === "text").map((f) => " ".repeat(Math.min(Number(f.size) || 0, FILE_LIMITS.text)));
+    const parts: any[] = files.filter((f) => f?.kind === "image" || f?.kind === "pdf").map((f) => (f.kind === "image" ? { type: "image" } : { type: "file", pages: Math.max(1, Number(f.pages) || 1) }));
+    const text = [m.content, ...texts].filter(Boolean).join("\n\n");
+    return { role: m.role, content: parts.length ? [...parts, { type: "text", text }] : text };
+  });
 }
 
 // ---- the screens' API ----------------------------------------------------------------
@@ -259,7 +323,7 @@ async function api(req: Request, url: URL): Promise<Response> {
   }
   if (p === "/api/estimate" && m === "POST") {
     const b = await readBody(req);
-    const messages = Array.isArray(b.messages) ? b.messages : [];
+    const messages = Array.isArray(b.messages) ? describeFiles(b.messages) : [];
     if (!messages.length) return json({ estimate: null });
     try {
       const system = typeof b.system === "string" && b.system.trim() ? b.system.slice(0, MAX_INSTRUCTIONS) : undefined;
@@ -270,6 +334,12 @@ async function api(req: Request, url: URL): Promise<Response> {
     }
   }
   if (p === "/api/chats" && m === "GET") return json({ chats: chatList(), history: settings().history });
+  const fileMatch = /^\/api\/files\/(\d+)$/.exec(p);
+  if (fileMatch && m === "GET") {
+    const f = db.query("SELECT id, name, type, kind, size, pages, data FROM files WHERE id = ?").get(Number(fileMatch[1])) as any;
+    if (!f) return fail(404, "That file is no longer there.");
+    return json({ ...fileView(f), data: Buffer.from(f.data).toString("base64") });
+  }
   const chatMatch = /^\/api\/chats\/([A-Za-z0-9_-]+)(\/restore)?$/.exec(p);
   if (chatMatch) {
     const id = chatMatch[1];

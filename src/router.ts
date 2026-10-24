@@ -4,7 +4,7 @@
 // Best value pick: among the models you ticked, the cheapest whose rating
 // for that task is within the mode's margin of the best one.
 // Every pick carries its reason, so a wrong guess is visible at a glance.
-import { costOf, promptTokens, textOfContent } from "./cost";
+import { costOf, mediaOf, promptTokens, textOfContent } from "./cost";
 import { TASKS, allModels, getModel, isRetired, type Model } from "./data";
 import { MODES, type Mode } from "./settings";
 import { localDay } from "./util";
@@ -48,6 +48,8 @@ export function guessTask(messages: Msg[]): Guess {
   }
   if (CREATIVE.test(last)) return { task: "creative_writing", why: "it asks for a story, poem or song", alt: "overall" };
   if (last.length >= 2000) return { task: "longer_query", why: `a long message (${last.length.toLocaleString("en-US")} characters)`, alt: "overall" };
+  const doc = mediaOf(users.at(-1)?.content);
+  if (doc.pdfs) return { task: "longer_query", why: `a PDF is attached (${doc.pdfPages} page${doc.pdfPages === 1 ? "" : "s"})`, alt: "overall" };
   if (turns > 5) return { task: "multi_turn", why: `follow-up number ${turns - 1}`, alt: "overall" };
   for (const [task, re, label] of [["business", BUSINESS, "business words"], ["legal", LEGAL, "legal words"], ["medicine", MEDICINE, "health words"]] as const) {
     const w = distinct(last, re);

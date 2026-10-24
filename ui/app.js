@@ -64,6 +64,89 @@
   const dayLabel = (iso) => new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
   const isPhone = () => matchMedia("(max-width: 760px)").matches;
 
+  // ---- files attached to a message ------------------------------------------------------
+  // The same rules as the server (src/files.ts); checked here first so a wrong
+  // file is refused before it is read.
+  const FILE_MAX = { image: 5 * 1048576, pdf: 20 * 1048576, text: 1048576, count: 10 };
+  const TEXT_EXT = /\.(txt|md|markdown|csv|tsv|json|jsonl|xml|yaml|yml|toml|ini|cfg|conf|log|html?|css|scss|js|mjs|cjs|jsx|ts|tsx|py|rb|go|rs|java|kt|kts|swift|c|h|cc|cpp|hpp|cs|php|sh|bash|zsh|sql|r|scala|lua|pl|dart|vue|svelte|tex|rst|env)$/i;
+  function fileKind(type, name) {
+    const t = (type || "").toLowerCase();
+    if (/^image\/(png|jpeg|webp|gif|heic|heif)$/.test(t) || /\.(heic|heif)$/i.test(name)) return "image";
+    if (t === "application/pdf" || /\.pdf$/i.test(name)) return "pdf";
+    if (t.startsWith("text/") || /^application\/(json|ld\+json|xml|x-yaml|yaml|toml|javascript|typescript|x-sh|sql)/.test(t) || TEXT_EXT.test(name) || /^(Dockerfile|Makefile|README|LICENSE)$/i.test(name)) return "text";
+    return null;
+  }
+  const mbs = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB");
+  const KIND_WORD = { image: "an image", pdf: "a PDF", text: "a text file" };
+  const readAsBase64 = (blob) => new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result).split(",")[1] ?? ""); r.onerror = () => reject(r.error ?? new Error("could not read the file")); r.readAsDataURL(blob); });
+  // Big photos are made smaller before they leave: at most 2,048 pixels on the
+  // long side, as JPEG. Providers shrink them anyway and charge by size.
+  async function shrinkImage(file) {
+    const heic = /heic|heif/i.test(file.type) || /\.(heic|heif)$/i.test(file.name);
+    const keep = !heic && file.size <= 1.5 * 1048576 && /^image\/(png|jpeg|webp|gif)$/.test(file.type);
+    let bmp = null;
+    try { bmp = await createImageBitmap(file); } catch { if (keep) return { blob: file, type: file.type }; throw new Error(`${file.name}: this browser cannot open ${heic ? "HEIC photos; save it as JPEG first" : "this image"}.`); }
+    const long = Math.max(bmp.width, bmp.height);
+    if (keep && long <= 2048) { bmp.close?.(); return { blob: file, type: file.type }; }
+    const scale = Math.min(1, 2048 / long);
+    const c = document.createElement("canvas");
+    c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+    const g = c.getContext("2d");
+    g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); // JPEG has no transparency
+    g.drawImage(bmp, 0, 0, c.width, c.height);
+    bmp.close?.();
+    const blob = await new Promise((resolve) => c.toBlob(resolve, "image/jpeg", 0.88));
+    if (!blob) throw new Error(`${file.name}: could not make the image smaller.`);
+    return { blob, type: "image/jpeg" };
+  }
+  function pdfPagesOf(b64) {
+    try { return Math.max(1, (atob(b64).match(/\/Type\s*\/Page(?![a-zA-Z])/g) ?? []).length); } catch { return 1; }
+  }
+  async function readAttachment(file) {
+    const kind = fileKind(file.type, file.name);
+    if (!kind) throw new Error(`${file.name}: Leanfare takes images (PNG, JPEG, WebP, GIF, HEIC), PDFs and text files.`);
+    let blob = file, type = file.type || (kind === "text" ? "text/plain" : "");
+    if (kind === "image") ({ blob, type } = await shrinkImage(file));
+    if (blob.size > FILE_MAX[kind]) throw new Error(`${file.name} is ${mbs(blob.size)}; the most for ${KIND_WORD[kind]} is ${mbs(FILE_MAX[kind])}.`);
+    const data = await readAsBase64(blob);
+    const name = kind === "image" && type === "image/jpeg" && !/\.jpe?g$/i.test(file.name) ? file.name.replace(/\.[^.]+$/, "") + ".jpg" : file.name;
+    const a = { name, type: kind === "pdf" ? "application/pdf" : type, kind, size: blob.size, data };
+    if (kind === "pdf") a.pages = pdfPagesOf(data);
+    if (kind === "image") a.url = `data:${type};base64,${data}`;
+    return a;
+  }
+  // A file as the server is sent it: by id once it is kept, otherwise with its contents.
+  const fileForSend = (f) => (f.id ? { id: f.id, name: f.name } : { name: f.name, type: f.type, data: f.data });
+  const fileForEstimate = (f) => ({ kind: f.kind, pages: f.pages ?? null, size: f.size });
+  const fileLabel = (f) => `${f.name} · ${f.kind === "pdf" ? `${f.pages ?? "?"} page${f.pages === 1 ? "" : "s"} · ` : ""}${mbs(f.size)}`;
+  // A kept image is read back once for its picture (the page asks with its header; an <img> cannot).
+  const thumbCache = new Map();
+  async function thumbOf(f) {
+    if (f.url) return f.url;
+    if (!f.id) return null;
+    if (!thumbCache.has(f.id)) thumbCache.set(f.id, api(`/api/files/${f.id}`).then((r) => `data:${r.type};base64,${r.data}`).catch(() => null));
+    return thumbCache.get(f.id);
+  }
+  function fileChips(files, removable) {
+    return h("div", { class: "files" }, ...files.map((f, i) => {
+      const chip = h("span", { class: "file " + f.kind, title: fileLabel(f) });
+      if (f.kind === "image") {
+        const img = h("img", { alt: f.name });
+        thumbOf(f).then((u) => { if (u) img.src = u; });
+        img.addEventListener("click", () => { thumbOf(f).then((u) => u && showImage(u, f.name)); });
+        chip.append(img);
+      } else chip.append(h("span", { class: "ico", text: f.kind === "pdf" ? "PDF" : "TXT" }));
+      chip.append(h("span", { class: "fn", text: f.name }), h("span", { class: "fs", text: f.kind === "pdf" ? `${f.pages ?? "?"} p` : mbs(f.size) }));
+      if (removable) chip.append(h("button", { type: "button", class: "x", "aria-label": `Remove ${f.name}`, text: "✕", onclick: () => { S.pending.splice(i, 1); renderPending(); scheduleEstimate(); } }));
+      return chip;
+    }));
+  }
+  function showImage(src, name) {
+    const box = h("div", { class: "lightbox", role: "dialog", "aria-label": name, onclick: () => box.remove() }, h("img", { src, alt: name }));
+    document.addEventListener("keydown", function esc(e) { if (e.key === "Escape") { box.remove(); document.removeEventListener("keydown", esc); } });
+    document.body.append(box);
+  }
+
   async function api(path, opts = {}) {
     const res = await fetch(path, {
       method: opts.method ?? (opts.body !== undefined ? "POST" : "GET"),
@@ -218,6 +301,7 @@
     estimateSeq: 0,
     system: null, // the open chat's instructions (a new chat starts with the default from Settings)
     sysOpen: false,
+    pending: [], // files attached to the message being written
   };
   const ready = () => S.st && S.st.usableCount > 0;
   const modelsOf = (pid) => (S.st?.models?.[pid] ?? []);
@@ -328,6 +412,7 @@
           h("div", { class: "messages", id: "messages" }),
           buildComposer()),
       );
+      setupDrop(el.querySelector(".convo"));
     }
     if (S.system === null) S.system = S.chatId ? "" : (S.st?.settings.instructions ?? "");
     renderChatList();
@@ -457,7 +542,7 @@
       const r = await api(`/api/chats/${id}`);
       S.chatId = id;
       store.set("chat", id);
-      S.messages = r.messages.map((m) => ({ id: m.id, role: m.role, content: m.content, meta: m.meta }));
+      S.messages = r.messages.map((m) => ({ id: m.id, role: m.role, content: m.content, meta: m.meta, files: m.files?.length ? m.files : undefined }));
       S.system = r.chat?.system ?? "";
       S.sysOpen = false;
       chatEl().classList.remove("list-open");
@@ -510,7 +595,7 @@
   }
 
   function messageEl(m, index) {
-    if (m.role === "user") return h("div", { class: "msg user" }, h("div", { class: "bubble", text: m.content }));
+    if (m.role === "user") return h("div", { class: "msg user" }, h("div", { class: "ucol" }, m.files?.length ? fileChips(m.files, false) : null, m.content ? h("div", { class: "bubble", text: m.content }) : null));
     const el = h("div", { class: "msg ai", "data-i": index });
     const body = h("div", { class: "body" });
     if (m.content) body.innerHTML = markdown(m.content);
@@ -581,10 +666,17 @@
     const est = h("div", { class: "est" });
     const send = h("button", { class: "btn primary send", type: "submit", text: "Send" });
     const back = h("button", { class: "btn small back", type: "button", text: "Chats", onclick: () => chatEl().classList.add("list-open") });
+    const picker = h("input", { type: "file", multiple: true, hidden: true, accept: "image/*,application/pdf,text/*,.md,.csv,.json,.yaml,.yml,.py,.js,.ts,.tsx,.jsx,.go,.rs,.java,.swift,.sql,.sh,.heic", onchange: (e) => { addFiles([...e.target.files]); e.target.value = ""; } });
+    const attach = h("button", { class: "attach", type: "button", "aria-label": "Attach files", title: "Attach images, PDFs or text files (or drop them here, or paste an image)", text: "+", onclick: () => picker.click() });
+    const pending = h("div", { class: "pending" });
     const form = h("form", { class: "composer" },
-      h("div", { class: "box" }, ta, h("div", { class: "bar" }, back, pick, est, send)),
-      h("div", { class: "hint", text: "Enter sends · Shift+Enter adds a line · Esc stops an answer" }));
-    composer = { form, ta, pick, est, send };
+      h("div", { class: "box" }, pending, ta, h("div", { class: "bar" }, back, attach, picker, pick, est, send)),
+      h("div", { class: "hint", text: "Enter sends · Shift+Enter adds a line · Esc stops an answer · drop or paste files to attach" }));
+    composer = { form, ta, pick, est, send, pending };
+    ta.addEventListener("paste", (e) => {
+      const files = [...(e.clipboardData?.files ?? [])];
+      if (files.length) { e.preventDefault(); addFiles(files); }
+    });
     const grow = () => { ta.style.height = "auto"; ta.style.height = Math.min(220, ta.scrollHeight) + "px"; };
     ta.addEventListener("input", () => { grow(); saveDraft(); scheduleEstimate(); });
     ta.addEventListener("keydown", (e) => {
@@ -609,6 +701,33 @@
     form.addEventListener("submit", (e) => { e.preventDefault(); if (S.live) stopLive(); else sendMessage(); });
     setTimeout(restoreDraft, 0);
     return form;
+  }
+
+  async function addFiles(files) {
+    if (!files.length) return;
+    if (S.pending.length + files.length > FILE_MAX.count) { toast(`At most ${FILE_MAX.count} files go with one message.`, "error"); files = files.slice(0, Math.max(0, FILE_MAX.count - S.pending.length)); }
+    const t = files.length > 1 || files[0].size > 2 * 1048576 ? toast(`Reading ${files.length === 1 ? files[0].name : files.length + " files"}…`) : null;
+    let added = 0;
+    for (const f of files) {
+      try { S.pending.push(await readAttachment(f)); added++; }
+      catch (e) { toast(String(e?.message ?? e), "error"); }
+    }
+    t?.close();
+    renderPending();
+    if (added) { scheduleEstimate(); composer?.ta.focus(); }
+  }
+  function renderPending() {
+    if (!composer) return;
+    composer.pending.replaceChildren(S.pending.length ? fileChips(S.pending, true) : null);
+    renderComposerBar();
+  }
+  function setupDrop(area) {
+    let depth = 0;
+    const hasFiles = (e) => [...(e.dataTransfer?.types ?? [])].includes("Files");
+    area.addEventListener("dragenter", (e) => { if (!hasFiles(e)) return; e.preventDefault(); depth++; area.classList.add("drop"); });
+    area.addEventListener("dragover", (e) => { if (hasFiles(e)) e.preventDefault(); });
+    area.addEventListener("dragleave", () => { depth = Math.max(0, depth - 1); if (!depth) area.classList.remove("drop"); });
+    area.addEventListener("drop", (e) => { if (!hasFiles(e)) return; e.preventDefault(); depth = 0; area.classList.remove("drop"); addFiles([...e.dataTransfer.files]); });
   }
 
   const draftKey = () => "draft." + (S.chatId ?? "new");
@@ -642,7 +761,7 @@
     send.textContent = S.live ? "Stop" : "Send";
     send.classList.toggle("stop", !!S.live);
     if (!ready()) est.textContent = "To send, add a key in Settings or start Ollama, and tick at least one model.";
-    else if (!composer.ta.value.trim()) est.textContent = S.model === "auto" ? `Auto picks ${st.modes[mode].blurb}.` : "";
+    else if (!composer.ta.value.trim() && !S.pending.length) est.textContent = S.model === "auto" ? `Auto picks ${st.modes[mode].blurb}.` : "";
   }
 
   let estTimer = null;
@@ -653,20 +772,25 @@
   async function runEstimate() {
     if (!composer || !ready()) return;
     const draft = composer.ta.value.trim();
-    if (!draft) { renderComposerBar(); return; }
+    if (!draft && !S.pending.length) { renderComposerBar(); return; }
     const seq = ++S.estimateSeq;
     try {
-      const r = await api("/api/estimate", { body: { messages: [...contextMessages(), { role: "user", content: draft }], model: S.model, system: S.system ?? "" } });
+      const r = await api("/api/estimate", { body: { messages: [...contextMessages(fileForEstimate), { role: "user", content: draft, files: S.pending.map(fileForEstimate) }], model: S.model, system: S.system ?? "" } });
       if (seq !== S.estimateSeq) return;
       if (r.error) { composer.est.textContent = r.error; return; }
       const p = r.plan;
-      composer.est.textContent = `≈ ${money(r.estimate)} on ${p.model.label}${p.auto ? ` · ${S.st.tasks.find((t) => t[0] === p.task)?.[1] ?? p.task}` : ""} · estimate`;
+      const nf = S.pending.length;
+      composer.est.textContent = `≈ ${money(r.estimate)} on ${p.model.label}${p.auto ? ` · ${S.st.tasks.find((t) => t[0] === p.task)?.[1] ?? p.task}` : ""}${nf ? ` · ${nf} file${nf === 1 ? "" : "s"}` : ""} · estimate`;
       composer.est.title = p.reason;
     } catch {}
   }
 
-  function contextMessages() {
-    return S.messages.filter((m) => m.content && (m.role === "user" || (m.role === "assistant" && m.meta?.status !== "error"))).map((m) => ({ role: m.role, content: m.content }));
+  // The conversation so far, as it is sent: files by id once kept (or with their
+  // contents), or just what they are when it is only for an estimate.
+  function contextMessages(asFile = fileForSend) {
+    return S.messages
+      .filter((m) => (m.role === "user" && (m.content || m.files?.length)) || (m.role === "assistant" && m.content && m.meta?.status !== "error"))
+      .map((m) => (m.files?.length ? { role: m.role, content: m.content, files: m.files.map(asFile) } : { role: m.role, content: m.content }));
   }
 
   async function sendMessage(retryOf = null, retryIndex = null) {
@@ -674,11 +798,14 @@
     let text;
     if (retryIndex === null) {
       text = composer.ta.value.trim();
-      if (!text) return;
+      if (!text && !S.pending.length) return;
+      const files = S.pending;
+      S.pending = [];
+      renderPending();
       composer.ta.value = "";
       composer.ta.dispatchEvent(new Event("input"));
       store.del(draftKey());
-      S.messages.push({ role: "user", content: text });
+      S.messages.push(files.length ? { role: "user", content: text, files } : { role: "user", content: text });
     }
     const messages = contextMessages();
     const live = { role: "assistant", content: "", meta: { status: "running" }, live: true };
@@ -744,6 +871,11 @@
       if (e.history && e.chatId && S.chatId !== e.chatId) {
         store.del(draftKey());
         S.chatId = e.chatId; store.set("chat", e.chatId); loadChats();
+      }
+      if (e.files?.length) {
+        const mine = [...S.messages].reverse().find((m) => m.role === "user" && m.files?.length);
+        const unsaved = (mine?.files ?? []).filter((f) => !f.id);
+        e.files.forEach((saved, i) => { if (unsaved[i]) unsaved[i].id = saved.id; });
       }
     } else if (e.type === "waiting") { live.meta.waiting = e.message; paintLive(); }
     else if (e.type === "meta") { live.meta = { ...live.meta, ...e.plan, status: "running", waiting: null }; paintLive(); }

@@ -3,7 +3,7 @@
 // send, count the tokens, record the cost.
 import { baseOf, provider, runtime, type ProviderId } from "./config";
 import { getModel, isRetired, store, type Model } from "./data";
-import { ZERO, costOf, fromAnthropicUsage, fromOpenAIUsage, promptTokens, type Usage } from "./cost";
+import { ZERO, costOf, fromAnthropicUsage, fromOpenAIUsage, mediaIn, promptMax, promptTokens, type Usage } from "./cost";
 import { db } from "./db";
 import { getKey } from "./keys";
 import { MODES, settings, type Mode } from "./settings";
@@ -12,6 +12,7 @@ import { successor } from "./retire";
 import { addSpent, budgetState, release, tryReserve, wouldFit } from "./budget";
 import { AnthropicStreamTranslator, UserError, anthropicToOpenAI, headersFor, networkError, openaiBody, plainError, toAnthropic } from "./upstream";
 import { SSEParser, dollars, localDay, localMonth, median, now, providerMessage, randomId, redact, usd8 } from "./util";
+import { takesImages, takesPdfs } from "./files";
 
 // ---- which models can be used right now ---------------------------------------
 
@@ -171,16 +172,24 @@ export async function plan(input: PlanInput): Promise<Plan> {
   const notes: string[] = [];
   const isClaude = (m: Model) => m.provider === "anthropic";
   // The Anthropic address takes Claude only; on the OpenAI address, Claude does not take tools in 0.1.
-  const only = input.source === "anthropic" ? isClaude : input.hasTools ? (m: Model) => !isClaude(m) : undefined;
+  const byAddress = input.source === "anthropic" ? isClaude : input.hasTools ? (m: Model) => !isClaude(m) : undefined;
+  // Images and PDFs go only to models that take them.
+  const media = mediaIn(input.messages as any);
+  const takes = (m: Model) => (!media.images || takesImages(m)) && (!media.pdfs || takesPdfs(m));
+  const only = media.images || media.pdfs ? (m: Model) => (!byAddress || byAddress(m)) && takes(m) : byAddress;
+  const mediaWords = [media.images ? "images" : "", media.pdfs ? "PDFs" : ""].filter(Boolean).join(" and ");
   const amode = autoMode(input.asked, input.mode ?? s.mode);
   const mode = amode ?? input.mode ?? s.mode;
   const inTok = promptTokens(input.messages as any, input.system);
-  const inMax = Buffer.byteLength(JSON.stringify([input.messages, input.system ?? null, input.tools ?? null]));
+  const inMax = promptMax(input.messages, input.system, input.tools);
   const capped = s.budget !== null && input.maxOut === null;
   let model: Model, guess: Guess, reason: string, candidates: Model[] = [];
   let alternatives: Plan["alternatives"] = [];
   if (amode) {
     const usable = usableModels(only);
+    if (!usable.length && mediaWords && usableModels(byAddress).length) {
+      throw new UserError(400, `None of the models you ticked takes ${mediaWords} through Leanfare. In Settings, tick one that does: ${media.pdfs ? "a Claude or GPT model reads PDFs" : "most Claude, GPT and Gemini models see images"}.`, "unsupported_attachment");
+    }
     if (!usable.length) {
       throw new UserError(400, input.source === "anthropic"
         ? "No Claude model is ready. Add an Anthropic key in Leanfare's Settings and tick a Claude model."
@@ -205,6 +214,11 @@ export async function plan(input: PlanInput): Promise<Plan> {
     if (!m) throw new UserError(404, `Leanfare does not know the model "${input.asked}". The models it knows are listed at /v1/models; "auto" lets Leanfare choose.`, "model_not_found");
     if (input.source === "anthropic" && !isClaude(m)) throw new UserError(400, "In Leanfare 0.1 the Anthropic address (/v1/messages) works with Claude models only. Use /v1/chat/completions for other models.", "wrong_address");
     if (!providerReady(m.provider)) throw new UserError(400, notReadyMessage(m.provider), "provider_not_ready");
+    // On the chat screen, say so before sending; other apps get the provider's own answer.
+    if (input.source === "chat" && !takes(m)) {
+      const what = media.pdfs && !takesPdfs(m) ? (m.provider === "google" ? "cannot read PDFs through Leanfare yet" : "does not read PDFs") : "does not take images";
+      throw new UserError(400, `${m.label} ${what}. Pick Auto, or a model that does${media.pdfs ? " (a Claude or GPT model reads PDFs)" : ""}.`, "unsupported_attachment");
+    }
     model = m; guess = guessTask(input.messages); reason = "You chose this model."; candidates = [m];
   }
 

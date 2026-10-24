@@ -234,6 +234,18 @@ export function buildCatalog(raw: any, asOf = now()): Catalog {
 
 // OpenRouter's public model list -> catalogue entries, matched to Arena
 // ratings by maker and name.
+// What an OpenRouter model takes, from its own listing.
+function openRouterSkills(r: any): string[] {
+  const ins: unknown[] = Array.isArray(r?.architecture?.input_modalities) ? r.architecture.input_modalities : [];
+  const params: unknown[] = Array.isArray(r?.supported_parameters) ? r.supported_parameters : [];
+  const skills: string[] = [];
+  if (ins.includes("image")) skills.push("vision");
+  if (ins.includes("file")) skills.push("pdf");
+  if (params.includes("tools")) skills.push("tools");
+  if (params.includes("reasoning") || params.includes("include_reasoning")) skills.push("reasoning");
+  return skills;
+}
+
 export function buildOpenRouter(list: any, ratingsFrom: Catalog, asOf = now()): Model[] {
   const day = localDay(asOf);
   const byName = new Map<string, Record<string, number>>();
@@ -272,7 +284,7 @@ export function buildOpenRouter(list: any, ratingsFrom: Catalog, asOf = now()): 
       cacheRead: free ? 0 : perM(p.input_cache_read),
       cacheWrite: free ? 0 : perM(p.input_cache_write),
       context: typeof r.context_length === "number" ? r.context_length : null,
-      skills: [],
+      skills: openRouterSkills(r),
       added: typeof r.created === "number" ? new Date(r.created * 1000).toISOString().slice(0, 10) : null,
       retire: exp,
       ratings: byName.get(rkey) ?? {},
