@@ -8,7 +8,7 @@
 // that the logs do not show, and Anthropic gives other apps no remaining limit.
 //
 // ChatGPT's limits: Codex writes how much of the plan's windows (5 hours, a week) each message had used; that is shown
-// as of its last message. Claude Code writes none, and Anthropic gives other apps none, so Claude shows no limits.
+// as of its last message. Claude's come from Claude Code's status line instead (statusline.ts, meter.ts).
 //
 // Claude subscriptions are shown, never used: Anthropic's terms (19 Feb 2026) forbid
 // other apps from using a Free, Pro or Max login, so Leanfare only counts.
@@ -118,22 +118,34 @@ export function limitsOf(rl: any, at: number): Limits | null {
   return windows.length ? { at, plan: typeof rl.plan_type === "string" && rl.plan_type ? rl.plan_type : null, windows } : null;
 }
 
-export async function readCodex(path: string, onLimits?: (l: Limits) => void): Promise<Entry[]> {
+// What else a log file says besides the answers: the project folder it ran in (only the folder's own
+// name is kept, never the path above it) and, for Codex, how much of the plan each message had used.
+export interface FileMeta { project: string | null; snaps: Limits[] }
+export const folderName = (cwd: unknown): string | null => (typeof cwd === "string" && cwd.trim() ? cwd.trim().replace(/[\\/]+$/, "").split(/[\\/]/).pop() || null : null);
+
+export async function readCodex(path: string, onLimits?: (l: Limits) => void, meta?: FileMeta): Promise<Entry[]> {
   const out: Entry[] = [];
   let model = "unknown";
   let prev: Totals | null = null;
   let limits: Limits | null = null;
   for await (const line of linesOf(path)) {
     const ctx = line.includes('"turn_context"');
-    if (!ctx && !line.includes('"token_count"')) continue;
+    const sess = !ctx && line.includes('"session_meta"');
+    if (!ctx && !sess && !line.includes('"token_count"')) continue;
     let o: any;
     try { o = JSON.parse(line); } catch { continue; }
     const p = o?.payload;
-    if (ctx && o?.type === "turn_context") { if (typeof p?.model === "string" && p.model) model = p.model; continue; }
+    if (sess && o?.type === "session_meta") { if (meta && !meta.project) meta.project = folderName(p?.cwd); continue; }
+    if (ctx && o?.type === "turn_context") {
+      if (typeof p?.model === "string" && p.model) model = p.model;
+      if (meta && !meta.project) meta.project = folderName(p?.cwd);
+      continue;
+    }
     if (o?.type !== "event_msg" || p?.type !== "token_count" || !p.info) continue;
     const ts = Date.parse(o.timestamp);
     if (!Number.isFinite(ts)) continue;
-    limits = limitsOf(p.rate_limits, ts) ?? limits;
+    const snap = limitsOf(p.rate_limits, ts);
+    if (snap) { limits = snap; meta?.snaps.push(snap); }
     const total = totalsOf(p.info.total_token_usage);
     const last = totalsOf(p.info.last_token_usage);
     let d: Totals | null = null;
@@ -148,24 +160,56 @@ export async function readCodex(path: string, onLimits?: (l: Limits) => void): P
   return out;
 }
 
-export async function readClaude(path: string): Promise<Entry[]> {
+export async function readClaude(path: string, meta?: FileMeta): Promise<Entry[]> {
   const out: Entry[] = [];
-  for await (const line of linesOf(path)) { const e = claudeEntry(line); if (e) out.push(e); }
+  for await (const line of linesOf(path)) {
+    // The folder the session ran in: from the first line that names it (only the folder's own name is kept).
+    if (meta && !meta.project && line.includes('"cwd"')) { try { meta.project = folderName(JSON.parse(line)?.cwd); } catch {} }
+    const e = claudeEntry(line);
+    if (e) out.push(e);
+  }
   return out;
 }
 
 // What is already read: a file is read again only when its size or time changed.
-const fileCache = new Map<string, { mtime: number; size: number; entries: Entry[]; limits: Limits | null }>();
+interface Read { mtime: number; size: number; entries: Entry[]; limits: Limits | null; meta: FileMeta }
+const fileCache = new Map<string, Read>();
 export const forgetLogs = () => { fileCache.clear(); viewCache.clear(); };
 
-async function entriesOf(f: LogFile, read: (p: string, onLimits: (l: Limits) => void) => Promise<Entry[]>): Promise<{ entries: Entry[]; limits: Limits | null }> {
+async function entriesOf(f: LogFile, provider: PlanProvider): Promise<Read> {
   const hit = fileCache.get(f.path);
   if (hit && hit.mtime === f.mtime && hit.size === f.size) return hit;
   let entries: Entry[] = [], limits: Limits | null = null;
-  try { entries = await read(f.path, (l) => { limits = l; }); } catch {} // a file that vanished or cannot be read counts as empty
-  const got = { mtime: f.mtime, size: f.size, entries, limits };
+  const meta: FileMeta = { project: null, snaps: [] };
+  try { entries = provider === "claude" ? await readClaude(f.path, meta) : await readCodex(f.path, (l) => { limits = l; }, meta); } catch {} // a file that vanished or cannot be read counts as empty
+  const got: Read = { mtime: f.mtime, size: f.size, entries, limits, meta };
   fileCache.set(f.path, got);
   return got;
+}
+
+// For the plan meter (meter.ts): every answer since a time, with its file (one session) and that
+// session's project folder name, and Codex's snapshots of the plan's windows. One answer counts once.
+export interface MeterEntry { ts: number; model: string; u: Usage; file: string; project: string | null }
+export async function recentEntries(provider: PlanProvider, since: number): Promise<{ entries: MeterEntry[]; snaps: Limits[]; found: boolean }> {
+  const dirs = provider === "claude" ? claudeDirs() : codexDirs();
+  const { files } = listFiles(dirs, provider === "claude" ? (n) => n.endsWith(".jsonl") : (n) => /(^|\/)rollout-[^/]*\.jsonl$/.test(n), since - 36 * 3600_000);
+  const merged = new Map<string, MeterEntry>();
+  const loose: MeterEntry[] = [];
+  const snaps: Limits[] = [];
+  for (const f of files) {
+    const got = await entriesOf(f, provider);
+    for (const sn of got.meta.snaps) if (sn.at >= since) snaps.push(sn);
+    for (const e of got.entries) {
+      if (e[TS] < since) continue;
+      const me: MeterEntry = { ts: e[TS], model: e[MODEL], u: { uncached: e[3], cacheRead: e[4], cacheWrite: e[5], cacheWrite1h: e[6], output: e[7] }, file: f.path, project: got.meta.project };
+      if (!e[0]) { loose.push(me); continue; }
+      const old = merged.get(e[0]);
+      if (!old) { merged.set(e[0], me); continue; }
+      old.u = { uncached: Math.max(old.u.uncached, me.u.uncached), cacheRead: Math.max(old.u.cacheRead, me.u.cacheRead), cacheWrite: Math.max(old.u.cacheWrite, me.u.cacheWrite), cacheWrite1h: Math.max(old.u.cacheWrite1h ?? 0, me.u.cacheWrite1h ?? 0), output: Math.max(old.u.output, me.u.output) };
+    }
+  }
+  snaps.sort((a, b) => a.at - b.at);
+  return { entries: [...merged.values(), ...loose].sort((a, b) => a.ts - b.ts), snaps, found: dirs.length > 0 };
 }
 
 // ---- the month's numbers ----------------------------------------------------------------------------
@@ -242,7 +286,7 @@ async function readMonth(provider: PlanProvider, month: string): Promise<PlanVie
   const loose: Entry[] = [];
   let newest: Limits | null = null;
   for (const f of files) {
-    const got = await entriesOf(f, provider === "claude" ? readClaude : readCodex);
+    const got = await entriesOf(f, provider);
     if (got.limits && (!newest || got.limits.at > newest.at)) newest = got.limits;
     for (const e of got.entries) {
       if (localMonth(new Date(e[TS])) !== month) continue;
@@ -290,7 +334,7 @@ export async function plansView(month = localMonth(), force = false) {
   return { month, providers: views, note: NOTE };
 }
 
-export const NOTE = "An estimate from the usage numbers in the log files on this computer, at the providers' list prices for the same tokens. Your plan has a flat price and its own limits. Codex writes how much of its limits each message had used, so ChatGPT shows that, as of its last message; Claude Code writes none and Anthropic gives other apps none, so Leanfare shows no Claude limits. Work done on other computers or in the apps' own chat windows is not in these logs.";
+export const NOTE = "An estimate from the usage numbers in the log files on this computer, at the providers' list prices for the same tokens. Your plan has a flat price and its own limits. Codex writes how much of its limits each message had used, so ChatGPT shows that, as of its last message; Claude's limits show once Leanfare is in Claude Code's status line (the button above), which hands it the two percentages. Work done on other computers or in the apps' own chat windows is not in these logs.";
 
 // What the Mac menu shows, from what was last worked out. Asking never waits for the log files:
 // when the numbers are older than ten minutes (or missing) a new reading starts in the background.
