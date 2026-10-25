@@ -234,6 +234,106 @@ describe("the chat's edge cases", () => {
   }, 20000);
 });
 
+describe("Connect OpenRouter", () => {
+  const fakeOr = (globalThis as any).__fake;
+  const welcomeCard = (doc: any) => [...doc.querySelectorAll(".start")].find((c: any) => c.textContent.includes("OpenRouter"));
+  const connectBtn = (doc: any) => [...doc.querySelectorAll("button")].find((b: any) => b.textContent === "Connect OpenRouter" || (b.textContent === "Stop" && welcomeCard(doc)?.contains(b)));
+  const toasts = (doc: any) => [...doc.querySelectorAll("#toasts .toast")].map((t: any) => t.textContent).join(" | ");
+  const bad = (doc: any) => /\bnull\b|\bundefined\b|NaN|\[object Object\]/.test(doc.body.textContent);
+  async function openWithOpener() {
+    const doc = await openApp();
+    const opened: string[] = [];
+    win.open = (u: string) => { opened.push(u); return null; };
+    return { doc, opened };
+  }
+  // The browser's side: open OpenRouter's link, press Authorize, land on Leanfare's callback page.
+  async function authorizeInBrowser(link: string) {
+    const r = await fetch(link, { redirect: "manual" });
+    return fetch(r.headers.get("location")!);
+  }
+
+  test("the welcome card offers Connect OpenRouter; pressing it opens OpenRouter, and the page connects by itself", async () => {
+    await reset();
+    const { doc, opened } = await openWithOpener();
+    expect(welcomeCard(doc).textContent).toContain("no key to copy");
+    expect(welcomeCard(doc).textContent).toContain("or paste a key");
+    connectBtn(doc).click();
+    await Bun.sleep(400);
+    expect(opened).toHaveLength(1);
+    expect(new URL(opened[0]).searchParams.get("code_challenge_method")).toBe("S256");
+    expect(connectBtn(doc).textContent).toBe("Stop"); // the start button is its Stop
+    expect(toasts(doc)).toContain("press Authorize");
+    expect((await authorizeInBrowser(opened[0])).status).toBe(200);
+    for (let i = 0; i < 40 && !welcomeCard(doc)?.textContent.includes("Connected"); i++) await Bun.sleep(200);
+    expect(welcomeCard(doc).textContent).toContain("Connected");
+    expect(toasts(doc)).toContain("Connected to OpenRouter");
+    expect(bad(doc)).toBe(false);
+  }, 20000);
+
+  test("Stop forgets the sign in, and the old link no longer works", async () => {
+    await reset();
+    const { doc, opened } = await openWithOpener();
+    connectBtn(doc).click();
+    await Bun.sleep(700); // past the half second a double click is ignored
+    connectBtn(doc).click(); // Stop
+    await Bun.sleep(400);
+    expect(doc.querySelector(".start button.primary")).toBeTruthy();
+    expect(connectBtn(doc).textContent).toBe("Connect OpenRouter");
+    const res = await authorizeInBrowser(opened[0]);
+    expect(res.status).toBe(400);
+    expect(fakeOr.seen.filter((x: any) => x.path.endsWith("/auth/keys"))).toHaveLength(0);
+    expect((await ui(url, "/api/state")).json.providers.find((p: any) => p.id === "openrouter").key.saved).toBe(false);
+  }, 20000);
+
+  test("a double click does not stop what the first click started", async () => {
+    await reset();
+    const { doc, opened } = await openWithOpener();
+    const b = connectBtn(doc);
+    b.click();
+    b.dispatchEvent(new win.MouseEvent("click", { detail: 2, bubbles: true, cancelable: true }));
+    await Bun.sleep(300);
+    expect(connectBtn(doc).textContent).toBe("Stop");
+    b.click(); // a second click inside the first half second is ignored too
+    await Bun.sleep(300);
+    expect(connectBtn(doc).textContent).toBe("Stop");
+    expect(opened).toHaveLength(1);
+    connectBtn(doc).click(); await Bun.sleep(700); connectBtn(doc).click(); await Bun.sleep(300); // clean up: Stop
+  }, 20000);
+
+  test("a refused sign in says why on the page that is waiting", async () => {
+    await reset();
+    fakeOr.oauth.failExchange = 403;
+    const { doc, opened } = await openWithOpener();
+    connectBtn(doc).click();
+    await Bun.sleep(400);
+    expect((await authorizeInBrowser(opened[0])).status).toBe(400);
+    for (let i = 0; i < 40 && !toasts(doc).includes("did not accept the code"); i++) await Bun.sleep(200);
+    expect(toasts(doc)).toContain("did not accept the code");
+    expect(connectBtn(doc).textContent).toBe("Connect OpenRouter"); // can try again
+  }, 20000);
+
+  test("Settings: Connect again, the credit left, and the one year expiry note", async () => {
+    await reset({ ticked: ALL_TICKED });
+    const { doc, opened } = await openWithOpener();
+    doc.querySelector('.tabs button[data-tab="settings"]').click();
+    await Bun.sleep(200);
+    const head = () => [...doc.querySelectorAll(".prov-head")].find((h: any) => h.textContent.includes("OpenRouter"));
+    head().click();
+    await Bun.sleep(200);
+    const body = () => doc.querySelector(".prov.open");
+    expect([...body().querySelectorAll("button")].map((b: any) => b.textContent)).toContain("Connect OpenRouter");
+    expect(body().textContent).not.toContain("expire unused credits"); // no key yet
+    [...body().querySelectorAll("button")].find((b: any) => b.textContent === "Connect OpenRouter").click();
+    await Bun.sleep(400);
+    await authorizeInBrowser(opened[0]);
+    for (let i = 0; i < 40 && ![...doc.querySelectorAll(".prov.open button")].some((b: any) => b.textContent === "Connect again"); i++) await Bun.sleep(200);
+    expect([...body().querySelectorAll("button")].map((b: any) => b.textContent)).toContain("Connect again");
+    expect(body().textContent).toContain("Credit left on OpenRouter: $7.50 of $10.00 bought.");
+    expect(body().textContent).toContain("may expire unused credits a year after purchase");
+    expect(bad(doc)).toBe(false);
+  }, 25000);
+});
+
 describe("the markdown renderer", () => {
   const src = appJs.slice(appJs.indexOf("const esc = (s) =>"), appJs.indexOf('document.addEventListener("click"'));
   const { markdown } = new Function(src + "\nreturn { markdown };")();
