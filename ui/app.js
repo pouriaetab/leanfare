@@ -317,6 +317,7 @@
     history: true,
     live: null, // the answer being written
     savings: null,
+    plans: null, // Your plans: the month's Claude Code and Codex use, from /api/plans
     month: null,
     open: store.get("open", {}),
     showAll: {},
@@ -1211,8 +1212,55 @@
   async function loadSavings() {
     try {
       S.savings = await api("/api/savings" + (S.month ? `?month=${S.month}` : ""));
+      if (S.plans && S.plans.month !== S.savings.month) S.plans = null; // another month: never show this one's numbers under it
       renderSavings();
+      if (!S.plans) loadPlans(false).catch(() => {}); // the log files can take a moment: the rest of the page does not wait
     } catch (e) { failed(e); }
+  }
+
+  // ---- your plans ---------------------------------------------------------------------------------
+  const bigTok = (n) => (n >= 1e9 ? (n / 1e9).toFixed(1) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : tok(n));
+  async function loadPlans(force, signal) {
+    const month = S.savings?.month ?? S.month;
+    const r = await api(`/api/plans?${month ? `month=${month}&` : ""}${force ? "refresh=1" : ""}`, { signal });
+    if (month && S.savings && S.savings.month !== month) return; // the month was changed meanwhile
+    S.plans = r;
+    const old = $("#plansCard");
+    if (old) old.replaceWith(plansCardEl());
+  }
+
+  function planBlock(v) {
+    const head = v.plan
+      ? h("div", { class: "pl-head" }, h("b", { text: v.plan.name }), h("span", { class: "grow" }), h("small", { text: `${money(v.plan.price)} a month` }))
+      : h("div", { class: "pl-head" }, h("b", { text: v.logs }), h("span", { class: "grow" }), h("button", { class: "btn small", type: "button", text: "Enter your plan", onclick: () => setTab("settings") }));
+    if (!v.found) return h("div", { class: "pl" }, head, h("p", { class: "pl-note", text: `No ${v.logs} log files found on this computer.` }));
+    if (!v.tokens) return h("div", { class: "pl" }, head, h("p", { class: "pl-note", text: `No ${v.logs} use in this month's log files.` }));
+    const maxV = Math.max(...v.models.map((m) => m.value ?? 0), 0);
+    return h("div", { class: "pl" }, head,
+      h("div", { class: "pl-val" }, h("span", { class: "big", text: money(v.value) }), h("span", { class: "sub", text: "at API prices" }),
+        v.ratio !== null ? h("span", { class: "chip " + (v.ratio >= 1 ? "good" : ""), text: `${v.ratio.toFixed(v.ratio >= 10 ? 0 : 1)}× what you pay` }) : null),
+      h("div", { class: "sub", text: `${bigTok(v.tokens)} tokens in ${v.logs}: ${bigTok(v.input)} in, ${bigTok(v.cached)} from the cache, ${bigTok(v.output)} out` }),
+      v.limits ? h("div", { class: "sub", text: `${v.logs} limits at its last message (${ago(v.limits.at)}): ${v.limits.windows.map((w) => `${Number(w.used.toFixed(1))}% of the ${w.label} used${w.resets ? `, resets ${new Date(w.resets).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}` : ""}`).join("; ")}` }) : null,
+      h("div", { class: "bars" }, ...v.models.slice(0, 5).map((m) => h("div", { class: "barrow", title: m.id ? `${m.model}\npriced as ${m.id}` : `${m.model}\nno listed price` },
+        h("span", { class: "n", text: m.label }), h("span", { class: "v", text: `${bigTok(m.tokens)} tokens · ${m.value === null ? "no listed price" : money(m.value)}` }),
+        h("span", { class: "track" }, h("i", { style: { width: (maxV > 0 && m.value ? (m.value / maxV) * 100 : 0) + "%" } }))))),
+      v.models.length > 5 ? h("div", { class: "sub", text: `and ${v.models.length - 5} more model${v.models.length - 5 === 1 ? "" : "s"}` }) : null,
+      v.unpricedTokens ? h("p", { class: "pl-note", text: `${bigTok(v.unpricedTokens)} tokens are on models with no listed price and count as $0 here.` }) : null);
+  }
+
+  function plansCardEl() {
+    const P = S.plans;
+    const card = h("div", { class: "card plans", id: "plansCard" });
+    card.append(h("h3", {}, "Your plans", h("small", { text: "an estimate" }), h("span", { class: "grow" }),
+      P ? runButton("Look again", async (signal) => { await loadPlans(true, signal); toast("Log files read again.", "done"); }, "btn small") : null));
+    if (!P) { card.append(h("div", { class: "empty", text: "Reading the Claude Code and Codex log files on this computer…" })); return card; }
+    const shown = P.providers.filter((v) => v.plan || v.found);
+    if (!shown.length) {
+      card.append(h("p", { class: "pl-note", text: "Enter your Claude or ChatGPT plan to see what your Claude Code and Codex use would cost at API prices, next to what you pay." }),
+        h("div", { class: "row" }, h("button", { class: "btn small", type: "button", text: "Enter a plan", onclick: () => setTab("settings") })));
+    } else card.append(h("div", { class: "pl-grid" }, ...shown.map(planBlock)));
+    card.append(h("p", { class: "fine", text: P.note }));
+    return card;
   }
 
   function stat(key, label, value, sub, cls = "") {
@@ -1277,8 +1325,9 @@
     if (v.estimated) notes.push(`Token counts were estimated for ${num(v.estimated)} answer${v.estimated === 1 ? "" : "s"} (the provider did not report them).`);
     const src = v.bySource.map((s) => `${s.source === "chat" ? "Chat" : s.source === "openai" ? "Apps (OpenAI address)" : "Apps (Anthropic address)"}: ${num(s.answers)}`).join(" · ");
     el.replaceChildren(
-      h("div", { class: "sv-head" }, h("h2", { text: title }), h("span", { class: "grow" }), pickMonth, runButton("Refresh", async () => { await loadSavings(); toast("Up to date.", "done"); })),
+      h("div", { class: "sv-head" }, h("h2", { text: title }), h("span", { class: "grow" }), pickMonth, runButton("Refresh", async (signal) => { await loadSavings(); await loadPlans(true, signal); toast("Up to date.", "done"); })),
       cards,
+      plansCardEl(),
       h("div", { class: "sv-grid" },
         h("div", { class: "card" }, h("h3", {}, "By model", h("span", { class: "grow" }), h("small", { text: src })), h("div", { class: "scroll" }, byModel)),
         h("div", { class: "card" }, h("h3", { text: "By task" }), h("div", { class: "scroll" }, byTask)),
@@ -1514,6 +1563,7 @@
     try {
       const before = S.st?.settings.instructions ?? "";
       S.st = await api("/api/settings", { body: patch });
+      if ("plans" in patch) S.plans = null; // the Savings card is read again with the new plan
       followDefault(before);
       renderShell(); renderSettings(); renderComposerBar();
       if (done) toast(done, "done");
@@ -1625,6 +1675,21 @@
     return h("button", { class: "btn small", type: "button", text: "Copy", onclick: () => navigator.clipboard?.writeText(text).then(() => toast("Copied.", "done"), () => failed("Could not copy.")) });
   }
 
+  // Your plans: the name and the monthly price of what you pay for Claude and ChatGPT, to set against the use in their log files.
+  function plansSetting(s) {
+    const rows = [["claude", "Claude", "Claude Max"], ["chatgpt", "ChatGPT", "ChatGPT Plus"]].map(([k, label, example]) => {
+      const cur = s.plans?.[k];
+      const name = h("input", { type: "text", placeholder: example, value: cur?.name ?? "", maxlength: "60", autocomplete: "off", "aria-label": `${label} plan name`, "data-keep": `plan-${k}-name` });
+      const price = moneyInput(cur?.price ?? null, `${label} plan price a month`);
+      return h("div", { class: "row plan-row" }, h("span", { class: "plan-l", text: label }), name, price,
+        h("button", { class: "btn", type: "button", text: "Save", onclick: () => patchSettings({ plans: { [k]: { name: name.value, price: price.querySelector("input").value } } }, `${label} plan saved.`) }),
+        cur ? h("button", { class: "btn", type: "button", text: "Remove", onclick: () => patchSettings({ plans: { [k]: null } }, `${label} plan removed.`) }) : null);
+    });
+    return h("div", { class: "setting" }, h("h3", { text: "Your Claude and ChatGPT plans" }), ...rows,
+      h("p", { text: "The Savings page then shows what your Claude Code and Codex use this month would cost at API prices, next to the price you pay. Leanfare reads only the token counts in those programs' log files on this computer, never the words." }),
+      h("p", { text: "Leanfare only counts here. Anthropic does not let other apps use a Claude subscription login, so Auto never uses one." }));
+  }
+
   function renderSettings() {
     const el = $("#tab-settings");
     const st = S.st;
@@ -1672,6 +1737,7 @@
       h("div", { class: "setting" }, h("h3", { text: "Compare with a subscription" }),
         h("div", { class: "row" }, subBox, h("button", { class: "btn", text: "Save", onclick: () => patchSettings({ subscription: subBox.querySelector("input").value || null }, "Saved.") })),
         h("p", { text: "For example $20 for a monthly chat plan. The Savings page shows how far under or over it you are." })),
+      plansSetting(s),
       h("div", { class: "setting" }, h("h3", { text: "Instructions for new chats" }),
         h("textarea", { rows: 3, placeholder: "For example: Answer briefly. I live in Toronto and write Python.", "aria-label": "Instructions for new chats", "data-keep": "instructions", text: s.instructions }),
         h("div", { class: "row" }, h("button", { class: "btn", text: "Save", onclick: (e) => patchSettings({ instructions: e.target.closest(".setting").querySelector("textarea").value }, "Saved. New chats start with these instructions.") })),

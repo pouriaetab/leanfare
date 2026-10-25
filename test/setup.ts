@@ -7,6 +7,9 @@ import { startFake } from "./fake";
 
 process.env.TZ = "UTC";
 process.env.LEANFARE_DATA_DIR = mkdtempSync(join(tmpdir(), "leanfare-test-"));
+// Your plans reads Claude Code's and Codex's log files: tests look only in their own folders, never your real ones.
+process.env.CLAUDE_CONFIG_DIR = join(process.env.LEANFARE_DATA_DIR, "claude-logs");
+process.env.CODEX_HOME = join(process.env.LEANFARE_DATA_DIR, "codex-logs");
 process.env.LEANFARE_KEYSTORE = "file";
 process.env.LEANFARE_NO_OPEN = "1";
 process.env.LEANFARE_NOW = "2026-10-21T12:00:00Z";

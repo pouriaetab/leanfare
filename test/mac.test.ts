@@ -24,8 +24,8 @@ describe("the Mac app's needs", () => {
     const s = await r.json();
     const block = /struct Summary: Decodable \{([\s\S]*?)\n\}/.exec(swift)![1];
     const fields = [...block.matchAll(/^\s{4}let (\w+): (\w+)(\?)?$/gm)].map((m) => ({ name: m[1], type: m[2], optional: !!m[3] }));
-    expect(fields.map((f) => f.name)).toEqual(["todayText", "monthText", "answers", "paused", "locked", "running", "budget"]);
-    const kinds: Record<string, "string" | "number" | "boolean" | "object"> = { String: "string", Int: "number", Double: "number", Bool: "boolean", Budget: "object" };
+    expect(fields.map((f) => f.name)).toEqual(["todayText", "monthText", "answers", "paused", "locked", "running", "budget", "plans"]);
+    const kinds: Record<string, "string" | "number" | "boolean" | "object"> = { String: "string", Int: "number", Double: "number", Bool: "boolean", Budget: "object", Plans: "object" };
     for (const f of fields) {
       if (f.optional && s[f.name] === null) continue;
       expect(typeof s[f.name]).toBe(kinds[f.type]);

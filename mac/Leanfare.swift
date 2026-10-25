@@ -85,6 +85,17 @@ struct Summary: Decodable {
         let warn: Bool
         let reached: Bool
     }
+    // Your plans: what the month's Claude Code and Codex use would cost at API prices (read from their log files).
+    struct PlanLine: Decodable {
+        let plan: String
+        let price: Double
+        let value: Double
+        let ratio: Double?
+    }
+    struct Plans: Decodable {
+        let claude: PlanLine?
+        let chatgpt: PlanLine?
+    }
     let todayText: String
     let monthText: String
     let answers: Int
@@ -92,6 +103,7 @@ struct Summary: Decodable {
     let locked: Bool
     let running: Int
     let budget: Budget?
+    let plans: Plans?
 }
 
 final class Server {
@@ -456,6 +468,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 menu.addItem(info("Budget: \(left) left of \(String(format: "$%.2f", b.amount)) (\(Int(b.pct ?? 0))% used)"))
             }
             menu.addItem(info("\(s.answers) answers this month\(s.running > 0 ? " · \(s.running) running" : "")"))
+            // One line per plan you entered: its use at API prices next to its price. An estimate, as the Savings page says.
+            for line in [s.plans?.claude, s.plans?.chatgpt].compactMap({ $0 }) {
+                let times = line.ratio.map { String(format: " (%.1f× the $%.0f)", $0, line.price) } ?? ""
+                menu.addItem(info("\(line.plan): about \(String(format: "$%.0f", line.value)) at API prices\(times)"))
+            }
             menu.addItem(.separator())
         }
         menu.addItem(item("Open Leanfare", #selector(openWindowAction), "o"))

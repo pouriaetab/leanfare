@@ -13,6 +13,7 @@ import { MAX_INSTRUCTIONS, MODES, saveSettings, settings, validatePatch } from "
 import { budgetState } from "./budget";
 import * as connect from "./connect";
 import * as local from "./local";
+import { plansBrief, plansView } from "./plans";
 import { retirementNotices } from "./retire";
 import { savings } from "./savings";
 import { checkKey, effortLevels, UserError } from "./upstream";
@@ -134,6 +135,7 @@ export function summary() {
     todayText: barMoney(v.today), monthText: barMoney(v.spent),
     budget: b.budget === null ? null : { amount: b.budget, left: b.left, pct: b.pct, warn: b.warn, reached: b.reached },
     paused: pauseState().paused, running: runningList().length, locked: locked(),
+    plans: plansBrief(),
   };
 }
 
@@ -485,6 +487,11 @@ async function api(req: Request, url: URL): Promise<Response> {
   if (p === "/api/savings" && m === "GET") {
     const month = url.searchParams.get("month");
     return json(savings(month && /^\d{4}-\d{2}$/.test(month) ? month : undefined));
+  }
+  // Your plans (see plans.ts): the month's tokens in the Claude Code and Codex logs on this computer, at API prices.
+  if (p === "/api/plans" && m === "GET") {
+    const month = url.searchParams.get("month");
+    return json(await plansView(month && /^\d{4}-\d{2}$/.test(month) ? month : undefined, url.searchParams.get("refresh") === "1"));
   }
   if (p === "/api/recent" && m === "GET") {
     return json({ rows: db.query("SELECT ts, source, model, task, auto, mode, in_tokens, cached, out_tokens, cost, usual, usual_cost, price_status, usage_status, status, error, ms, switched_from FROM ledger ORDER BY id DESC LIMIT 50").all() });

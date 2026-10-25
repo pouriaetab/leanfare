@@ -9,12 +9,19 @@ export type AtLimit = "cheapest" | "stop";
 
 export interface ProviderSettings { on: boolean; free?: boolean }
 
+// A plan you pay for outside Leanfare (Claude Max, ChatGPT Plus), only to compare its price with what your sessions would cost at API prices.
+export type PlanProvider = "claude" | "chatgpt";
+export interface Plan { name: string; price: number } // price: US dollars a month
+export type Plans = Partial<Record<PlanProvider, Plan>>;
+export const PLAN_KEYS: PlanProvider[] = ["claude", "chatgpt"];
+
 export interface Settings {
   mode: Mode;
   usual: string | null; // the model you would use without Leanfare; null: the best rated ticked model
   budget: number | null; // US dollars a month
   atLimit: AtLimit;
   subscription: number | null; // US dollars a month, to compare against
+  plans: Plans; // your Claude and ChatGPT plans, to compare with the usage in their log files (see plans.ts)
   history: boolean; // keep chats on this computer
   ticked: string[]; // model ids shown in the chat and used by Auto
   providers: Partial<Record<ProviderId, ProviderSettings>>;
@@ -31,6 +38,7 @@ export const DEFAULTS: Settings = {
   budget: null,
   atLimit: "cheapest",
   subscription: null,
+  plans: {},
   history: true,
   ticked: [],
   providers: {},
@@ -77,6 +85,21 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
       if (p[k] === null || p[k] === "") out[k] = null;
       else { const v = Number(p[k]); if (!Number.isFinite(v) || v < 0 || v > 1_000_000) return { error: `${k} must be a dollar amount from 0 to 1,000,000` }; out[k] = Math.round(v * 100) / 100; }
     }
+  }
+  if ("plans" in p) {
+    if (p.plans === null || typeof p.plans !== "object" || Array.isArray(p.plans)) return { error: "plans must be an object like {\"claude\": {\"name\": \"Claude Max\", \"price\": 100}}" };
+    const plans: Plans = { ...settings().plans }; // the plans not named stay as they are
+    for (const [k, v] of Object.entries(p.plans)) {
+      if (!PLAN_KEYS.includes(k as PlanProvider)) return { error: "plans can hold claude and chatgpt" };
+      if (v === null) { delete plans[k as PlanProvider]; continue; } // null removes that plan
+      const w = v as any;
+      const name = typeof w?.name === "string" ? w.name.trim().slice(0, 60) : "";
+      const price = Number(w?.price);
+      if (!name) return { error: `the ${k} plan needs a name` };
+      if (w.price === "" || w.price === null || !Number.isFinite(price) || price < 0 || price > 100_000) return { error: `the ${k} plan's price must be a dollar amount a month from 0 to 100,000` };
+      plans[k as PlanProvider] = { name, price: Math.round(price * 100) / 100 };
+    }
+    out.plans = plans;
   }
   if ("atLimit" in p) { if (p.atLimit !== "cheapest" && p.atLimit !== "stop") return { error: "atLimit must be cheapest or stop" }; out.atLimit = p.atLimit; }
   if ("history" in p) out.history = !!p.history;
