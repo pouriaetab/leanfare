@@ -1253,7 +1253,7 @@
   }
 
   function statuslineRow(st) {
-    if (st.broken) return h("p", { class: "pl-note", text: `Claude Code's settings file is not valid JSON, so Leanfare cannot add its line. Fix ${st.file} first.` });
+    if (st.broken) return h("p", { class: "pl-note", text: `Claude Code's settings file is not a valid settings file (a JSON object), so Leanfare cannot add its line. Fix ${st.file} first.` });
     return h("div", { class: "row mt-sl" },
       h("span", { class: "grow", text: st.installed ? `Claude's 5 hour and weekly use come from Claude Code's status line${st.keeps ? " (your own line stays first)" : ""}.` : "Add your Claude plan to Claude Code's status line. Leanfare reads the two percentages there, never your words." }),
       runButton(st.installed ? "Remove from the status line" : "Add to the status line", async (signal) => {

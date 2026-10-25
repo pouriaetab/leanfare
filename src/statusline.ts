@@ -8,6 +8,7 @@
 // Numbers only: the JSON holds no messages, and only the two windows and the name of the
 // folder Claude Code runs in are read. It must be quick, because Claude Code runs it often:
 // it reads two small files, writes one line when something changed, and talks to nothing.
+import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "./config";
@@ -133,13 +134,34 @@ export async function statuslineOutput(input: string, args: string[] = []): Prom
   // A status line you already had keeps its place, first: --then '<its command>'.
   const i = args.indexOf("--then");
   if (i >= 0 && args[i + 1]) {
-    try {
-      const p = Bun.spawn(["sh", "-c", args[i + 1]], { stdin: new Blob([input]), stdout: "pipe", stderr: "ignore" });
-      const timer = setTimeout(() => p.kill(), 2000);
-      const theirs = (await new Response(p.stdout).text()).split("\n")[0].trim();
-      clearTimeout(timer);
-      if (theirs) ours = `${theirs} · ${ours}`;
-    } catch {}
+    const theirs = await runTheirs(args[i + 1], input);
+    if (theirs) ours = `${theirs} · ${ours}`;
   }
   return ours;
+}
+
+// Your own status line command, with the same JSON, given `ms` to finish. It runs in its
+// own process group, so at the limit everything it started is stopped with it (a script's
+// git or curl too), and Leanfare's line is never held up past the limit. Its first line is used.
+export function runTheirs(cmd: string, input: string, ms = 2000): Promise<string> {
+  return new Promise((resolve) => {
+    let out = "", done = false;
+    let child: ReturnType<typeof spawn>;
+    try { child = spawn("sh", ["-c", cmd], { stdio: ["pipe", "pipe", "ignore"], detached: true }); } catch { resolve(""); return; }
+    const finish = (late: boolean) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (late) { try { process.kill(-child.pid!, "SIGKILL"); } catch {} }
+      child.stdout?.destroy();
+      child.unref();
+      resolve(out.split("\n")[0].trim());
+    };
+    const timer = setTimeout(() => finish(true), ms);
+    child.stdout!.on("data", (d) => { out += d; });
+    child.stdout!.on("close", () => finish(false));
+    child.on("error", () => finish(false));
+    child.stdin!.on("error", () => {}); // a command that does not read its input
+    child.stdin!.end(input);
+  });
 }

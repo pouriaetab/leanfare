@@ -2,11 +2,11 @@
 // what one percent holds in dollars of work (measured from your own windows, or a starting estimate),
 // what is left, and which project still fits. Every test writes its own files into the temp folders
 // test/setup.ts points LEANFARE_DATA_DIR, CLAUDE_CONFIG_DIR and CODEX_HOME at.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { estimate, meterView, observations, quantile, seeded, setStatusline, startingK, statuslineState } from "../src/meter";
+import { claudeSettingsFile, estimate, meterView, observations, ourCommand, quantile, seeded, setStatusline, startingK, statuslineState } from "../src/meter";
 import { forgetLogs } from "../src/plans";
 import { lineFor, limitsFile, meterCacheFile, readSnaps, saveSnap, snapOf, toMs, unquote, quote } from "../src/statusline";
 import { boot, reset, ui } from "./app";
@@ -101,7 +101,7 @@ describe("what one percent holds (the statistics)", () => {
   });
   test("starting estimates follow the plan's price; ChatGPT has none", () => {
     expect(startingK("claude", 20)).toMatchObject({ plan: "Pro", kWeek: 1.7, k5: 0.14 });
-    expect(startingK("claude", 100)).toMatchObject({ plan: "Max 5x", rough: true });
+    expect(startingK("claude", 100)).toMatchObject({ plan: "Max 5x", rough: true, k5: 0.7 }); // 5 times Pro for the 5 hours, as Anthropic says
     expect(startingK("claude", 200)).toMatchObject({ plan: "Max 20x", kWeek: 16.4, k5: 2.05 });
     expect(startingK("claude", null)).toBeNull();
     expect(startingK("chatgpt", 20)).toBeNull();
@@ -241,13 +241,54 @@ describe("Leanfare in Claude Code's status line (the settings file)", () => {
     expect(JSON.parse(readFileSync(settingsFile(), "utf8")).statusLine).toBeUndefined();
   });
 
-  test("a settings file that is not JSON is left alone and the reason is given", async () => {
-    writeFileSync(settingsFile(), "{ not json");
-    expect(statuslineState()).toMatchObject({ installed: false, broken: true });
-    const r = await ui(url, "/api/meter/statusline", { on: true });
-    expect(r.status).toBe(409);
-    expect(r.json.error).toContain("not valid JSON");
-    expect(readFileSync(settingsFile(), "utf8")).toBe("{ not json");
+  test("a settings file that is not JSON, or not an object, is left alone and the reason is given", async () => {
+    for (const text of ["{ not json", JSON.stringify([{ keep: "me" }]), "42"]) {
+      writeFileSync(settingsFile(), text);
+      expect(statuslineState()).toMatchObject({ installed: false, broken: true });
+      const r = await ui(url, "/api/meter/statusline", { on: true });
+      expect(r.status).toBe(409);
+      expect(r.json.error).toContain("is not a valid settings file (a JSON object)");
+      expect(readFileSync(settingsFile(), "utf8")).toBe(text);
+    }
+  });
+
+  test("your own status line comes back exactly as it was, padding and all", () => {
+    const mine = { type: "command", command: "~/bin/line.sh", padding: 2 };
+    writeFileSync(settingsFile(), JSON.stringify({ statusLine: mine }));
+    setStatusline(true);
+    setStatusline(false);
+    expect(JSON.parse(readFileSync(settingsFile(), "utf8")).statusLine).toEqual(mine);
+  });
+
+  test("a line set by hand to leanfare statusline counts as Leanfare's, so it is never wrapped in itself", () => {
+    writeFileSync(settingsFile(), JSON.stringify({ statusLine: { type: "command", command: "leanfare statusline" } }));
+    expect(statuslineState()).toMatchObject({ installed: true, keeps: null });
+    setStatusline(true);
+    expect(JSON.parse(readFileSync(settingsFile(), "utf8")).statusLine.command).toBe(ourCommand());
+  });
+
+  test("a settings file that is a link (kept with your dotfiles) stays a link", () => {
+    const real = join(mkdtempSync(join(tmpdir(), "dotfiles-")), "claude-settings.json");
+    writeFileSync(real, JSON.stringify({ model: "opus" }));
+    symlinkSync(real, settingsFile());
+    setStatusline(true);
+    expect(lstatSync(settingsFile()).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(readFileSync(real, "utf8"))).toMatchObject({ model: "opus", statusLine: { type: "command" } });
+  });
+
+  test("with CLAUDE_CONFIG_DIR set, the line goes in that folder's settings, where Claude Code reads it", () => {
+    const was = { file: process.env.LEANFARE_CLAUDE_SETTINGS, dir: process.env.CLAUDE_CONFIG_DIR };
+    const dir = mkdtempSync(join(tmpdir(), "claude-config-"));
+    try {
+      delete process.env.LEANFARE_CLAUDE_SETTINGS;
+      process.env.CLAUDE_CONFIG_DIR = dir;
+      expect(claudeSettingsFile()).toBe(join(dir, "settings.json"));
+      setStatusline(true);
+      expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).statusLine.command).toBe(ourCommand());
+    } finally {
+      process.env.LEANFARE_CLAUDE_SETTINGS = was.file;
+      process.env.CLAUDE_CONFIG_DIR = was.dir;
+    }
   });
 });
 
@@ -261,6 +302,15 @@ describe("the status line's output, in the same process", () => {
     expect(await statuslineOutput(input, ["--then", "printf 'first\\nsecond'"])).toBe("first · 5h 10% · week 50%");
     expect(await statuslineOutput(input, ["--then", "true"])).toBe("5h 10% · week 50%"); // a line that prints nothing adds nothing
   });
+  test("your own line gets 2 seconds, and everything it started is stopped then; what it printed by then is kept", async () => {
+    const { statuslineOutput } = await import("../src/statusline");
+    let t0 = performance.now();
+    expect(await statuslineOutput(input, ["--then", "sleep 6; echo late"])).toBe("5h 10% · week 50%");
+    expect(performance.now() - t0).toBeLessThan(3500);
+    t0 = performance.now();
+    expect(await statuslineOutput(input, ["--then", "echo early; sleep 6"])).toBe("early · 5h 10% · week 50%");
+    expect(performance.now() - t0).toBeLessThan(3500);
+  }, 15000);
   test("a damaged line in the snapshots file is skipped; backslashes unquote", () => {
     writeFileSync(limitsFile(), "{bad\n" + JSON.stringify({ at: 5, five: null, week: { used: 1, resets: null } }) + "\n");
     expect(readSnaps(0)).toHaveLength(1);
