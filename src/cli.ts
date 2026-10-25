@@ -24,6 +24,7 @@ const HELP = `Leanfare ${VERSION}: every top AI model in one app on your own com
   leanfare stop       stop it
   leanfare status     is it running, where, and how old are its prices
   leanfare mcp        Leanfare as an MCP server (stdio), for Claude Desktop and other MCP clients
+  leanfare statusline the line for Claude Code's status line: your plan's 5 hour and weekly use (Settings adds it)
 
   --port 4748         use another port
   --no-open           do not open the browser
@@ -192,4 +193,5 @@ if (command === "start") await start();
 else if (command === "stop") await stop();
 else if (command === "status") await status();
 else if (command === "mcp") { const { runMcp } = await import("./mcp"); await runMcp(); }
+else if (command === "statusline") { const { runStatusline } = await import("./statusline"); await runStatusline(args); }
 else { console.error(`Unknown command "${command}".\n\n${HELP}`); process.exit(2); }

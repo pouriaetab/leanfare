@@ -760,3 +760,69 @@ describe("Your plans", () => {
     expect((await ui(url, "/api/state")).json.settings.plans).toEqual({});
   }, 20000);
 });
+
+describe("The plan meter", () => {
+  const { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require("node:fs") as typeof import("node:fs");
+  const { join } = require("node:path") as typeof import("node:path");
+  const { tmpdir } = require("node:os") as typeof import("node:os");
+  const { forgetLogs } = require("../src/plans") as typeof import("../src/plans");
+  const sl = require("../src/statusline") as typeof import("../src/statusline");
+  const bad = (doc: any) => /\bnull\b|\bundefined\b|NaN|\[object Object\]/.test(doc.body.textContent);
+  const toasts = (doc: any) => [...doc.querySelectorAll("#toasts .toast")].map((t: any) => t.textContent).join(" | ");
+  async function waitFor(ok: () => boolean, ms = 8000) { for (let i = 0; i < ms / 50 && !ok(); i++) await Bun.sleep(50); }
+  const press = (doc: any, text: string, within = "body") => [...doc.querySelector(within).querySelectorAll("button")].find((b: any) => b.textContent === text)?.click();
+  const T = (iso: string) => Date.parse(iso);
+  beforeEach(async () => {
+    rmSync(process.env.CLAUDE_CONFIG_DIR!, { recursive: true, force: true });
+    for (const f of [sl.limitsFile(), join(process.env.LEANFARE_DATA_DIR!, "limits-last.json"), sl.meterCacheFile()]) rmSync(f, { force: true });
+    process.env.LEANFARE_CLAUDE_SETTINGS = join(mkdtempSync(join(tmpdir(), "claude-settings-")), "settings.json");
+    forgetLogs();
+    await reset({ ticked: ALL_TICKED });
+  });
+  function someUse() {
+    const d = join(process.env.CLAUDE_CONFIG_DIR!, "projects", "-Users-you-llmledger");
+    mkdirSync(d, { recursive: true });
+    const line = (id: string, ts: string, out: number) => JSON.stringify({ type: "assistant", timestamp: ts, cwd: "/Users/you/llmledger", requestId: "r" + id, message: { id: "m" + id, model: "claude-sonnet-4-6", usage: { input_tokens: 0, output_tokens: out } } });
+    writeFileSync(join(d, "a.jsonl"), line("1", "2026-10-21T11:00:00Z", 2_000_000) + "\n");
+    sl.saveSnap({ at: T("2026-10-21T10:00:00Z"), five: { used: 20, resets: T("2026-10-21T15:00:00Z") }, week: { used: 85, resets: T("2026-10-27T12:00:00Z") } });
+    sl.saveSnap({ at: T("2026-10-21T11:30:00Z"), five: { used: 60, resets: T("2026-10-21T15:00:00Z") }, week: { used: 90, resets: T("2026-10-27T12:00:00Z") } });
+    forgetLogs();
+  }
+  const goSavings = async (doc: any) => {
+    doc.querySelector('.tabs button[data-tab="savings"]').click();
+    await waitFor(() => !!doc.querySelector("#plansCard .meter") || (!!doc.querySelector("#plansCard") && doc.querySelector("#plansCard").textContent.includes("status line")));
+  };
+
+  test("the two windows show as bars with what is left, and what still fits", async () => {
+    someUse();
+    await ui(url, "/api/settings", { plans: { claude: { name: "Claude Max", price: 200 } } });
+    const doc = await openApp();
+    await goSavings(doc);
+    const t = doc.querySelector("#plansCard").textContent;
+    expect(t).toContain("Right now");
+    expect(t).toContain("5 hours");
+    expect(t).toContain("60% used");
+    expect(t).toContain("This week");
+    expect(t).toContain("90% used");
+    expect(t).toContain("of work left");
+    expect(t).toContain("a starting estimate");
+    expect(t).toContain("What still fits");
+    expect(t).toContain("llmledger: about");
+    expect(doc.querySelector("#plansCard .meter .track.hot i")).toBeTruthy(); // the week at 90% is coloured
+    expect(bad(doc)).toBe(false);
+  }, 20000);
+
+  test("Add to the status line writes Claude Code's settings, is its own Stop while it works, and can be undone", async () => {
+    const doc = await openApp();
+    await goSavings(doc);
+    expect(doc.querySelector("#plansCard").textContent).toContain("never your words");
+    press(doc, "Add to the status line", "#plansCard");
+    await waitFor(() => toasts(doc).includes("Added."));
+    expect(JSON.parse(readFileSync(process.env.LEANFARE_CLAUDE_SETTINGS!, "utf8")).statusLine.command).toContain("statusline");
+    expect(doc.querySelector("#plansCard").textContent).toContain("come from Claude Code's status line");
+    press(doc, "Remove from the status line", "#plansCard");
+    await waitFor(() => toasts(doc).includes("Removed"));
+    expect(JSON.parse(readFileSync(process.env.LEANFARE_CLAUDE_SETTINGS!, "utf8")).statusLine).toBeUndefined();
+    expect(bad(doc)).toBe(false);
+  }, 20000);
+});

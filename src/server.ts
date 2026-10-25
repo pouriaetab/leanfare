@@ -14,6 +14,7 @@ import { budgetState } from "./budget";
 import * as connect from "./connect";
 import * as local from "./local";
 import { plansBrief, plansView } from "./plans";
+import { meterViews, setStatusline } from "./meter";
 import { retirementNotices } from "./retire";
 import { savings } from "./savings";
 import { checkKey, effortLevels, UserError } from "./upstream";
@@ -493,6 +494,9 @@ async function api(req: Request, url: URL): Promise<Response> {
     const month = url.searchParams.get("month");
     return json(await plansView(month && /^\d{4}-\d{2}$/.test(month) ? month : undefined, url.searchParams.get("refresh") === "1"));
   }
+  // The plan meter (see meter.ts): what is left of each plan, in work and tokens, and which project still fits.
+  if (p === "/api/meter" && m === "GET") return json(await meterViews());
+  if (p === "/api/meter/statusline" && m === "POST") { const b = await readBody(req); return json({ statusline: setStatusline(!!b.on) }); }
   if (p === "/api/recent" && m === "GET") {
     return json({ rows: db.query("SELECT ts, source, model, task, auto, mode, in_tokens, cached, out_tokens, cost, usual, usual_cost, price_status, usage_status, status, error, ms, switched_from FROM ledger ORDER BY id DESC LIMIT 50").all() });
   }
