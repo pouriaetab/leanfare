@@ -582,3 +582,181 @@ describe("the markdown renderer", () => {
     expect(problems.slice(0, 5)).toEqual([]);
   }, 60000);
 });
+
+describe("Your plans", () => {
+  const { mkdirSync, rmSync, writeFileSync } = require("node:fs") as typeof import("node:fs");
+  const { join } = require("node:path") as typeof import("node:path");
+  const { forgetLogs } = require("../src/plans") as typeof import("../src/plans");
+  const bad = (doc: any) => /\bnull\b|\bundefined\b|NaN|\[object Object\]/.test(doc.body.textContent);
+  const toasts = (doc: any) => [...doc.querySelectorAll("#toasts .toast")].map((t: any) => t.textContent).join(" | ");
+  const line = (id: string, model: string, usage: Record<string, number>) => JSON.stringify({ type: "assistant", timestamp: "2026-10-20T10:00:00Z", requestId: "r" + id, message: { id: "m" + id, model, usage } });
+  const logs = (...lines: string[]) => {
+    const d = join(process.env.CLAUDE_CONFIG_DIR!, "projects", "p");
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, "s.jsonl"), lines.join("\n") + "\n");
+    forgetLogs();
+  };
+  beforeEach(async () => {
+    rmSync(process.env.CLAUDE_CONFIG_DIR!, { recursive: true, force: true });
+    rmSync(process.env.CODEX_HOME!, { recursive: true, force: true });
+    forgetLogs();
+    await reset({ ticked: ALL_TICKED });
+  });
+  async function waitFor(ok: () => boolean, ms = 8000) { for (let i = 0; i < ms / 50 && !ok(); i++) await Bun.sleep(50); }
+  const goSavings = async (doc: any) => {
+    doc.querySelector('.tabs button[data-tab="savings"]').click();
+    await waitFor(() => !!doc.querySelector("#plansCard") && !doc.querySelector("#plansCard").textContent.includes("Reading"));
+  };
+  const goSettings = async (doc: any) => {
+    doc.querySelector('.tabs button[data-tab="settings"]').click();
+    await waitFor(() => !!doc.querySelector("input[aria-label='Claude plan name']"));
+  };
+  const set = (el: any, v: string) => { el.value = v; el.dispatchEvent(new win.Event("input", { bubbles: true })); };
+  const press = (doc: any, text: string, within = "body") => [...doc.querySelector(within).querySelectorAll("button")].find((b: any) => b.textContent === text)?.click();
+
+  test("no plan and no log files: the card says what to do, and nothing reads null", async () => {
+    const doc = await openApp();
+    await goSavings(doc);
+    const t = doc.querySelector("#plansCard").textContent;
+    expect(t).toContain("Your plans");
+    expect(t).toContain("Enter your Claude or ChatGPT plan");
+    expect(t).toContain("an estimate");
+    expect(bad(doc)).toBe(false);
+  }, 20000);
+
+  test("log files and a plan: the value at API prices, how many times the price, and each model", async () => {
+    logs(line("1", "claude-sonnet-4-6", { input_tokens: 1_000_000, output_tokens: 100_000 }), line("2", "claude-future-9", { input_tokens: 5000, output_tokens: 10 }));
+    await ui(url, "/api/settings", { plans: { claude: { name: "Claude Max", price: 1.5 } } });
+    const doc = await openApp();
+    await goSavings(doc);
+    const t = doc.querySelector("#plansCard").textContent;
+    expect(t).toContain("Claude Max");
+    expect(t).toContain("$1.50 a month");
+    expect(t).toContain("$4.50"); // $3 in + $1.50 out
+    expect(t).toContain("at API prices");
+    expect(t).toContain("3.0× what you pay");
+    expect(t).toContain("Claude Sonnet 4.6");
+    expect(t).toContain("claude-future-9");
+    expect(t).toContain("no listed price");
+    expect(t).toContain("5.0k tokens are on models with no listed price");
+    expect(doc.querySelectorAll("#plansCard .pl").length).toBe(1); // no Codex logs and no ChatGPT plan: nothing to show for it
+    expect(bad(doc)).toBe(false);
+  }, 20000);
+
+  test("the ChatGPT block shows Codex's own limits as of its last message, and never invents any for Claude", async () => {
+    const cd = join(process.env.CODEX_HOME!, "sessions", "d");
+    mkdirSync(cd, { recursive: true });
+    writeFileSync(join(cd, "rollout-1.jsonl"), [
+      JSON.stringify({ timestamp: "2026-10-20T13:00:00Z", type: "turn_context", payload: { model: "gpt-4.1" } }),
+      JSON.stringify({ timestamp: "2026-10-20T13:05:00Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 1000, cached_input_tokens: 0, output_tokens: 10 }, last_token_usage: null }, rate_limits: { primary: { used_percent: 1.0, window_minutes: 300, resets_at: 1792590000 }, secondary: { used_percent: 12.5, window_minutes: 10080, resets_at: 1792900000 }, plan_type: "plus" } } }),
+    ].join("\n") + "\n");
+    forgetLogs();
+    logs(line("1", "claude-sonnet-4-6", { input_tokens: 1000, output_tokens: 0 }));
+    const doc = await openApp();
+    await goSavings(doc);
+    const t = doc.querySelector("#plansCard").textContent;
+    expect(t).toContain("Codex limits at its last message");
+    expect(t).toContain("1% of the 5 hour limit used");
+    expect(t).toContain("12.5% of the weekly limit used");
+    expect(t).toContain("resets");
+    expect(t.match(/limits at its last message/g)!.length).toBe(1); // Claude Code has none to show
+    expect(bad(doc)).toBe(false);
+  }, 20000);
+
+  test("log files but no plan yet: the value is shown with a way to enter the plan", async () => {
+    logs(line("1", "claude-sonnet-4-6", { input_tokens: 1_000_000, output_tokens: 0 }));
+    const doc = await openApp();
+    await goSavings(doc);
+    const t = doc.querySelector("#plansCard").textContent;
+    expect(t).toContain("Claude Code");
+    expect(t).toContain("$3");
+    expect(t).not.toContain("what you pay");
+    press(doc, "Enter your plan", "#plansCard");
+    await waitFor(() => !!doc.querySelector("input[aria-label='Claude plan name']"));
+    expect(doc.querySelector("input[aria-label='Claude plan name']")).toBeTruthy();
+  }, 20000);
+
+  test("a plan with no log files says so", async () => {
+    await ui(url, "/api/settings", { plans: { chatgpt: { name: "ChatGPT Plus", price: 20 } } });
+    const doc = await openApp();
+    await goSavings(doc);
+    expect(doc.querySelector("#plansCard").textContent).toContain("No Codex log files found on this computer.");
+  }, 20000);
+
+  test("Look again reads the files again, and Stop works while it does", async () => {
+    logs(line("1", "claude-sonnet-4-6", { input_tokens: 1_000_000, output_tokens: 0 }));
+    await ui(url, "/api/settings", { plans: { claude: { name: "Claude Pro", price: 6 } } });
+    const doc = await openApp();
+    await goSavings(doc);
+    expect(doc.querySelector("#plansCard").textContent).toContain("$3");
+    logs(line("1", "claude-sonnet-4-6", { input_tokens: 1_000_000, output_tokens: 0 }), line("2", "claude-sonnet-4-6", { input_tokens: 1_000_000, output_tokens: 0 }));
+    press(doc, "Look again", "#plansCard");
+    expect(doc.querySelector("#plansCard button").textContent).toBe("Stop"); // it is its own Stop while it reads
+    await waitFor(() => doc.querySelector("#plansCard").textContent.includes("2.0M tokens"));
+    expect(doc.querySelector("#plansCard").textContent).toContain("1.0× what you pay");
+    expect(toasts(doc)).toContain("Log files read again.");
+    expect(doc.querySelector("#plansCard button").textContent).toBe("Look again"); // the button is back with its label
+  }, 20000);
+
+  test("changing the month on Savings shows that month's use, never the last month's under it", async () => {
+    logs(line("1", "claude-sonnet-4-6", { input_tokens: 1_000_000, output_tokens: 0 }));
+    const doc = await openApp();
+    await goSavings(doc);
+    expect(doc.querySelector("#plansCard").textContent).toContain("$3");
+    await Bun.sleep(300);
+    const pick = doc.querySelector("#tab-savings select[aria-label='Month']");
+    pick.value = "2026-09";
+    pick.dispatchEvent(new win.Event("change", { bubbles: true }));
+    await waitFor(() => doc.querySelector("#plansCard")?.textContent.includes("No Claude Code use in this month"));
+    expect(doc.querySelector("#plansCard").textContent).toContain("No Claude Code use in this month's log files.");
+    expect(doc.querySelector("#plansCard").textContent).not.toContain("$3");
+  }, 20000);
+
+  test("Settings: save a plan, see it on Savings, change it, remove it", async () => {
+    logs(line("1", "claude-sonnet-4-6", { input_tokens: 1_000_000, output_tokens: 0 }));
+    const doc = await openApp();
+    await goSettings(doc);
+    set(doc.querySelector("input[aria-label='Claude plan name']"), "Claude Max");
+    set(doc.querySelector("input[aria-label='Claude plan price a month']"), "100");
+    press(doc, "Save", ".plan-row");
+    await waitFor(() => toasts(doc).includes("Claude plan saved."));
+    expect((await ui(url, "/api/state")).json.settings.plans).toEqual({ claude: { name: "Claude Max", price: 100 } });
+    expect(doc.querySelector("input[aria-label='Claude plan name']").value).toBe("Claude Max");
+    await goSavings(doc);
+    expect(doc.querySelector("#plansCard").textContent).toContain("0.0× what you pay");
+    await goSettings(doc);
+    const remove = [...doc.querySelectorAll(".plan-row button")].find((b: any) => b.textContent === "Remove");
+    remove.click();
+    await waitFor(() => toasts(doc).includes("Claude plan removed."));
+    expect((await ui(url, "/api/state")).json.settings.plans).toEqual({});
+    expect(doc.querySelector("input[aria-label='Claude plan name']").value).toBe("");
+    expect(bad(doc)).toBe(false);
+  }, 30000);
+
+  test("a plan entered in Settings is on the Savings card when you go back, without pressing anything", async () => {
+    logs(line("1", "claude-sonnet-4-6", { input_tokens: 1_000_000, output_tokens: 0 }));
+    const doc = await openApp();
+    await goSavings(doc);
+    expect(doc.querySelector("#plansCard").textContent).not.toContain("Claude Max");
+    await goSettings(doc);
+    set(doc.querySelector("input[aria-label='Claude plan name']"), "Claude Max");
+    set(doc.querySelector("input[aria-label='Claude plan price a month']"), "6");
+    press(doc, "Save", ".plan-row");
+    await waitFor(() => toasts(doc).includes("Claude plan saved."));
+    await goSavings(doc);
+    await waitFor(() => doc.querySelector("#plansCard").textContent.includes("Claude Max"));
+    expect(doc.querySelector("#plansCard").textContent).toContain("$6.00 a month");
+    expect(doc.querySelector("#plansCard").textContent).toContain("0.5× what you pay");
+  }, 20000);
+
+  test("Settings: a plan with a name and no price is refused with the reason, and nothing is saved", async () => {
+    const doc = await openApp();
+    await goSettings(doc);
+    set(doc.querySelector("input[aria-label='ChatGPT plan name']"), "ChatGPT Plus");
+    const row = [...doc.querySelectorAll(".plan-row")][1];
+    [...row.querySelectorAll("button")].find((b: any) => b.textContent === "Save").click();
+    await waitFor(() => toasts(doc).includes("price must be"));
+    expect(toasts(doc)).toContain("the chatgpt plan's price must be a dollar amount");
+    expect((await ui(url, "/api/state")).json.settings.plans).toEqual({});
+  }, 20000);
+});
