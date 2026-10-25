@@ -10,12 +10,13 @@
 // stdout, one message per line; anything for a person goes to stderr.
 import { existsSync, readFileSync } from "node:fs";
 import { PORT, VERSION, paths } from "./config";
+import { readForDelegate } from "./readfiles";
 
 const MODERN = ["2026-07-28"];
 const LEGACY = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const SERVER = { name: "leanfare", title: "Leanfare", version: VERSION };
 const META = { "io.modelcontextprotocol/serverInfo": SERVER };
-const INSTRUCTIONS = "Leanfare runs every top AI model on this computer with the user's own keys, shows what each answer costs, and keeps a monthly budget. Use ask to hand a question to another model (Auto picks the cheapest one that rates well for the task); spend to see what was spent and saved; models to see which models and prices are available; estimate to price a prompt before sending it.";
+const INSTRUCTIONS = "Leanfare runs every top AI model on this computer with the user's own keys, shows what each answer costs, and keeps a monthly budget. Use delegate to hand work that reads a lot (big files, logs, many documents) to a cheaper model: Leanfare reads the files itself, so their text stays out of your context, and returns a short answer with a receipt. Use ask to hand a question to another model (Auto picks the cheapest one that rates well for the task); spend to see what was spent and saved; models to see which models and prices are available; estimate to price a prompt before sending it.";
 
 const TOOLS = [
   {
@@ -34,6 +35,26 @@ const TOOLS = [
       additionalProperties: false,
     },
     annotations: { title: "Ask a model", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  {
+    name: "delegate",
+    title: "Hand a task to a cheaper model",
+    description: "Hand a piece of work to a cheaper model through Leanfare, to save your own context and usage. Best for work that reads a lot and answers briefly: search or summarize big files, logs or many documents, review a file, draft a section. Name the files in files: Leanfare reads them itself, so their text never enters your context. Leanfare picks the cheapest model the user ticked that rates well enough for the kind and effort, and returns a short answer with a receipt (the model, the cost, the tokens kept out of your context). Every high effort answer, and a sample of the others, is checked by a stronger model; a failed check is asked again one tier up. Costs count toward the user's Leanfare budget.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task: { type: "string", description: "What to do, written for a model that has not seen this conversation: the goal, what to look for, and the form of answer you want (for example: a list of file:line, one line each)." },
+        files: { type: "array", items: { type: "string" }, maxItems: 50, description: "Text files for Leanfare to read and hand over with the task: full paths, ~/ paths, or paths relative to folder. At most 50 files, 2 MB each, 4 MB in all. Files that hold secrets (.env files, private keys, credentials) are refused." },
+        folder: { type: "string", description: "The folder relative paths start from. By default, the folder the MCP client started Leanfare in (in Claude Code, the project)." },
+        kind: { type: "string", enum: ["read", "write", "reason"], description: "read: find, pull out or summarize from the files. write: draft text or code. reason: work something out (a bug's cause, a plan, a proof). Leave it out to let Leanfare guess." },
+        effort: { type: "string", enum: ["low", "medium", "high"], description: "How good the model must be: low takes the cheapest rated within 80 points of the best model the user ticked, medium within 40, high within 15. Also the thinking effort for models that think. Default medium." },
+        check: { type: "string", enum: ["auto", "always", "never"], description: "auto (the default) has a stronger model check every high effort answer, 1 in 4 medium ones and 1 in 10 low ones." },
+        max_tokens: { type: "integer", minimum: 1, maximum: 64000, description: "The longest answer to allow, in tokens (default 8,192)." },
+      },
+      required: ["task"],
+      additionalProperties: false,
+    },
+    annotations: { title: "Hand a task to a cheaper model", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
   {
     name: "spend",
@@ -129,6 +150,19 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
     const cost = costHeader && costHeader !== "unknown" ? Number(costHeader) : null;
     const reason = decodeURIComponent(headers.get("x-leanfare-reason") ?? "");
     return text(`${answer}\n\n(Leanfare: ${model}, ${usd(cost)}. ${reason})`, { answer, model, cost_usd: cost, task: headers.get("x-leanfare-task"), reason });
+  }
+  if (name === "delegate") {
+    if (typeof args?.task !== "string" || !args.task.trim()) return failure("delegate needs a task.");
+    const files = readForDelegate(args.files, args.folder);
+    if (typeof files === "string") return failure(files);
+    const body = { task: args.task, files, kind: args.kind ?? null, effort: args.effort ?? "medium", check: args.check ?? "auto", ...(args.max_tokens !== undefined ? { max_tokens: args.max_tokens } : {}) };
+    const { j } = await call("/api/delegate", { method: "POST", json: body }, signal);
+    return text(`${j.answer}\n\n(${j.receipt})`, {
+      answer: j.answer, model: j.model.id, cost_usd: j.cost, total_usd: j.total, task: j.task, effort: j.effort,
+      check: j.check.picked ? { verdict: j.check.verdict, by: j.check.checker?.id ?? null, why: j.check.why || null, cost_usd: j.check.cost } : null,
+      first: j.first ? { model: j.first.model.id, cost_usd: j.first.cost } : null,
+      tokens: j.tokens, cut: j.cut,
+    });
   }
   if (name === "spend") {
     const { j: s } = await call("/api/summary", {}, signal);
