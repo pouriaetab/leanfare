@@ -121,7 +121,7 @@ describe("Connect OpenRouter: a good sign in", () => {
   });
   test("Leanfare reached only OpenRouter's addresses for this (no telemetry)", async () => {
     await signIn();
-    expect([...new Set(outgoing.map((u) => new URL(u).host))].every((h) => h.startsWith("127.0.0.1:"))).toBe(true);
+    expect([...new Set(outgoing.map((u) => new URL(u).host))].filter((h) => !h.startsWith("127.0.0.1:"))).toEqual([]); // names any other address
   });
 });
 

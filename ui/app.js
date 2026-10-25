@@ -328,6 +328,8 @@
     pending: [], // files attached to the message being written
     editing: null, // the index of the question being edited
     search: null, // { q, results } while searching chats
+    local: null, // what Ollama has (Settings, Local models), from /api/local
+    confirmRemove: null, // the local model whose Remove is waiting for a yes
   };
   const ready = () => S.st && S.st.usableCount > 0;
   const modelsOf = (pid) => (S.st?.models?.[pid] ?? []);
@@ -343,6 +345,8 @@
       S.st = st;
       followDefault(before);
       renderShell();
+      if (st.local?.pull?.active) ensurePoll(); // a download started before this page opened
+      if (S.tab === "settings") loadLocal();
       if (!changed) return;
       const screen = $("#tab-" + S.tab);
       if (busyIn(screen) && S.tab !== "chat") { S.redrawLater = true; return; }
@@ -415,7 +419,7 @@
     renderShell();
     if (t === "chat") renderChat();
     if (t === "savings") loadSavings();
-    if (t === "settings") renderSettings();
+    if (t === "settings") { renderSettings(); loadLocal(); }
   }
 
   // ---- chat ----------------------------------------------------------------------------------
@@ -1354,6 +1358,148 @@
     } catch (e) { t.close(); throw e; }
   }
 
+  // ---- local models (Settings): what Ollama has, Remove, and Download with progress ------------------
+  // The download runs inside Leanfare, not in this page, so it goes on if the page is closed and the
+  // page picks it up again. The Download button is its own Stop while it runs; a double click
+  // does not stop it.
+  const gbs = (n) => `${(n / 1e9).toFixed(n < 10e9 ? 1 : 0)} GB`;
+  const FIT_HELP = {
+    fits: "Fits: runs comfortably, and other apps keep working.",
+    tight: "Tight: it runs, but slowly, and other apps may stall.",
+    "too big": "Too big for this computer's memory.",
+  };
+  const fitChip = (fit) => h("span", { class: "chip " + (fit === "fits" ? "good" : fit === "tight" ? "warn" : "bad"), title: FIT_HELP[fit], text: fit });
+  let localPoll = null, pullStartedAt = 0;
+
+  async function loadLocal() {
+    try {
+      const next = await api("/api/local");
+      if (JSON.stringify(next) !== JSON.stringify(S.local)) { S.local = next; renderLocal(); }
+      if (next.pull?.active) ensurePoll();
+    } catch {}
+  }
+
+  function renderLocal() {
+    const old = document.getElementById("localCard");
+    if (old) keepInputs(old.parentNode, () => old.replaceWith(localCardEl()));
+  }
+
+  // While a download runs, only its bar and words are repainted in place, so the Stop button under
+  // your finger is never replaced.
+  function paintPull(p) {
+    const bar = document.getElementById("dlBar"), text = document.getElementById("dlText");
+    if (bar) { bar.setAttribute("aria-valuenow", String(p.percent ?? 0)); const i = bar.firstChild; if (i) i.style.width = `${p.percent ?? 0}%`; }
+    if (text) text.textContent = pullText(p);
+    const fit = document.getElementById("dlFit"); // the size, and so whether it fits, is known a moment after the start
+    if (fit && fit.dataset.fit !== (p.fit ?? "")) { fit.dataset.fit = p.fit ?? ""; fit.replaceChildren(p.fit ? fitChip(p.fit) : null); }
+  }
+  const pullText = (p) => `${p.step}${p.percent !== null ? ` · ${p.percent}% · ${gbs(p.completed)} of ${gbs(p.total)}` : ""}`;
+
+  function ensurePoll() {
+    if (localPoll) return;
+    localPoll = setInterval(async () => {
+      try {
+        const { pull } = await api("/api/local/pull");
+        if (S.local) S.local.pull = pull;
+        if (pull?.active) { paintPull(pull); return; }
+        clearInterval(localPoll); localPoll = null;
+        if (pull) toast(pull.message ?? "The download ended.", pull.status === "done" ? "done" : pull.status === "failed" ? "error" : "done");
+        S.st = await api("/api/state");
+        await loadLocal();
+        renderShell(); renderSettings(); renderComposerBar(); if (!S.messages.length) renderMessages();
+      } catch { clearInterval(localPoll); localPoll = null; }
+    }, 500);
+  }
+
+  async function startDownload(input) {
+    const name = input.value.trim();
+    if (!name) { toast("Type the model's name first, for example gemma3:12b.", "error"); return; }
+    try {
+      const r = await api("/api/local/pull", { body: { name } });
+      pullStartedAt = Date.now();
+      if (S.local) S.local.pull = r.pull;
+      input.value = "";
+      renderLocal();
+      ensurePoll();
+    } catch (e) { failed(e); }
+  }
+  async function stopDownload(ev) {
+    if (ev.detail > 1 || Date.now() - pullStartedAt < 500) return; // the second click of a double click is not a Stop
+    try { const r = await api("/api/local/pull/stop", { body: {} }); if (S.local) S.local.pull = r.pull; renderLocal(); } catch (e) { failed(e); }
+  }
+  async function dismissDownload() {
+    try { await api("/api/local/pull/dismiss", { body: {} }); if (S.local) S.local.pull = null; renderLocal(); } catch (e) { failed(e); }
+  }
+
+  // Remove asks first, and says what it frees. It is the one exception to "removals can be undone":
+  // the files are gone from the disk, and only downloading them again brings them back.
+  async function removeLocal(m) {
+    const t = toast(`Removing ${m.name}…`);
+    S.confirmRemove = null;
+    try {
+      const r = await api("/api/local/delete", { body: { name: m.name } });
+      S.st = r.state;
+      t.set(`Removed ${m.name}. Freed ${gbs(r.freed)}.`, "done");
+    } catch (e) { t.set(String(e.message ?? e), "error"); }
+    await loadLocal();
+    renderShell(); renderSettings(); renderComposerBar(); if (!S.messages.length) renderMessages();
+  }
+
+  function localRow(m) {
+    const facts = [m.params, m.quant].filter(Boolean).map((x) => h("span", { text: x }));
+    facts.push(h("span", { text: gbs(m.size) }), fitChip(m.fit));
+    if (m.loaded) facts.push(h("span", { class: "chip good", title: "Loaded in memory right now, so the next answer starts fast", text: "in memory" }));
+    const row = h("div", { class: "lrow" },
+      h("span", { class: "nm", title: m.name, text: m.name.replace(/:latest$/, "") }),
+      h("span", { class: "facts" }, ...facts),
+      h("button", { class: "btn small quiet", type: "button", title: `Remove ${m.name}`, "aria-label": `Remove ${m.name}`, text: "Remove", onclick: () => { S.confirmRemove = m.name; renderLocal(); } }));
+    if (S.confirmRemove !== m.name) return row;
+    return h("div", { class: "lgroup" }, row,
+      h("div", { class: "lconfirm", role: "alertdialog", "aria-label": `Remove ${m.name}?` },
+        h("span", { class: "grow", text: `Remove ${m.name}? This frees ${gbs(m.size)}. It cannot be undone here: to get it back you download it again.` }),
+        h("button", { class: "btn small stop", type: "button", text: "Remove it", onclick: () => removeLocal(m) }),
+        h("button", { class: "btn small", type: "button", text: "Keep it", onclick: () => { S.confirmRemove = null; renderLocal(); } })));
+  }
+
+  function pullBlock(p) {
+    const wrap = h("div", { class: "dl" + (p.status === "failed" ? " bad" : p.status === "done" ? " good" : ""), id: "dlBlock" },
+      h("div", { class: "row" }, h("strong", { text: p.name }), h("span", { class: "grow" }), h("span", { id: "dlFit", "data-fit": p.fit ?? "" }, p.fit ? fitChip(p.fit) : null)));
+    if (p.active) {
+      wrap.append(
+        h("div", { class: "progress", id: "dlBar", role: "progressbar", "aria-label": `Downloading ${p.name}`, "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(p.percent ?? 0) }, h("i", { style: { width: `${p.percent ?? 0}%` } })),
+        h("div", { class: "note", id: "dlText", text: pullText(p) }),
+        h("div", { class: "note", text: "Stop keeps what is downloaded; press Download again to continue from there." }));
+    } else {
+      wrap.append(h("div", { class: "note", text: p.message ?? "" }), h("div", { class: "row" }, h("button", { class: "btn small quiet", type: "button", text: "Dismiss", onclick: dismissDownload })));
+    }
+    return wrap;
+  }
+
+  function localCardEl() {
+    const L = S.local;
+    const card = h("div", { class: "setting", id: "localCard" }, h("h3", { text: "Local models" }));
+    if (!L) { card.append(h("p", { text: "Checking Ollama…" })); return card; }
+    if (!L.running) {
+      card.append(h("p", {}, "Ollama is not running on this computer. ", h("a", { href: L.installUrl, target: "_blank", rel: "noopener noreferrer", text: "Get Ollama ↗" })));
+      if (L.pull) card.append(pullBlock(L.pull));
+      return card;
+    }
+    const where = L.remote
+      ? "Ollama runs on another computer, so Leanfare cannot check its disk or memory."
+      : `This computer has ${gbs(L.memory.total)} of memory, about ${gbs(L.memory.usable)} of it usable for a model.${L.disk.known ? ` ${gbs(L.disk.free)} of disk is free; Leanfare keeps ${gbs(L.disk.minFree)} free.` : ""}`;
+    card.append(h("p", { text: where }),
+      h("div", { class: "section-title", text: L.installed.length ? `On this computer · ${L.installed.length} model${L.installed.length === 1 ? "" : "s"} · ${gbs(L.total)}` : "On this computer" }),
+      L.installed.length ? h("div", { class: "lmodels" }, ...L.installed.map(localRow)) : h("p", { text: "No models yet. Download one below." }));
+    const busy = !!L.pull?.active;
+    const input = h("input", { type: "text", placeholder: "gemma3:12b   or   hf.co/user/repo:Q4_K_M", autocomplete: "off", spellcheck: "false", "data-keep": "local-name", "aria-label": "Model to download", disabled: busy, value: busy ? L.pull.name : null,
+      onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); if (!busy) startDownload(input); } } });
+    card.append(h("div", { class: "section-title", text: "Download a model" }),
+      h("div", { class: "row" }, input, h("button", { class: "btn primary" + (busy ? " stop" : ""), type: "button", text: busy ? "Stop" : "Download", onclick: (ev) => (busy ? stopDownload(ev) : startDownload(input)) })),
+      h("p", {}, "A name from ", h("a", { href: "https://ollama.com/library", target: "_blank", rel: "noopener noreferrer", text: "Ollama's library ↗" }), ", or straight from Hugging Face as hf.co/user/repo:quantization. Q4_K_M is the light version: about a quarter of the full size, with a small loss in quality. Check a model's licence before you use it for work."));
+    if (L.pull) card.append(pullBlock(L.pull));
+    return card;
+  }
+
   async function tick(ids, on) {
     const before = S.st.settings.ticked.slice();
     const set = new Set(before);
@@ -1485,7 +1631,7 @@
     if (!st) return;
     const scrollL = el.querySelector(".colL")?.scrollTop ?? 0, scrollR = el.querySelector(".colR")?.scrollTop ?? 0;
 
-    const left = h("div", { class: "colL" }, h("div", { class: "section-title", text: `Providers · ${st.readyCount} ready` }), ...st.providers.map(providerCard));
+    const left = h("div", { class: "colL" }, h("div", { class: "section-title", text: `Providers · ${st.readyCount} ready` }), ...st.providers.map(providerCard), h("div", { class: "section-title", text: "Local models" }), localCardEl());
 
     const s = st.settings;
     const modeSeg = h("div", { class: "seg", role: "group", "aria-label": "How Auto picks" },

@@ -11,6 +11,7 @@ import { forgetHistoryCache, setPaused, stopRunning } from "../src/engine";
 import { setNow } from "../src/util";
 import { KEYS, type startFake } from "./fake";
 import * as connect from "../src/connect";
+import * as local from "../src/local";
 
 export const FIXTURE = new URL("./fixtures/catalog.json", import.meta.url).pathname;
 export const fake = (globalThis as any).__fake as ReturnType<typeof startFake>;
@@ -40,6 +41,8 @@ export async function reset(patch: Partial<Settings> = {}) {
   loadCatalog(FIXTURE);
   store.ollama = []; store.ollamaFound = false; store.openrouter = [];
   connect.cancel(); connect.forgetCredit();
+  local.stopPull(); local.dismissPull(); fake.ollama.reset();
+  Object.assign(local.probe, { free: () => 200e9, memory: () => 16e9 }); // fixed numbers: tests never depend on this computer's disk or memory
   for (const id of Object.keys(KEYS)) await removeKey(id as any);
   fake.seen.length = 0;
   Object.assign(fake.oauth, { expireNext: false, deny: false, failExchange: 0, failMessage: "fake failure", badKey: false, credits: true });
