@@ -14,9 +14,10 @@
 //     W / D, and its 90% interval comes from resampling the windows (a bootstrap).
 //  3. With fewer than 3 windows, k starts from what others measured for the plan, and the
 //     screen says it is a starting estimate.
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { DATA_DIR } from "./config";
 import { costOf, type Usage } from "./cost";
 import { getModel } from "./data";
 import { pricedAs, recentEntries, type Limits, type MeterEntry } from "./plans";
@@ -89,7 +90,7 @@ export function estimate(obs: Obs[], rand = seeded(), draws = 500): Estimate | n
 export function startingK(provider: PlanProvider, price: number | null): { k5: number; kWeek: number; plan: string; rough: boolean } | null {
   if (provider !== "claude" || price === null) return null;
   if (price <= 25) return { k5: 0.14, kWeek: 1.7, plan: "Pro", rough: false };
-  if (price <= 120) return { k5: 0.6, kWeek: 6, plan: "Max 5x", rough: true };
+  if (price <= 120) return { k5: 0.7, kWeek: 6, plan: "Max 5x", rough: true }; // 5 times Pro's 0.14 for the 5 hours
   return { k5: 2.05, kWeek: 16.4, plan: "Max 20x", rough: false };
 }
 
@@ -213,10 +214,17 @@ export async function meterViews() {
 
 // ---- putting Leanfare in Claude Code's status line --------------------------------------------------
 
-export const claudeSettingsFile = () => process.env.LEANFARE_CLAUDE_SETTINGS || join(homedir(), ".claude", "settings.json");
+// Claude Code's own settings file: in CLAUDE_CONFIG_DIR when that is set, as Claude Code does.
+export const claudeSettingsFile = () => {
+  if (process.env.LEANFARE_CLAUDE_SETTINGS) return process.env.LEANFARE_CLAUDE_SETTINGS;
+  const dir = process.env.CLAUDE_CONFIG_DIR?.split(",")[0]?.trim();
+  return join(dir || join(homedir(), ".claude"), "settings.json");
+};
+const keptFile = () => join(DATA_DIR, "statusline-kept.json"); // the status line you had, as it was, to give back
 const cliPath = () => new URL("./cli.ts", import.meta.url).pathname;
 export const ourCommand = () => `${quote(process.execPath)} ${quote(cliPath())} statusline`;
-const ours = (cmd: unknown): cmd is string => typeof cmd === "string" && /cli\.ts'?\s+statusline\b/.test(cmd);
+// Leanfare's line, set by the button or by hand ("leanfare statusline", "bun .../cli.ts statusline").
+const ours = (cmd: unknown): cmd is string => typeof cmd === "string" && /(^|[\s'"/])(leanfare|cli\.ts)['"]?\s+statusline\b/.test(cmd);
 // The command Leanfare's line runs first: what was there before (kept after --then).
 const before = (cmd: string): string | null => { const i = cmd.indexOf(" --then "); return i < 0 ? null : unquote(cmd.slice(i + 8).trim()); };
 
@@ -225,8 +233,10 @@ function readClaudeSettings(): any {
   if (!existsSync(file)) return {};
   const text = readFileSync(file, "utf8");
   if (!text.trim()) return {};
-  try { const j = JSON.parse(text); return j && typeof j === "object" && !Array.isArray(j) ? j : {}; }
-  catch { throw new UserError(409, `Claude Code's settings file (${file}) is not valid JSON, so Leanfare left it alone. Fix it in a text editor, then try again.`); }
+  let j: unknown;
+  try { j = JSON.parse(text); } catch { j = undefined; }
+  if (!j || typeof j !== "object" || Array.isArray(j)) throw new UserError(409, `Claude Code's settings file (${file}) is not a valid settings file (a JSON object), so Leanfare left it alone. Fix it in a text editor, then try again.`);
+  return j;
 }
 
 export function statuslineState() {
@@ -236,6 +246,10 @@ export function statuslineState() {
   return { installed: ours(cmd), file: claudeSettingsFile(), keeps: ours(cmd) ? before(cmd) : null, broken: false };
 }
 
+function readKept(): any {
+  try { const k = JSON.parse(readFileSync(keptFile(), "utf8")); return k && typeof k === "object" ? k : null; } catch { return null; }
+}
+
 export function setStatusline(on: boolean) {
   const file = claudeSettingsFile();
   const j = readClaudeSettings();
@@ -243,13 +257,22 @@ export function setStatusline(on: boolean) {
   const cur = j.statusLine?.command;
   if (on) {
     const keep = ours(cur) ? before(cur) : typeof cur === "string" && cur.trim() ? cur : null;
+    if (!ours(cur) && j.statusLine && typeof j.statusLine === "object") writeFileSync(keptFile(), JSON.stringify(j.statusLine), { mode: 0o600 });
     j.statusLine = { type: "command", command: ourCommand() + (keep ? ` --then ${quote(keep)}` : ""), padding: 0 };
   } else if (ours(cur)) {
     const keep = before(cur);
-    if (keep) j.statusLine = { ...j.statusLine, command: keep };
+    const kept = readKept();
+    if (keep) j.statusLine = kept?.command === keep ? kept : { type: "command", command: keep };
     else delete j.statusLine;
+    try { unlinkSync(keptFile()); } catch {}
   }
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify(j, null, 2) + "\n");
+  // Written whole, then swapped in, so Claude Code never reads half a file. A settings file that
+  // is a link (kept with your dotfiles) stays a link: the file it points to is the one written.
+  let target = file;
+  try { target = realpathSync(file); } catch {}
+  mkdirSync(dirname(target), { recursive: true });
+  const tmp = `${target}.leanfare-${process.pid}`;
+  writeFileSync(tmp, JSON.stringify(j, null, 2) + "\n");
+  renameSync(tmp, target);
   return statuslineState();
 }
