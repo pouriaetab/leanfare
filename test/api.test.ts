@@ -452,7 +452,7 @@ describe("data and privacy", () => {
   });
   test("Leanfare reached no address except the providers and the data file (no telemetry)", () => {
     const hosts = new Set(outgoing.map((u) => new URL(u).host));
-    expect([...hosts].every((h) => h.startsWith("127.0.0.1:"))).toBe(true);
+    expect([...hosts].filter((h) => !h.startsWith("127.0.0.1:"))).toEqual([]); // names any other address it saw
   });
 });
 
