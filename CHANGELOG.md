@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0
+
+- Connect OpenRouter: sign in on OpenRouter's page and Leanfare gets a key, with nothing to copy. Settings shows the credit left.
+- Local models: download and remove Ollama models in Settings, by name or straight from Hugging Face, with a progress bar, a check that each one fits your memory, and 10 GB of disk always kept free.
+- Your plans: what your Claude Code and Codex use would cost at API prices, next to what you pay. The Mac app's menu shows it too.
+- What is left of each plan: the 5 hour and weekly limits as bars, the work left in dollars and tokens with a 90% range, and which of your projects still fits. Claude's percentages come from Claude Code's status line, which Leanfare can fill (`leanfare statusline`), keeping a line you already had.
+- The delegate: through the MCP server's new `delegate` tool, Claude hands reading heavy work to the cheapest model that is good enough. Leanfare reads the files itself, never files that hold secrets. A stronger model checks a sample of the answers, and a failed one is asked again one tier up. Savings shows what was handed over and how the checks went.
+- Privacy, said plainly: Leanfare reads usage numbers, never your words.
+
 ## 0.2.0
 
 - Attach images, PDFs and text files to a message. Auto picks a model that takes them, and they count in the estimate and the budget by their tokens.
