@@ -821,6 +821,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
   let t = await attempt(opts.maxOut ?? null);
   let retried = false;
   let written: ReturnType<typeof recordTry> | undefined; // the first try, when it was not asked again (already in the ledger)
+  let firstSpent: number | null = 0; // a first try that was asked again: charged in the ledger too
   // An answer that came back empty, or was cut off on the way, is asked once more (noted on the answer).
   if (t.answered && !ac.signal.aborted) {
     let why: { note: string; ledger: string; cap: number | null } | null = null;
@@ -833,6 +834,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
     if (why) {
       const first = recordTry(t, "error", why.ledger);
       if (reserveAgain(p, t.model, why.cap ?? p.maxOut)) {
+        firstSpent = first ? first.cost : 0;
         p.notes.push(why.note);
         p.model = t.model; p.candidates = [t.model]; // the same model again: the first try did reach it
         emit({ type: "retry", message: why.note });
@@ -878,6 +880,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
     effort: effortFor(model, p.effortAsked),
     retried,
     finish: finishReason, // why the answer ended, as the provider said ("length": at the answer limit)
+    spent: firstSpent === null || r?.cost === null ? null : firstSpent + (r?.cost ?? 0), // every try of this message, as charged
     ...(opts.meta ?? {}),
   };
   if (status === "error") emit({ type: "error", message: failed ?? "The answer failed.", status: 502 });
