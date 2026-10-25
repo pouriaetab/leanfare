@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { VERSION } from "../src/config";
 import { fake } from "./app";
+import { KEYS } from "./fake";
 
 const cliPath = new URL("../src/cli.ts", import.meta.url).pathname;
 const port = 4600 + Math.floor(Math.random() * 50);
@@ -77,4 +78,28 @@ describe("leanfare", () => {
     expect(again.code).toBe(0);
     expect(again.out).toContain("not running");
   });
+});
+
+describe("leanfare after a restart", () => {
+  test("the OpenRouter credit is read again by itself at start", async () => {
+    const d = mkdtempSync(join(tmpdir(), "leanfare-cli-"));
+    const p = 4660 + Math.floor(Math.random() * 30);
+    const state = async () => (await (await fetch(`http://127.0.0.1:${p}/api/state`, { headers: { "x-leanfare": "1" } })).json()) as any;
+    const credit = async () => (await state()).providers.find((x: any) => x.id === "openrouter").credit;
+    let first: ReturnType<typeof Bun.spawn> | null = null, second: ReturnType<typeof Bun.spawn> | null = null;
+    try {
+      first = Bun.spawn([process.execPath, cliPath, "--port", String(p)], { env: env(d), stdout: "pipe", stderr: "pipe" });
+      expect(await upOn(p)).toBe(true);
+      const saved = await fetch(`http://127.0.0.1:${p}/api/keys`, { method: "POST", headers: { "x-leanfare": "1", "content-type": "application/json" }, body: JSON.stringify({ provider: "openrouter", key: KEYS.openrouter }) });
+      expect((await saved.json()).ok).toBe(true);
+      expect((await credit())?.remaining).toBe(7.5);
+      expect((await run(["stop", "--port", String(p)], env(d))).code).toBe(0);
+      await first.exited;
+      second = Bun.spawn([process.execPath, cliPath, "--port", String(p)], { env: env(d), stdout: "pipe", stderr: "pipe" });
+      expect(await upOn(p)).toBe(true);
+      let got = null;
+      for (let i = 0; i < 40 && !got; i++) { got = await credit(); if (!got) await Bun.sleep(100); }
+      expect(got?.remaining).toBe(7.5);
+    } finally { try { first?.kill(); second?.kill(); } catch {} }
+  }, 30000);
 });

@@ -119,8 +119,14 @@ async function start() {
   if (stale()) data.refreshCatalog().then((st) => console.log(st.state === "ok" ? `Prices updated to ${data.store.catalog.built.slice(0, 10)}.` : `Prices not updated: ${st.error}. Using the copy from ${data.store.catalog.built.slice(0, 10)}.`));
   setInterval(() => data.refreshCatalog(), day);
   const orOn = () => settings().providers.openrouter?.on === true;
-  if (orOn()) data.refreshOpenRouter();
-  setInterval(() => { if (orOn()) data.refreshOpenRouter(); }, day);
+  const orRefresh = async () => {
+    await data.refreshOpenRouter();
+    const { refreshCredit } = await import("./connect");
+    const { getKey } = await import("./keys");
+    await refreshCredit(getKey("openrouter"));
+  };
+  if (orOn()) orRefresh();
+  setInterval(() => { if (orOn()) orRefresh(); }, day);
   const ollama = async () => {
     const before = data.store.ollamaFound;
     await data.refreshOllama();

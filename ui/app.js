@@ -196,7 +196,7 @@
         el.replaceChildren(
           kind === "progress" ? h("span", { class: "spin" }) : null,
           h("span", { class: "grow", text: nextText }),
-          nextOpts.action ? h("button", { text: nextOpts.action.label, onclick: () => { nextOpts.action.run(); t.close(); } }) : null,
+          nextOpts.action ? h("button", { text: nextOpts.action.label, onclick: () => { nextOpts.action.run(); if (!nextOpts.action.keep) t.close(); } }) : null,
           kind !== "progress" ? h("button", { class: "x", "aria-label": "Close", text: "✕", onclick: () => t.close() }) : null,
         );
         clearTimeout(timer);
@@ -216,11 +216,12 @@
   let running = 0;
   function runButton(label, work, cls = "btn") {
     const btn = h("button", { class: cls, type: "button", "data-run": "1", text: label });
-    let ac = null;
+    let ac = null, startedAt = 0;
     btn.addEventListener("click", async (ev) => {
       ev.preventDefault();
-      if (ac) { ac.abort(); return; }
+      if (ac) { if (ev.detail > 1 || Date.now() - startedAt < 500) return; ac.abort(); return; } // the second click of a double click is not a Stop
       ac = new AbortController();
+      startedAt = Date.now();
       running++;
       btn.textContent = "Stop";
       btn.classList.add("stop");
@@ -701,8 +702,11 @@
           h("p", { text: o.ready ? `Found ${modelsOf("ollama").length} local model${modelsOf("ollama").length === 1 ? "" : "s"}. Ready to use.` : `Not found: Leanfare tried ${(o.list?.tried ?? "http://127.0.0.1:11434/api/tags")} (${o.list?.error ?? "no answer"}). Open the Ollama app, then look again.` }),
           o.ready ? h("span", { class: "chip good", text: "Ready" }) : h("div", { class: "row" }, runButton("Look again", (signal) => refreshList("ollama", signal)), h("a", { class: "btn quiet", href: o.keyUrl, target: "_blank", rel: "noopener noreferrer", text: "Get Ollama" }))),
         h("div", { class: "start" }, h("h3", { text: "OpenRouter, free models" }),
-          h("p", {}, "One key for many makers; models ending in :free cost nothing. ", h("a", { href: r.keyUrl, target: "_blank", rel: "noopener noreferrer", text: "Make a key" }), "."),
-          r.key?.saved ? h("span", { class: "chip good", text: "Key saved" }) : keyBox(r, "Paste your OpenRouter key"))),
+          h("p", { text: "Sign in once on OpenRouter: no key to copy. One account for many makers; models ending in :free cost nothing." }),
+          r.key?.saved ? h("span", { class: "chip good", text: "Connected" }) : h("div", { class: "keyrow" },
+            runButton("Connect OpenRouter", connectOpenRouter, "btn primary"),
+            h("p", { class: "fine" }, "or paste a key (", h("a", { href: r.keyUrl, target: "_blank", rel: "noopener noreferrer", text: "make one" }), "):"),
+            keyBox(r, "Paste your OpenRouter key")))),
       h("p", { class: "more" }, "Have an OpenAI, Anthropic, DeepSeek, xAI or Mistral key? ", h("button", { class: "btn small", text: "Add it in Settings", onclick: () => setTab("settings") })));
   }
 
@@ -1293,6 +1297,40 @@
     } catch (e) { t.close(); throw e; }
   }
 
+  // Sign in on OpenRouter's page instead of pasting a key. The button becomes its Stop while
+  // Leanfare waits for you to press Authorize there; Stop forgets the attempt.
+  const pause = (ms, signal) => new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => { clearTimeout(timer); reject(Object.assign(new Error("Stopped"), { name: "AbortError" })); }, { once: true });
+  });
+  async function connectOpenRouter(signal) {
+    const t = toast("Opening OpenRouter in your browser…");
+    try {
+      const s = await api("/api/connect/openrouter/start", { body: {}, signal });
+      const open = () => window.open(s.url, "_blank", "noopener,noreferrer");
+      open();
+      t.set("Sign in on OpenRouter and press Authorize. Leanfare connects by itself when you do.", "progress", { action: { label: "Open it again", keep: true, run: open } });
+      const until = Date.now() + s.expiresIn * 1000;
+      while (Date.now() < until) {
+        await pause(1500, signal);
+        const r = await api("/api/connect/openrouter/status", { signal });
+        if (r.status === "connected") {
+          S.st = r.state;
+          renderShell(); renderSettings(); renderComposerBar(); if (!S.messages.length) renderMessages();
+          t.set(r.message, "done");
+          return;
+        }
+        if (r.status === "failed") { t.set(r.message, "error"); return; }
+        if (r.status === "idle") { t.set("Leanfare lost track of the sign in (it may have restarted). Press Connect OpenRouter to start again.", "error"); return; }
+      }
+      t.set("The sign in was not finished within 10 minutes. Press Connect OpenRouter to start again.", "error");
+    } catch (e) {
+      t.close();
+      if (e?.name === "AbortError") api("/api/connect/openrouter/cancel", { body: {} }).catch(() => {});
+      throw e;
+    }
+  }
+
   async function removeKey(p) {
     const t = toast(`Removing the ${p.name} key…`);
     try {
@@ -1384,6 +1422,9 @@
           h("span", { class: "grow" }),
           p.key.where === "environment" ? null : h("button", { class: "btn small", text: "Remove key", onclick: () => removeKey(p) })));
       }
+      if (p.id === "openrouter") body.append(h("div", { class: "row" },
+        runButton(p.key.saved ? "Connect again" : "Connect OpenRouter", connectOpenRouter, "btn primary"),
+        h("span", { class: "note grow", text: "Sign in on OpenRouter's page; Leanfare gets a key by itself. Or paste one:" })));
       const input = h("input", { type: "password", placeholder: p.key.saved ? `Paste a new ${p.name} key to replace it` : `Paste your ${p.name} key`, autocomplete: "off", "data-keep": p.id, "aria-label": `${p.name} key` });
       body.append(h("div", { class: "row" }, input, runButton("Test and save", (signal) => saveKey(p, input, signal), "btn primary"),
         h("a", { class: "btn quiet", href: p.keyUrl, target: "_blank", rel: "noopener noreferrer", text: "Get a key ↗" })));
@@ -1402,6 +1443,7 @@
       body.append(h("div", { class: "row" },
         h("span", { class: "note grow", text: l?.state === "ok" ? `${ms.length} models from OpenRouter's own list, updated ${ago(l.at)}.` : l?.state === "failed" ? `The model list did not load: tried ${l.tried}: ${l.error}.` : "The model list loads when you save a key." }),
         runButton("Update list", (signal) => refreshList("openrouter", signal))));
+      if (p.key?.saved) body.append(h("div", { class: "note", text: `${p.credit ? `Credit left on OpenRouter: ${money(p.credit.remaining)} of ${money(p.credit.purchased)} bought. ` : ""}OpenRouter may expire unused credits a year after purchase (its terms, section 4.2).` }));
     }
     if (p.needsKey || p.id === "ollama") body.append(h("label", { class: "check" }, h("input", { type: "checkbox", checked: p.on, onchange: (e) => patchProvider(p.id, { on: e.target.checked }) }), `Use ${p.name}`));
     if (ms.length) {
