@@ -2,7 +2,8 @@
 // never reach the internet and every token count is known in advance.
 //
 // Each provider lives under its own path: /openai/v1, /anthropic, /google/v1beta/openai,
-// /openrouter/api/v1, /deepseek, /xai/v1, /mistral/v1, /ollama/v1 (and /ollama/api/tags).
+// /openrouter/api/v1, /deepseek, /xai/v1, /mistral/v1, /ollama/v1 (and Ollama's own /ollama/api/tags,
+// /api/ps, /api/pull, /api/delete: see the `ollama` switches below).
 // A message can steer the answer:
 //   [usage 2000 500]        report exactly 2,000 input and 500 output tokens
 //   [cached 1500]           of the input, 1,500 came from the cache
@@ -73,6 +74,26 @@ export function startFake() {
   // one time code; /openrouter/api/v1/auth/keys trades the code for a key and checks the PKCE proof
   // (the verifier must hash to the challenge). The switches steer the unhappy paths.
   const oauth = { n: 0, codes: new Map<string, { challenge: string; method: string; expired: boolean }>(), expireNext: false, deny: false, failExchange: 0, failMessage: "fake failure", badKey: false, credits: true };
+  // Ollama's own addresses: what is installed and loaded, a download that streams its progress as
+  // JSON lines (and can fail, be cut off or be held for a Stop), and a removal. Sizes are bytes.
+  const GB = 1e9;
+  const llama = () => ({ name: "llama3.2:latest", model: "llama3.2:latest", modified_at: "2026-10-01T00:00:00Z", size: 2_019_393_189, digest: "a80c4f17acd5", details: { family: "llama", parameter_size: "3.2B", quantization_level: "Q4_K_M" } });
+  const ollama = {
+    models: [llama()] as any[], loaded: [] as string[], down: false,
+    library: { "tiny:1b": 1 * GB, "gemma3:12b": 8.1 * GB, "gemma3:27b": 17.4 * GB, "hf.co/acme/small-GGUF:Q4_K_M": 4.4 * GB } as Record<string, number>,
+    steps: 8, gap: 10,
+    error: null as string | null, // a line {"error": ...} after errorAfter steps
+    errorAfter: 3,
+    http: 0, httpMessage: "", // answer the pull with this HTTP status
+    cut: false, // close the stream after errorAfter steps, with no success line
+    holding: false, // wait after errorAfter steps until released (or aborted)
+    deleteStatus: 0,
+    partial: {} as Record<string, number>, // bytes already there for a name (kept when a pull is stopped)
+    pulls: 0,
+    reset() {
+      Object.assign(this, { models: [llama()], loaded: [], down: false, steps: 8, gap: 10, error: null, errorAfter: 3, http: 0, httpMessage: "", cut: false, holding: false, deleteStatus: 0, partial: {}, pulls: 0 });
+    },
+  };
   let dataJson: any = null;
   let dataStatus = 200;
   const server = Bun.serve({
@@ -83,7 +104,7 @@ export function startFake() {
       srv.timeout(req, 0);
       const url = new URL(req.url);
       const provider = url.pathname.split("/")[1];
-      const body = req.method === "POST" ? await req.json().catch(() => null) : null;
+      const body = req.method === "POST" || req.method === "DELETE" ? await req.json().catch(() => null) : null;
       const auth = req.headers.get("authorization")?.replace(/^Bearer /, "") ?? req.headers.get("x-api-key");
       const headers: Record<string, string> = {};
       req.headers.forEach((v, k) => { if (k !== "authorization" && k !== "x-api-key") headers[k] = v; });
@@ -121,7 +142,54 @@ export function startFake() {
         return Response.json({ data: { total_credits: 10, total_usage: 2.5 } });
       }
       if (url.pathname === "/data.json") return dataStatus === 200 && dataJson ? Response.json(dataJson) : new Response("down", { status: dataStatus });
-      if (provider === "ollama" && url.pathname.endsWith("/api/tags")) return Response.json({ models: [{ name: "llama3.2:latest", modified_at: "2026-10-01T00:00:00Z" }] });
+      if (provider === "ollama" && url.pathname.endsWith("/api/tags")) return ollama.down ? new Response("not running", { status: 500 }) : Response.json({ models: ollama.models });
+      if (provider === "ollama" && url.pathname === "/ollama/api/ps") return Response.json({ models: ollama.loaded.map((name) => ({ name, model: name, size: ollama.models.find((m) => m.name === name)?.size ?? 0, size_vram: 0, expires_at: "2026-10-22T12:00:00Z" })) });
+      if (provider === "ollama" && url.pathname === "/ollama/api/delete" && req.method === "DELETE") {
+        if (ollama.deleteStatus) return Response.json({ error: "fake delete failure" }, { status: ollama.deleteStatus });
+        const name = String(body?.model ?? body?.name ?? "");
+        if (!ollama.models.some((m) => m.name === name)) return Response.json({ error: `model '${name}' not found` }, { status: 404 });
+        ollama.models = ollama.models.filter((m) => m.name !== name);
+        ollama.loaded = ollama.loaded.filter((n) => n !== name);
+        return new Response(null, { status: 200 });
+      }
+      if (provider === "ollama" && url.pathname === "/ollama/api/pull" && req.method === "POST") {
+        ollama.pulls++;
+        if (ollama.http) return Response.json({ error: ollama.httpMessage }, { status: ollama.http });
+        const name = String(body?.model ?? body?.name ?? "");
+        const size = ollama.library[name];
+        const enc = new TextEncoder();
+        return new Response(new ReadableStream({
+          async start(c) {
+            const send = (o: any) => { try { c.enqueue(enc.encode(JSON.stringify(o) + "\n")); } catch {} };
+            send({ status: "pulling manifest" });
+            if (!size) { send({ error: "pull model manifest: file does not exist" }); c.close(); return; }
+            const digest = `sha256:${Buffer.from(name).toString("hex").slice(0, 24)}`;
+            const from = Math.min(ollama.partial[name] ?? 0, size);
+            for (let i = 1; i <= ollama.steps; i++) {
+              const done = Math.max(from, Math.floor((size * i) / ollama.steps));
+              if (rec.aborted) { ollama.partial[name] = done; try { c.close(); } catch {} return; }
+              send({ status: `pulling ${digest.slice(7, 19)}`, digest, total: size, completed: done });
+              ollama.partial[name] = done;
+              if (i === ollama.errorAfter) {
+                if (ollama.error) { send({ error: ollama.error }); c.close(); return; }
+                if (ollama.cut) { c.close(); return; }
+                while (ollama.holding && !rec.aborted) await Bun.sleep(10);
+              }
+              await Bun.sleep(ollama.gap);
+            }
+            send({ status: "pulling 4f1a8b2c9d0e", digest: "sha256:4f1a8b2c9d0e", total: 487, completed: 487 });
+            send({ status: "verifying sha256 digest" });
+            send({ status: "writing manifest" });
+            send({ status: "success" });
+            delete ollama.partial[name];
+            if (!ollama.models.some((m) => m.name === name || m.name === `${name}:latest`)) {
+              const full = /[:@]/.test(name.replace(/^hf\.co\//, "")) ? name : `${name}:latest`;
+              ollama.models = [...ollama.models, { name: full, model: full, modified_at: "2026-10-22T00:00:00Z", size, digest: "fakedigest00", details: { family: "fake", parameter_size: "?", quantization_level: "Q4_K_M" } }];
+            }
+            c.close();
+          },
+        }), { headers: { "content-type": "application/x-ndjson" } });
+      }
 
       const keyOk = provider === "ollama" || auth === KEYS[provider] || (provider === "openrouter" && auth === OAUTH_KEY);
       if (url.pathname.endsWith("/models") || url.pathname.endsWith("/key") || url.pathname.includes("/v1/models")) {
@@ -237,7 +305,7 @@ export function startFake() {
     deepseek: `${base}/deepseek`, xai: `${base}/xai/v1`, mistral: `${base}/mistral/v1`, ollama: `${base}/ollama/v1`,
   };
   return {
-    server, base, bases, seen, oauth,
+    server, base, bases, seen, oauth, ollama,
     setData(j: any, status = 200) { dataJson = j; dataStatus = status; },
     pointEnv() { for (const [id, b] of Object.entries(bases)) process.env[`LEANFARE_${id.toUpperCase()}_BASE`] = b; },
   };

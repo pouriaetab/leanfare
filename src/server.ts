@@ -12,6 +12,7 @@ import { allKeys, getKey, keyWhere, keychainNote, removeKey, saveKey, storeName 
 import { MAX_INSTRUCTIONS, MODES, saveSettings, settings, validatePatch } from "./settings";
 import { budgetState } from "./budget";
 import * as connect from "./connect";
+import * as local from "./local";
 import { retirementNotices } from "./retire";
 import { savings } from "./savings";
 import { checkKey, effortLevels, UserError } from "./upstream";
@@ -115,6 +116,7 @@ export function state() {
     },
     pause: pauseState(),
     running: runningList(),
+    local: { pull: local.pullView() },
     keyStore: storeName(),
     keychainNote: keychainNote(),
     lock: { on: locked(), key: s.accessKey },
@@ -381,6 +383,18 @@ async function api(req: Request, url: URL): Promise<Response> {
     return json(st.status === "connected" ? { ...st, state: state() } : st);
   }
   if (p === "/api/connect/openrouter/cancel" && m === "POST") { connect.cancel(); return json({ ok: true }); }
+  // Local models (see local.ts): what Ollama has, removing one, and a download that goes on
+  // in the background while the page polls its progress.
+  if (p === "/api/local" && m === "GET") return json(await local.overview());
+  if (p === "/api/local/pull" && m === "GET") return json({ pull: local.pullView() });
+  if (p === "/api/local/pull" && m === "POST") { const b = await readBody(req); return json({ pull: await local.startPull(b.name, b.sizeBytes) }); }
+  if (p === "/api/local/pull/stop" && m === "POST") { local.stopPull(); return json({ pull: local.pullView() }); }
+  if (p === "/api/local/pull/dismiss" && m === "POST") { local.dismissPull(); return json({ pull: null }); }
+  if (p === "/api/local/delete" && m === "POST") {
+    const b = await readBody(req);
+    const r = await local.remove(typeof b.name === "string" ? b.name : "");
+    return json({ ok: true, ...r, state: state() });
+  }
   const keyMatch = /^\/api\/keys\/([a-z]+)(\/restore)?$/.exec(p);
   if (keyMatch) {
     const def = provider(keyMatch[1]);
