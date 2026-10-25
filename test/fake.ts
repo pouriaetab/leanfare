@@ -11,12 +11,14 @@
 //   [nousage]               report no token counts at all
 //   [slow 3000]             wait 3 seconds before answering
 //   [chunks 40]             stream the answer in 40 pieces, 50 ms apart
-//   [fail 429]              answer with this HTTP status
+//   [fail 429]              answer with this HTTP status ([fail@xai 400]: only that provider; [slow@...] too)
 //   [think]                 think first ("Let me think."), in each provider's own way
 //   [empty] [empty1]        answer nothing (always, or only the first time this prompt is seen)
 //   [cut1]                  the first time: stop sending after one piece, with no end marker
 //   [thinkall1]             the first time: only think, and stop at the answer limit
 //   [filter]                decline (finish_reason content_filter), with no text
+//   [reply@xai FAIL: x]     answer with this text, only when the request goes to that provider
+//                           ([reply PASS] for any provider; the one for the provider wins)
 import { createHash } from "node:crypto";
 
 // The key OpenRouter's sign in hands out. It works on the fake like the paste key does.
@@ -55,10 +57,23 @@ const MARKDOWN = [
 
 export interface Seen { provider: string; path: string; method: string; auth: string | null; body: any; aborted: boolean; headers: Record<string, string> }
 
-const directive = (text: string, name: string) => {
-  const m = new RegExp(`\\[${name}(?: ([\\d ]+))?\\]`).exec(text);
-  return m ? (m[1] ?? "").trim().split(/\s+/).filter(Boolean).map(Number) : null;
+// [name 1 2], or [name@provider 1 2] for one provider only.
+const directive = (text: string, name: string, provider?: string) => {
+  for (const m of text.matchAll(new RegExp(`\\[${name}(?:@(\\w+))?(?: ([\\d ]+))?\\]`, "g"))) {
+    if (m[1] && m[1] !== provider) continue;
+    return (m[2] ?? "").trim().split(/\s+/).filter(Boolean).map(Number);
+  }
+  return null;
 };
+
+function replyFor(text: string, provider: string): string | null {
+  let any: string | null = null;
+  for (const m of text.matchAll(/\[reply(?:@(\w+))? ([^\]]*)\]/g)) {
+    if (m[1] === provider) return m[2];
+    if (!m[1] && any === null) any = m[2];
+  }
+  return any;
+}
 
 function promptText(body: any): string {
   const parts: string[] = [];
@@ -206,9 +221,9 @@ export function startFake() {
       if (!keyOk) return Response.json({ error: { message: "wrong key for this provider" } }, { status: 401 });
 
       const text = promptText(body);
-      const fail = directive(text, "fail");
+      const fail = directive(text, "fail", provider);
       if (fail?.[0]) return Response.json({ error: { message: `fake failure ${fail[0]}` } }, { status: fail[0] });
-      const slow = directive(text, "slow");
+      const slow = directive(text, "slow", provider);
       if (slow?.[0]) await Bun.sleep(slow[0]);
       const u = directive(text, "usage");
       const inTok = u?.[0] ?? Math.ceil(text.length / 4);
@@ -226,7 +241,7 @@ export function startFake() {
       const empty = text.includes("[empty]") || (text.includes("[empty1]") && firstTime) || thinkAll || filtered;
       const cut = text.includes("[cut1]") && firstTime;
       if (thinkAll) capped = true; // it stopped at the limit
-      const answer = empty ? "" : text.includes("[md]") ? MARKDOWN : `Hello from ${body?.model ?? "?"}.`;
+      const answer = empty ? "" : replyFor(text, provider) ?? (text.includes("[md]") ? MARKDOWN : `Hello from ${body?.model ?? "?"}.`);
       const stopReason = filtered ? "refusal" : capped ? "max_tokens" : "end_turn";
       const finishReason = filtered ? "content_filter" : capped ? "length" : "stop";
       const think = text.includes("[think]") || thinkAll ? "Let me think." : "";

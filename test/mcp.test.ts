@@ -1,6 +1,9 @@
 // leanfare mcp, the real command over stdio, against the test server: both eras
 // of the protocol, and every tool.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ALL_TICKED, boot, keys, ledger, reset } from "./app";
 
 let url = "";
@@ -50,7 +53,7 @@ describe("the protocol", () => {
     const unknown = await rpc("initialize", { protocolVersion: "2019-01-01", capabilities: {} });
     expect(unknown.result.protocolVersion).toBe("2025-11-25");
     const list = await rpc("tools/list", {});
-    expect(list.result.tools.map((t: any) => t.name)).toEqual(["ask", "spend", "models", "estimate"]);
+    expect(list.result.tools.map((t: any) => t.name)).toEqual(["ask", "delegate", "spend", "models", "estimate"]);
     expect(list.result.resultType).toBeUndefined();
   });
 
@@ -60,7 +63,7 @@ describe("the protocol", () => {
     expect(d.result._meta["io.modelcontextprotocol/serverInfo"].name).toBe("leanfare");
     const list = await rpc("tools/list", modern());
     expect(list.result.resultType).toBe("complete");
-    expect(list.result.tools).toHaveLength(4);
+    expect(list.result.tools).toHaveLength(5);
     for (const t of list.result.tools) expect(t.inputSchema.type).toBe("object");
   });
 
@@ -108,6 +111,30 @@ describe("the tools", () => {
     expect(ledger()).toHaveLength(1); // estimating sends nothing
   });
 
+  test("delegate: the door reads the files itself, and the answer comes back with its receipt", async () => {
+    await keys("openai", "anthropic", "google", "deepseek", "xai", "mistral");
+    const folder = mkdtempSync(join(tmpdir(), "leanfare-door-"));
+    try {
+      mkdirSync(join(folder, "logs"));
+      writeFileSync(join(folder, "logs", "app.log"), "10:00 start\n10:01 error: disk full\n");
+      const r = await rpc("tools/call", modern({ name: "delegate", arguments: { task: "List the errors.", files: ["logs/app.log"], folder, kind: "read", effort: "low", check: "never" } }));
+      expect(r.result.isError).toBeUndefined();
+      const [answer, receipt] = r.result.content[0].text.split("\n\n");
+      expect(answer).toBe("Hello from deepseek-v4-flash.");
+      expect(receipt).toMatch(/^\(Leanfare delegate: DeepSeek V4 Flash, \$[\d.e-]+\. About 9 tokens of files stayed out of your context; this answer is about 8\.\)$/);
+      expect(r.result.structuredContent).toMatchObject({ answer: "Hello from deepseek-v4-flash.", model: "deepseek/deepseek-v4-flash", task: "longer_query", effort: "low", check: null, first: null, tokens: { files: 9, answer: 8 }, cut: false });
+      expect(ledger().map((l) => l.source)).toEqual(["delegate"]);
+      // A file that holds secrets never leaves the computer, and nothing is sent.
+      writeFileSync(join(folder, ".env"), "OPENAI_API_KEY=sk-real");
+      const refused = await rpc("tools/call", { name: "delegate", arguments: { task: "Check the settings.", files: [".env"], folder } });
+      expect(refused.result.isError).toBe(true);
+      expect(refused.result.content[0].text).toBe(".env was not read: files like it hold secrets (keys, passwords or tokens). Leanfare never hands those to a model.");
+      expect(ledger()).toHaveLength(1);
+      const noTask = await rpc("tools/call", { name: "delegate", arguments: { files: ["logs/app.log"], folder } });
+      expect(noTask.result).toMatchObject({ isError: true, content: [{ text: "delegate needs a task." }] });
+    } finally { rmSync(folder, { recursive: true, force: true }); }
+  });
+
   test("works while Leanfare is locked (the door uses the control token)", async () => {
     await keys("openai");
     await fetch(`${url}/api/lock`, { method: "POST", headers: { "x-leanfare": "1", "content-type": "application/json" }, body: JSON.stringify({ on: true }) });
@@ -131,6 +158,6 @@ describe("the end of the input", () => {
     expect((await run('{"jsonrpc":"2.0","id":1,"method":"ping"}')).map((m) => m.id)).toEqual([1]);
     const two = await run('{"jsonrpc":"2.0","id":1,"method":"ping"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}');
     expect(two.map((m) => m.id)).toEqual([1, 2]);
-    expect(two[1].result.tools).toHaveLength(4);
+    expect(two[1].result.tools).toHaveLength(5);
   }, 20000);
 });

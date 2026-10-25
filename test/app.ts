@@ -33,7 +33,7 @@ export async function reset(patch: Partial<Settings> = {}) {
   stopRunning();
   setPaused(false);
   setNow("2026-10-21T12:00:00Z");
-  db.exec("DELETE FROM ledger; DELETE FROM messages; DELETE FROM chats; DELETE FROM settings; DELETE FROM files;");
+  db.exec("DELETE FROM ledger; DELETE FROM messages; DELETE FROM chats; DELETE FROM settings; DELETE FROM files; DELETE FROM delegations;");
   resetSettingsCache();
   resetBudget();
   forgetHistoryCache();
