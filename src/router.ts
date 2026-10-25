@@ -96,8 +96,9 @@ export function estimateFor(m: Model, inTokens: number, outTokens: number): numb
 const fmtUsd = (v: number | null) => (v === null ? "no listed price" : v === 0 ? "$0" : v < 0.0001 ? "under $0.0001" : `$${v < 0.01 ? v.toPrecision(2) : v.toFixed(v < 1 ? 3 : 2)}`);
 
 // The best value pick. `usable` is the set of ticked models whose provider is ready.
-export function pickModel(messages: Msg[], usable: Model[], mode: Mode, history: (task: string, model: string | null) => number | null, system?: unknown): Pick | null {
-  const guess = guessTask(messages);
+// `forced` is a task the caller already knows (the delegate's kind), instead of the guess.
+export function pickModel(messages: Msg[], usable: Model[], mode: Mode, history: (task: string, model: string | null) => number | null, system?: unknown, forced?: Guess): Pick | null {
+  const guess = forced ?? guessTask(messages);
   const inTok = promptTokens(messages as any, system);
   const day = localDay();
   const live = usable.filter((m) => !isRetired(m, day));
