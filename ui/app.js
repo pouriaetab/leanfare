@@ -1222,21 +1222,58 @@
   const bigTok = (n) => (n >= 1e9 ? (n / 1e9).toFixed(1) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : tok(n));
   async function loadPlans(force, signal) {
     const month = S.savings?.month ?? S.month;
-    const r = await api(`/api/plans?${month ? `month=${month}&` : ""}${force ? "refresh=1" : ""}`, { signal });
+    // The plan meter is about now, whatever month is picked; a meter that fails does not hold up the card.
+    const [r, meter] = await Promise.all([
+      api(`/api/plans?${month ? `month=${month}&` : ""}${force ? "refresh=1" : ""}`, { signal }),
+      api("/api/meter", { signal }).catch(() => null),
+    ]);
     if (month && S.savings && S.savings.month !== month) return; // the month was changed meanwhile
     S.plans = r;
+    S.meter = meter;
     const old = $("#plansCard");
     if (old) old.replaceWith(plansCardEl());
   }
 
+  // The plan meter: the plan's two windows, what is left of each in work, and what still fits.
+  function meterBlock(m) {
+    if (!m || (!m.windows.length && !m.projects.length)) return null;
+    const when = (iso) => new Date(iso).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
+    const rows = m.windows.map((w) => h("div", { class: "mt-row" },
+      h("span", { class: "n", text: w.kind === "week" ? "This week" : "5 hours" }),
+      h("span", { class: "track" + (w.used >= 90 ? " hot" : "") }, h("i", { style: { width: Math.min(100, w.used) + "%" } })),
+      h("span", { class: "v", text: `${Math.round(w.used)}% used${w.resets ? ` · resets ${when(w.resets)}` : ""}` }),
+      w.left !== null ? h("span", { class: "sub", text: `about ${money(w.left)} of work left${w.leftLo !== null && w.leftHi !== null ? ` (${money(w.leftLo)} to ${money(w.leftHi)})` : ""}${w.tokensLeft ? `, about ${bigTok(w.tokensLeft)} tokens at your recent mix` : ""} · ${w.from === "starting estimate" ? "a starting estimate" : `measured from ${w.windows} windows`}` }) : null));
+    const fits = m.projects.filter((p) => p.sessionsLeft !== null).slice(0, 5).map((p) => h("li", { text: `${p.name}: ${p.sessionsLeft >= 1 ? `about ${Math.floor(p.sessionsLeft)} session${Math.floor(p.sessionsLeft) === 1 ? "" : "s"}` : "under 1 session"}${p.pctOfWeek !== null ? ` (a session is about ${p.pctOfWeek < 1 ? p.pctOfWeek.toFixed(1) : Math.round(p.pctOfWeek)}% of the week)` : ""}` }));
+    return h("div", { class: "meter" },
+      h("div", { class: "mt-head", text: `Right now${m.at ? `, as of ${ago(m.at)}` : ""}` }),
+      ...rows,
+      fits.length ? h("div", { class: "mt-fits" }, h("b", { text: "What still fits" }), h("ul", {}, ...fits)) : null,
+      m.other ? h("p", { class: "pl-note", text: `About ${Math.round(m.other)}% of this week went to use the logs do not show (Claude chats, Cowork, the phone apps).` }) : null,
+      m.rough ? h("p", { class: "pl-note", text: "Max 5x was not measured by anyone yet, so this starts from a rough guess until your own windows replace it." }) : null);
+  }
+
+  function statuslineRow(st) {
+    if (st.broken) return h("p", { class: "pl-note", text: `Claude Code's settings file is not valid JSON, so Leanfare cannot add its line. Fix ${st.file} first.` });
+    return h("div", { class: "row mt-sl" },
+      h("span", { class: "grow", text: st.installed ? `Claude's 5 hour and weekly use come from Claude Code's status line${st.keeps ? " (your own line stays first)" : ""}.` : "Add your Claude plan to Claude Code's status line. Leanfare reads the two percentages there, never your words." }),
+      runButton(st.installed ? "Remove from the status line" : "Add to the status line", async (signal) => {
+        const r = await api("/api/meter/statusline", { body: { on: !st.installed }, signal });
+        S.meter = { ...(S.meter ?? {}), statusline: r.statusline };
+        toast(r.statusline.installed ? "Added. Claude Code shows it from its next update." : "Removed from Claude Code's status line.", "done");
+        const old = $("#plansCard");
+        if (old) old.replaceWith(plansCardEl());
+      }, "btn small"));
+  }
+
   function planBlock(v) {
+    const mb = meterBlock(S.meter?.[v.provider]);
     const head = v.plan
       ? h("div", { class: "pl-head" }, h("b", { text: v.plan.name }), h("span", { class: "grow" }), h("small", { text: `${money(v.plan.price)} a month` }))
       : h("div", { class: "pl-head" }, h("b", { text: v.logs }), h("span", { class: "grow" }), h("button", { class: "btn small", type: "button", text: "Enter your plan", onclick: () => setTab("settings") }));
-    if (!v.found) return h("div", { class: "pl" }, head, h("p", { class: "pl-note", text: `No ${v.logs} log files found on this computer.` }));
-    if (!v.tokens) return h("div", { class: "pl" }, head, h("p", { class: "pl-note", text: `No ${v.logs} use in this month's log files.` }));
+    if (!v.found) return h("div", { class: "pl" }, head, mb, h("p", { class: "pl-note", text: `No ${v.logs} log files found on this computer.` }));
+    if (!v.tokens) return h("div", { class: "pl" }, head, mb, h("p", { class: "pl-note", text: `No ${v.logs} use in this month's log files.` }));
     const maxV = Math.max(...v.models.map((m) => m.value ?? 0), 0);
-    return h("div", { class: "pl" }, head,
+    return h("div", { class: "pl" }, head, mb,
       h("div", { class: "pl-val" }, h("span", { class: "big", text: money(v.value) }), h("span", { class: "sub", text: "at API prices" }),
         v.ratio !== null ? h("span", { class: "chip " + (v.ratio >= 1 ? "good" : ""), text: `${v.ratio.toFixed(v.ratio >= 10 ? 0 : 1)}× what you pay` }) : null),
       h("div", { class: "sub", text: `${bigTok(v.tokens)} tokens in ${v.logs}: ${bigTok(v.input)} in, ${bigTok(v.cached)} from the cache, ${bigTok(v.output)} out` }),
@@ -1259,6 +1296,7 @@
       card.append(h("p", { class: "pl-note", text: "Enter your Claude or ChatGPT plan to see what your Claude Code and Codex use would cost at API prices, next to what you pay." }),
         h("div", { class: "row" }, h("button", { class: "btn small", type: "button", text: "Enter a plan", onclick: () => setTab("settings") })));
     } else card.append(h("div", { class: "pl-grid" }, ...shown.map(planBlock)));
+    if (S.meter?.statusline) card.append(statuslineRow(S.meter.statusline));
     card.append(h("p", { class: "fine", text: P.note }));
     return card;
   }

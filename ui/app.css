@@ -412,3 +412,16 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
   .cards6 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .sv-grid { grid-template-columns: 1fr 1fr; }
 }
+
+/* The plan meter */
+.meter { margin: .5rem 0 .75rem; padding: .6rem .7rem; border-radius: 10px; background: var(--panel-2); }
+.meter .mt-head { font-size: .8rem; color: var(--muted); margin-bottom: .35rem; }
+.meter .mt-row { display: grid; grid-template-columns: 5.5rem 1fr; gap: .15rem .6rem; align-items: center; margin: .35rem 0; }
+.meter .mt-row .track { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
+.meter .mt-row .track i { display: block; height: 100%; background: var(--accent); min-width: 2px; }
+.meter .mt-row .track.hot i { background: var(--warn); }
+.meter .mt-row .v, .meter .mt-row .sub { grid-column: 2; font-size: .82rem; }
+.meter .mt-row .sub { color: var(--muted); }
+.meter .mt-fits { margin-top: .4rem; font-size: .85rem; }
+.meter .mt-fits ul { margin: .2rem 0 0 1.1rem; padding: 0; }
+.mt-sl { margin: .5rem 0; font-size: .85rem; }
