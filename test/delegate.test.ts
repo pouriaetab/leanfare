@@ -7,6 +7,7 @@
 // 4.5 1456, Mistral Large 4 1450, GPT-5 mini 1440, DeepSeek V4 Flash 1438. For a short task,
 // low effort (Save more) picks DeepSeek, medium (Balanced) Grok, high (Best quality) Gemini.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +16,8 @@ import { DATA_DIR } from "../src/config";
 import { db } from "../src/db";
 import { CHANCE, checkDelegate, draw, filesBlock, taskFor, verdictOf, weightedPass, wilson } from "../src/delegate";
 import { DELEGATE_LIMITS, readForDelegate, secretReason, shownName, tilde } from "../src/readfiles";
+import { getModel } from "../src/data";
+import { runningList } from "../src/engine";
 import { ALL_TICKED, boot, fake, keys, ledger, reset, ui } from "./app";
 
 let url = "";
@@ -37,10 +40,13 @@ const ALL_KEYS = ["openai", "anthropic", "google", "deepseek", "xai", "mistral"]
 const LOG = { name: "app.log", text: "10:00 start\n10:01 error: disk full\n10:02 retry\n10:03 error: disk full again\n" };
 
 describe("the files the door reads", () => {
-  test("text files from the folder, named from it; one named twice is read once; file:// works", () => {
+  beforeAll(() => { // files more than one test reads, so each test stands on its own
     mkdirSync(join(dir, "src"), { recursive: true });
-    writeFileSync(join(dir, "src", "a.ts"), "﻿const a = 1;\n");
+    writeFileSync(join(dir, "src", "a.ts"), "\uFEFFconst a = 1;\n");
     writeFileSync(join(dir, "notes.md"), "# Notes\n");
+  });
+
+  test("text files from the folder, named from it; one named twice is read once; file:// works", () => {
     const got = readForDelegate(["src/a.ts", join(dir, "notes.md"), "./src/a.ts", pathToFileURL(join(dir, "notes.md")).href], dir);
     expect(got).toEqual([{ name: "src/a.ts", text: "const a = 1;\n" }, { name: "notes.md", text: "# Notes\n" }]);
     expect(readForDelegate(undefined)).toEqual([]);
@@ -80,6 +86,43 @@ describe("the files the door reads", () => {
     expect(secretReason("/home/x/.config/other/settings.json")).toBeNull();
   });
 
+  test("other AI tools' sign ins, token files and .env's kin are refused too", () => {
+    const more: Record<string, string> = {
+      ".claude/.credentials.json": '{"claudeAiOauth":{}}', ".codex/auth.json": "{}", ".cargo/credentials.toml": "[registry]",
+      "p/.envrc": "export A=1", "p/.env-production": "A=1", "p/.env_local": "A=1", "p/production.env": "A=1", "p/.dev.vars": "A=1",
+      "p/AuthKey_ABC123DEFG.p8": "x", "p/private.asc": "x", "p/serviceAccountKey.json": "{}", "p/client_secret_123.apps.googleusercontent.com.json": "{}",
+      "p/.yarnrc.yml": "npmAuthToken: x", "p/main.tfvars": "x", "p/.vault-token": "x",
+    };
+    for (const [rel, text] of Object.entries(more)) {
+      mkdirSync(join(dir, "more", rel, ".."), { recursive: true });
+      writeFileSync(join(dir, "more", rel), text);
+      expect(readForDelegate([join(dir, "more", rel)]) as string).toContain("was not read:");
+    }
+    writeFileSync(join(dir, "more", "p", "production.env.example"), "A=");
+    expect(readForDelegate(["production.env.example"], join(dir, "more", "p"))).toEqual([{ name: "production.env.example", text: "A=" }]);
+  });
+
+  test("names are compared without regard to case, as a Mac's disk does", () => {
+    mkdirSync(join(dir, "case", ".SSH"), { recursive: true });
+    writeFileSync(join(dir, "case", ".SSH", "config"), "Host x");
+    writeFileSync(join(dir, "case", "ID_RSA"), "-----BEGIN");
+    writeFileSync(join(dir, "case", "Server.PEM"), "-----BEGIN");
+    for (const f of [".SSH/config", "ID_RSA", "Server.PEM"]) expect(readForDelegate([f], join(dir, "case")) as string).toContain(`${f} was not read:`);
+    expect(secretReason(join(DATA_DIR.toUpperCase(), "keys.json"))).toBe("it is inside Leanfare's own folder, where its keys live");
+  });
+
+  test.skipIf(process.platform !== "linux")("a file that says it is empty but never ends is refused at once, not read to the end", () => {
+    const t0 = performance.now();
+    // Read up to the limit, or (where the system allows no reading of it) not opened at all.
+    expect(readForDelegate(["/proc/self/pagemap"]) as string).toMatch(/^\/proc\/self\/pagemap (is more than 2\.0 MB|could not be read)/);
+    expect(performance.now() - t0).toBeLessThan(2000);
+  });
+
+  test("a pipe is never opened, so nothing waits on it", () => {
+    execFileSync("mkfifo", [join(dir, "pipe")]);
+    expect(readForDelegate(["pipe"], dir)).toBe("pipe is not a plain file.");
+  });
+
   test("folders, missing files, binary files and anything too big are refused with a sentence", () => {
     mkdirSync(join(dir, "big"), { recursive: true });
     expect(readForDelegate(["big"], dir)).toBe(`big is a folder. Name the files in it instead (at most ${DELEGATE_LIMITS.count}).`);
@@ -87,7 +130,7 @@ describe("the files the door reads", () => {
     writeFileSync(join(dir, "big", "image.bin"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]));
     expect(readForDelegate(["big/image.bin"], dir)).toBe("big/image.bin is not a text file. delegate reads text files only.");
     writeFileSync(join(dir, "big", "huge.log"), "x".repeat(DELEGATE_LIMITS.file + 1));
-    expect(readForDelegate(["big/huge.log"], dir) as string).toMatch(/^big\/huge\.log is 2\.0 MB; delegate reads at most 2\.0 MB a file\. Hand over the part that matters/);
+    expect(readForDelegate(["big/huge.log"], dir) as string).toMatch(/^big\/huge\.log is more than 2\.0 MB; delegate reads at most 2\.0 MB a file\. Hand over the part that matters/);
     for (const n of [1, 2, 3]) writeFileSync(join(dir, "big", `part${n}.log`), "y".repeat(1.5 * 1024 * 1024));
     expect(readForDelegate(["big/part1.log", "big/part2.log", "big/part3.log"], dir)).toBe("These files add up to more than 4.0 MB, the most delegate reads at once. Hand over fewer of them.");
     expect(readForDelegate(Array.from({ length: 51 }, (_, i) => `f${i}.txt`), dir)).toBe("At most 50 files go with one task.");
@@ -136,6 +179,9 @@ describe("what the delegate works out before it sends", () => {
     expect(verdictOf("My verdict is PASS.")).toEqual({ verdict: "pass", why: "" });
     expect(verdictOf("I think it is mostly right")).toEqual({ verdict: "unclear", why: "" });
     expect(verdictOf("PASSWORD reset steps are listed")).toEqual({ verdict: "unclear", why: "" });
+    expect(verdictOf("This would not PASS a careful review. FAIL: it misses the second error.")).toEqual({ verdict: "fail", why: "it misses the second error" });
+    expect(verdictOf("Looking at it again, it does not PASS.")).toEqual({ verdict: "fail", why: "" });
+    expect(verdictOf("At first I thought FAIL, but the totals check out. PASS")).toEqual({ verdict: "pass", why: "" });
     expect(verdictOf("")).toEqual({ verdict: "unclear", why: "" });
   });
 
@@ -360,6 +406,70 @@ describe("handing a task over", () => {
     for (let i = 0; i < 100 && !delegations().length; i++) await Bun.sleep(20);
     expect(delegations()).toMatchObject([{ status: "stopped" }]);
     expect(sent("google")).toHaveLength(0); // no check after a stop
+  });
+
+  test("what a task cost counts every try: a first answer that came back empty and was asked again is in the total", async () => {
+    await keys(...ALL_KEYS);
+    const r = await delegate({ task: "Summarize the log. [empty1]", files: [LOG], kind: "read", effort: "low", check: "never" });
+    expect(r.status).toBe(200);
+    const charged = ledger().reduce((n, l) => n + l.cost, 0);
+    expect(ledger()).toHaveLength(2); // the empty try, then the answer
+    expect(r.json.total).toBeCloseTo(charged, 12);
+    expect(r.json.cost).toBeCloseTo(charged, 12);
+    expect((await ui(url, "/api/savings")).json.delegate.cost).toBeCloseTo(charged, 12);
+  });
+
+  test("stopped in Leanfare during the check: the answer already paid for still comes back", async () => {
+    await keys(...ALL_KEYS);
+    const going = delegate({ task: "Summarize. [slow@google 3000]", files: [LOG], kind: "read", effort: "low", check: "always" });
+    let id: string | undefined;
+    for (let i = 0; i < 300 && !id; i++) { await Bun.sleep(10); id = runningList().find((r) => r.label.startsWith("Delegate check"))?.id; }
+    expect(id).toBeTruthy();
+    await ui(url, "/api/running/stop", { id });
+    const r = await going;
+    expect(r.status).toBe(200);
+    expect(r.json.answer).toBe("Hello from deepseek-v4-flash.");
+    expect(r.json.check).toMatchObject({ verdict: "skipped", why: "the check was stopped in Leanfare" });
+    expect(r.json.receipt).toContain("Not checked: the check was stopped in Leanfare.");
+    const ck = ledger().find((l) => l.source === "check")!;
+    expect(delegations()[0].check_cost).toBeCloseTo(ck.cost, 12);
+  });
+
+  test("the caller gone during the check: the row still has what the check was charged", async () => {
+    await keys(...ALL_KEYS);
+    const ac = new AbortController();
+    const going = fetch(`${url}/api/delegate`, { method: "POST", headers: { "x-leanfare": "1", "content-type": "application/json" }, body: JSON.stringify({ task: "Summarize. [slow@google 3000] [chunks 40]", files: [LOG], effort: "low", check: "always" }), signal: ac.signal }).catch(() => null);
+    for (let i = 0; i < 200 && !sent("google").length; i++) await Bun.sleep(20);
+    await Bun.sleep(50);
+    ac.abort();
+    await going;
+    for (let i = 0; i < 100 && !delegations().length; i++) await Bun.sleep(20);
+    const ck = ledger().find((l) => l.source === "check");
+    expect(delegations()[0]).toMatchObject({ status: "stopped" });
+    expect(delegations()[0].check_cost ?? 0).toBe(ck ? ck.cost : 0); // on a slow computer the stop can come before the check
+  });
+
+  test("stronger models that cannot take the check's text: the receipt says that, not that none is stronger", async () => {
+    await keys(...ALL_KEYS);
+    for (const id of ALL_TICKED) if (id !== "deepseek/deepseek-v4-flash") getModel(id)!.context = 5000;
+    const big = { name: "big.log", text: "line of log text\n".repeat(200) };
+    const r = await delegate({ task: "Summarize the log.", files: [big], kind: "read", effort: "low", check: "always" });
+    expect(r.json.model.id).toBe("deepseek/deepseek-v4-flash");
+    expect(r.json.check.verdict).toBe("skipped");
+    expect(r.json.receipt).toMatch(/Not checked: the models rated above DeepSeek V4 Flash cannot take the check's text \(about [\d,]+ tokens\)\./);
+  });
+
+  test("after a failed check, the second try never goes past the budget, and never to a weaker model", async () => {
+    await reset({ ticked: ALL_TICKED.filter((id) => id !== "google/gemini-3.8-flash"), budget: 0.08, atLimit: "cheapest" });
+    await keys(...ALL_KEYS);
+    const r = await delegate({ task: "Find the cause. [reply@anthropic FAIL: wrong cause]", files: [LOG], kind: "reason", effort: "high" });
+    expect(r.status).toBe(200);
+    expect(r.json.model.id).toBe("xai/grok-4.20-beta"); // the first answer: Claude Sonnet 4.6's second try does not fit the budget
+    expect(r.json.first).toBeNull();
+    expect(r.json.check).toMatchObject({ verdict: "fail", checker: { id: "anthropic/claude-sonnet-4-6" } });
+    expect(r.json.rerunError).toContain("never goes past the budget");
+    expect(sent("deepseek")).toHaveLength(0);
+    expect(ledger().map((l) => l.source)).toEqual(["delegate", "check"]);
   });
 
   test("numbers only: neither the ledger nor the delegations table keeps the task or the files", async () => {

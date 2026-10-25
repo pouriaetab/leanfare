@@ -11,6 +11,8 @@
 // the model that answered, the cheapest within 15 points of the best of those. It answers
 // PASS or FAIL. A FAIL is asked again one tier up (Save more to Balanced, Balanced to Best
 // quality, among models rated above the first; from Best quality, the checker itself).
+// Neither the check nor the second try is sent past the budget, and what a task cost counts
+// every try the ledger charged. A check stopped in Leanfare still gives back the answer.
 //
 // Each task is written to the delegations table with the chance it had of being checked,
 // so pass rates can be weighted back to every task. No words are kept there or in the
@@ -112,15 +114,24 @@ export function doerSystem(numbered: boolean, write: boolean, hasFiles: boolean)
 
 export const CHECKER_SYSTEM = "You check another model's work. You get a task, the files that came with it, and the answer that was given. If the answer is correct and does what the task asks, reply PASS. Otherwise reply FAIL, then one short sentence on what is wrong or missing. Write nothing else.";
 
-// The checker's verdict: PASS or FAIL first (in any case, after any markdown), else a
-// PASS or FAIL in capitals near the start; anything else is unclear.
+// The checker's verdict: PASS or FAIL first (in any case, after any markdown). Failing
+// that, the last PASS or FAIL in capitals near the start, since a checker that thinks aloud
+// ends on its verdict; "not PASS" counts as a fail. Anything else is unclear.
 export function verdictOf(text: string): { verdict: "pass" | "fail" | "unclear"; why: string } {
   const t = text.replace(/[*_`#>"]/g, "").trim();
-  const m = /^(?:verdict\s*:\s*)?(pass|fail)(?:ed|es|s)?\b[\s.:,;!\-–—]*([\s\S]*)$/i.exec(t) ?? /\b(PASS|FAIL)\b[\s.:,;!\-–—]*([\s\S]*)$/.exec(t.slice(0, 600));
-  if (!m) return { verdict: "unclear", why: "" };
-  const verdict = m[1].toLowerCase() as "pass" | "fail";
-  const why = verdict === "fail" ? (m[2].split("\n").map((s) => s.trim()).find(Boolean) ?? "").slice(0, 300).replace(/[.!]+$/, "") : "";
-  return { verdict, why };
+  const reason = (rest: string) => (rest.replace(/^[\s.:,;!-]+/, "").split("\n").map((l) => l.trim()).find(Boolean) ?? "").slice(0, 300).replace(/[.!]+$/, "");
+  const head = /^(?:verdict\s*:\s*)?(pass|fail)(?:ed|es|s)?\b([\s\S]*)$/i.exec(t);
+  if (head) {
+    const verdict = head[1].toLowerCase() as "pass" | "fail";
+    return { verdict, why: verdict === "fail" ? reason(head[2]) : "" };
+  }
+  const near = t.slice(0, 600);
+  const last = [...near.matchAll(/\b(PASS|FAIL)\b/g)].at(-1);
+  if (!last) return { verdict: "unclear", why: "" };
+  const at = last.index!;
+  if (last[1] === "FAIL") return { verdict: "fail", why: reason(t.slice(at + 4)) };
+  if (/\b(not|never|cannot|can't|won't|wouldn't|would not|doesn't|does not|didn't|did not)\s+$/i.test(near.slice(Math.max(0, at - 20), at))) return { verdict: "fail", why: "" };
+  return { verdict: "pass", why: "" };
 }
 
 // Wilson's interval for a pass rate: it stays inside 0 to 100% and keeps its coverage with
@@ -212,71 +223,82 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   const fit = (chars: number, out: number) => { const need = Math.ceil(chars / 3) + out; return { need, ok: (m: Model) => m.context === null || m.context >= need }; };
   const tooMuch = (need: number) => `None of the models you ticked can take this much text (about ${num(need)} tokens with the answer). Hand over fewer or shorter files, or tick a model with a longer context.`;
   // Rated above the model that answered, for this task.
-  const strongerThan = (doer: Model, ok: (m: Model) => boolean) => {
+  const ratedAbove = (doer: Model) => {
     const r0 = rating(doer, guess.task);
-    return (m: Model) => { if (m.id === doer.id || !ok(m) || isRetired(m, day)) return false; const r = rating(m, guess.task); return r !== null && (r0 === null || r > r0); };
+    return (m: Model) => { if (m.id === doer.id || isRetired(m, day)) return false; const r = rating(m, guess.task); return r !== null && (r0 === null || r > r0); };
   };
+  // What a call was charged: every try of it (a first try asked again included), as the ledger has it.
+  const charged = (r: { meta: any; status: string }): number | null => (r.meta?.spent !== undefined ? r.meta.spent : r.meta?.cost ?? (r.status === "ok" ? null : 0));
   const run = async (msgs: Msg[], asked: string, label: string, opts: ChatOptions) => {
     let err: { message: string; status: number } | null = null;
     const r = await runChat(msgs, asked, signal, (e) => { if (e.type === "error") err = { message: e.message, status: e.status }; }, label, opts);
-    if (r.status === "stopped") throw new UserError(499, "Stopped.", "stopped");
-    return { ...r, error: (err as { message: string; status: number } | null) ?? (r.status === "error" ? { message: String(r.meta?.error ?? "The answer failed."), status: 502 } : null) };
+    const error = (err as { message: string; status: number } | null) ?? (r.status === "error" ? { message: String(r.meta?.error ?? "The answer failed."), status: 502 } : null);
+    return { ...r, cost: charged(r), error };
   };
+  const gone = () => signal.aborted; // the caller went away: there is nobody to answer
   const row = { task: guess.task, kind: input.kind, effort: input.effort, files: input.files.length, fileTokens };
   const none = { checker: null, verdict: null, checkCost: null, rerun: null, rerunCost: null };
 
   const doFit = fit(prompt.length + system.length, input.maxOut);
-  const first = await run(messages, `auto-${TIER[input.effort]}`, "Delegate", { system, source: "delegate", guess, only: doFit.ok, onlyWhy: tooMuch(doFit.need), effort: input.effort, maxOut: input.maxOut })
-    .catch((e) => { write({ ...row, ...none, model: null, cost: null, answerTokens: 0, status: e instanceof UserError && e.status === 499 ? "stopped" : "error", chance: 0 }); throw e; });
+  const first = await run(messages, `auto-${TIER[input.effort]}`, "Delegate", { system, source: "delegate", guess, only: doFit.ok, onlyWhy: tooMuch(doFit.need), effort: input.effort, maxOut: input.maxOut });
   if (first.status !== "ok") {
-    write({ ...row, ...none, model: first.meta?.model?.id ?? null, cost: first.meta?.cost ?? null, answerTokens: 0, status: "error", chance: 0 });
+    write({ ...row, ...none, model: first.meta?.model?.id ?? null, cost: first.cost, answerTokens: 0, status: first.status, chance: 0 });
+    if (first.status === "stopped") throw new UserError(499, gone() ? "Stopped." : "Stopped in Leanfare before it answered.", "stopped");
     throw new UserError(first.error!.status, first.error!.message, "delegate_failed");
   }
   const doer = getModel(first.meta.model.id) ?? null; // null only if the price list changed while it ran
   const chance = input.check === "always" ? 1 : input.check === "never" ? 0 : CHANCE[input.effort];
   const picked = chance >= 1 || (chance > 0 && draw.next() < chance);
   const check: DelegateCheck = { chance, picked, verdict: null, why: "", checker: null, cost: null };
-  const spent: (number | null)[] = [first.meta.cost ?? null]; // every call made for this task
+  const spent: (number | null)[] = [first.cost]; // every call made for this task
   let final = first;
   let firstUsed: DelegateResult["first"] = null;
   let rerunError: string | null = null;
   let rerunCost: number | null = null;
+  // The caller went away part way: the row keeps what was charged, and there is no answer to give.
+  const stopped = () => {
+    write({ ...row, model: first.meta.model.id, cost: first.cost, answerTokens: tokensOf(first.text.length), status: "stopped", chance, checker: check.checker?.id ?? null, verdict: null, checkCost: check.cost, rerun: null, rerunCost });
+    return new UserError(499, "Stopped.", "stopped");
+  };
 
-  try {
-    if (picked) {
-      const checkPrompt = `The task:\n${input.task}${block ? `\n\n${block}` : ""}\n\nThe answer to check:\n${first.text}`;
-      const ckFit = fit(checkPrompt.length + CHECKER_SYSTEM.length, CHECK_MAX_OUT);
-      const stronger = doer ? strongerThan(doer, ckFit.ok) : () => false;
-      if (!usableModels(stronger).length) {
+  if (picked) {
+    const checkPrompt = `The task:\n${input.task}${block ? `\n\n${block}` : ""}\n\nThe answer to check:\n${first.text}`;
+    const ckFit = fit(checkPrompt.length + CHECKER_SYSTEM.length, CHECK_MAX_OUT);
+    const above = doer ? ratedAbove(doer) : () => false;
+    const stronger = (m: Model) => above(m) && ckFit.ok(m);
+    if (!usableModels(above).length) {
+      check.verdict = "skipped";
+      check.why = doer ? `${doer.label} is the best rated model you ticked for this, so there is no stronger one to check it` : "the model that answered is no longer in Leanfare's price list";
+    } else if (!usableModels(stronger).length) {
+      check.verdict = "skipped";
+      check.why = `the models rated above ${doer!.label} cannot take the check's text (about ${num(ckFit.need)} tokens)`;
+    } else {
+      const c = await run([{ role: "user", content: checkPrompt }], "auto-best", "Delegate check", { system: CHECKER_SYSTEM, source: "check", guess, only: stronger, onlyWhy: tooMuch(ckFit.need), maxOut: CHECK_MAX_OUT, optional: true });
+      check.cost = c.cost;
+      spent.push(c.cost);
+      if (c.status === "stopped" && gone()) throw stopped();
+      if (c.status !== "ok") {
         check.verdict = "skipped";
-        check.why = doer ? `${doer.label} is the best rated model you ticked for this, so there is no stronger one to check it` : "the model that answered is no longer in Leanfare's price list";
+        check.why = c.status === "stopped" ? "the check was stopped in Leanfare" : `the check could not run (${c.error!.message.replace(/\.$/, "")})`;
       } else {
-        const c = await run([{ role: "user", content: checkPrompt }], "auto-best", "Delegate check", { system: CHECKER_SYSTEM, source: "check", guess, only: stronger, onlyWhy: tooMuch(ckFit.need), maxOut: CHECK_MAX_OUT, optional: true });
-        check.cost = c.meta?.cost ?? (c.status === "ok" ? null : 0);
-        spent.push(check.cost);
-        if (c.status !== "ok") {
-          check.verdict = "skipped";
-          check.why = `the check could not run (${c.error!.message.replace(/\.$/, "")})`;
-        } else {
-          const checker = who(c.meta.model);
-          const v = verdictOf(c.text);
-          check.verdict = v.verdict; check.why = v.why; check.checker = checker;
-          if (v.verdict === "fail") {
-            const up = UP[TIER[input.effort]];
-            const note = `\n\nA checker found a problem with an earlier answer to this task: ${(v.why || "it was judged wrong").replace(/[.!]?$/, ".")} Avoid it.`;
-            const againFit = fit(prompt.length + note.length + system.length, input.maxOut);
-            const again = await run([{ role: "user", content: prompt + note }], up ? `auto-${up}` : checker.id, "Delegate, asked again", { system, source: "delegate", guess, only: up ? strongerThan(doer!, againFit.ok) : undefined, onlyWhy: tooMuch(againFit.need), effort: input.effort, maxOut: input.maxOut });
-            rerunCost = again.meta?.cost ?? (again.status === "ok" ? null : 0);
-            spent.push(rerunCost);
-            if (again.status === "ok") { firstUsed = { model: who(first.meta.model), cost: first.meta.cost ?? null }; final = again; }
-            else rerunError = again.error!.message.replace(/\.$/, "");
-          }
+        const checker = who(c.meta.model);
+        const v = verdictOf(c.text);
+        check.verdict = v.verdict; check.why = v.why; check.checker = checker;
+        if (v.verdict === "fail") {
+          // One tier up, among the models rated above the first; from Best quality, the checker
+          // itself. Like the check, it never goes past the budget: the first answer is there.
+          const up = UP[TIER[input.effort]];
+          const note = `\n\nA checker found a problem with an earlier answer to this task: ${(v.why || "it was judged wrong").replace(/[.!]?$/, ".")} Avoid it.`;
+          const againFit = fit(prompt.length + note.length + system.length, input.maxOut);
+          const again = await run([{ role: "user", content: prompt + note }], up ? `auto-${up}` : checker.id, "Delegate, asked again", { system, source: "delegate", guess, only: (m: Model) => above(m) && againFit.ok(m), onlyWhy: tooMuch(againFit.need), effort: input.effort, maxOut: input.maxOut, optional: true });
+          rerunCost = again.cost;
+          spent.push(again.cost);
+          if (again.status === "stopped" && gone()) throw stopped();
+          if (again.status === "ok") { firstUsed = { model: who(first.meta.model), cost: first.cost }; final = again; }
+          else rerunError = again.status === "stopped" ? "it was stopped in Leanfare" : again.error!.message.replace(/\.$/, "");
         }
       }
     }
-  } catch (e) {
-    write({ ...row, model: first.meta.model.id, cost: first.meta.cost ?? null, answerTokens: tokensOf(first.text.length), status: e instanceof UserError && e.status === 499 ? "stopped" : "error", chance, checker: check.checker?.id ?? null, verdict: null, checkCost: check.cost, rerun: null, rerunCost });
-    throw e;
   }
 
   const model = who(final.meta.model);
@@ -284,7 +306,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   const result: Omit<DelegateResult, "receipt"> = {
     answer: final.text,
     model,
-    cost: final.meta.cost ?? null,
+    cost: final.cost,
     first: firstUsed,
     rerunError,
     total: add(...spent),
@@ -297,6 +319,6 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     tokens: { files: fileTokens, answer: answerTokens },
     cut: final.meta.finish === "length",
   };
-  write({ ...row, model: first.meta.model.id, cost: first.meta.cost ?? null, answerTokens, status: "ok", chance, checker: check.checker?.id ?? null, verdict: picked ? check.verdict : null, checkCost: check.cost, rerun: firstUsed ? model.id : null, rerunCost });
+  write({ ...row, model: first.meta.model.id, cost: first.cost, answerTokens, status: "ok", chance, checker: check.checker?.id ?? null, verdict: picked ? check.verdict : null, checkCost: check.cost, rerun: firstUsed ? model.id : null, rerunCost });
   return { ...result, receipt: receiptOf(result, input.maxOut) };
 }
