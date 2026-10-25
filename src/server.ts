@@ -11,6 +11,7 @@ import { db, lastRepair } from "./db";
 import { allKeys, getKey, keyWhere, keychainNote, removeKey, saveKey, storeName } from "./keys";
 import { MAX_INSTRUCTIONS, MODES, saveSettings, settings, validatePatch } from "./settings";
 import { budgetState } from "./budget";
+import * as connect from "./connect";
 import { retirementNotices } from "./retire";
 import { savings } from "./savings";
 import { checkKey, effortLevels, UserError } from "./upstream";
@@ -97,6 +98,7 @@ export function state() {
       ready: providerReady(p.id), on: s.providers[p.id]?.on !== false, free: !!s.providers[p.id]?.free,
       key: p.needsKey ? { saved: !!getKey(p.id), where: keyWhere(p.id), hint: keyHint(p.id), canUndo: (removedKeys.get(p.id)?.until ?? 0) > Date.now() } : null,
       list: p.id === "openrouter" ? store.status.openrouter : p.id === "ollama" ? store.status.ollama : null,
+      credit: p.id === "openrouter" && getKey("openrouter") ? connect.credit : null,
       base: baseOf(p.id),
     })),
     models: byProvider,
@@ -324,6 +326,18 @@ function tickTop(pid: ProviderId) {
   if (pick.length) saveSettings({ ticked: [...s.ticked, ...pick.map((m) => m.id)] });
 }
 
+// A key was saved, pasted or by signing in: switch the provider on, load
+// OpenRouter's list and balance, and tick the provider's short list.
+async function keySaved(id: ProviderId, signal?: AbortSignal) {
+  removedKeys.delete(id);
+  saveSettings({ providers: { ...settings().providers, [id]: { ...(settings().providers[id] ?? {}), on: true } } });
+  if (id === "openrouter") {
+    await refreshOpenRouter(signal);
+    await connect.refreshCredit(getKey("openrouter"), signal);
+  }
+  tickTop(id);
+}
+
 let refreshing: Partial<Record<string, AbortController>> = {};
 
 async function api(req: Request, url: URL): Promise<Response> {
@@ -356,13 +370,17 @@ async function api(req: Request, url: URL): Promise<Response> {
     const check = await checkKey(def.id, key, req.signal);
     if (!check.ok) return json({ ok: false, message: redact(check.message, [key]), state: state() }, 200);
     const where = await saveKey(def.id, key);
-    removedKeys.delete(def.id);
-    const ps = { ...settings().providers, [def.id]: { ...(settings().providers[def.id] ?? {}), on: true } };
-    saveSettings({ providers: ps });
-    if (def.id === "openrouter") await refreshOpenRouter(req.signal);
-    tickTop(def.id);
+    await keySaved(def.id, req.signal);
     return json({ ok: true, message: `${check.message} Saved in ${where === "keychain" ? "the macOS Keychain" : "a file only you can read"}.`, state: state() });
   }
+  // Sign in with OpenRouter instead of pasting a key (see connect.ts). The page
+  // starts it, opens the link in your browser, and asks for the outcome.
+  if (p === "/api/connect/openrouter/start" && m === "POST") return json(connect.start(serverPort));
+  if (p === "/api/connect/openrouter/status" && m === "GET") {
+    const st = connect.status();
+    return json(st.status === "connected" ? { ...st, state: state() } : st);
+  }
+  if (p === "/api/connect/openrouter/cancel" && m === "POST") { connect.cancel(); return json({ ok: true }); }
   const keyMatch = /^\/api\/keys\/([a-z]+)(\/restore)?$/.exec(p);
   if (keyMatch) {
     const def = provider(keyMatch[1]);
@@ -372,12 +390,14 @@ async function api(req: Request, url: URL): Promise<Response> {
       if (!r || r.until < Date.now()) return fail(410, "Too late to undo; paste the key again.");
       await saveKey(def.id, r.key);
       removedKeys.delete(def.id);
+      if (def.id === "openrouter") await connect.refreshCredit(r.key, req.signal);
       return json({ ok: true, state: state() });
     }
     if (m === "DELETE") {
       const old = getKey(def.id);
       if (old && keyWhere(def.id) !== "environment") removedKeys.set(def.id, { key: old, until: Date.now() + 30_000 });
       const env = await removeKey(def.id);
+      if (def.id === "openrouter") connect.forgetCredit();
       return json({ ok: true, env, state: state() });
     }
   }
@@ -487,6 +507,7 @@ async function api(req: Request, url: URL): Promise<Response> {
     refreshing[what] = ac;
     req.signal.addEventListener("abort", () => ac.abort(), { once: true });
     const st = what === "openrouter" ? await refreshOpenRouter(ac.signal) : what === "ollama" ? await refreshOllama(ac.signal) : await refreshCatalog(ac.signal);
+    if (what === "openrouter") await connect.refreshCredit(getKey("openrouter"), ac.signal);
     if (what === "ollama" && st.state === "ok") tickTop("ollama");
     return json({ status: st, state: state() });
   }
@@ -532,6 +553,15 @@ export async function handle(req: Request, server: { timeout(r: Request, s: numb
     return new Response(null, { status: 302, headers: { location: "/", "cache-control": "no-store", "referrer-policy": "no-referrer", ...(ok ? { "set-cookie": sessionCookie(settings().accessKey!) } : {}) } });
   }
 
+  // Where OpenRouter sends your browser after you press Authorize. It carries no
+  // page cookie (your browser may not be the Mac app), so it is allowed by the
+  // one use state that Leanfare gave out when you pressed Connect. The host
+  // check above still applies.
+  if (url.pathname === "/connect/openrouter/callback" && req.method === "GET") {
+    server?.timeout(req, 0); // trading the code, testing the key and loading the list wait on OpenRouter
+    return connectCallback(url);
+  }
+
   if (url.pathname.startsWith("/v1/")) {
     const cors = corsFor(origin);
     if (!ownOrigin && !cors["access-control-allow-origin"]) return json({ error: { message: `Leanfare does not answer web pages from ${origin}. Allow it in Settings if you trust it.`, type: "origin_not_allowed" } }, 403);
@@ -572,6 +602,31 @@ export async function handle(req: Request, server: { timeout(r: Request, s: numb
     }
   }
   return new Response("Not found", { status: 404 });
+}
+
+async function connectCallback(url: URL): Promise<Response> {
+  const got = await connect.finish(url.searchParams.get("code"), url.searchParams.get("state"));
+  if (!got.ok) return connectPage(false, got.message);
+  try {
+    const where = await saveKey("openrouter", got.key);
+    await keySaved("openrouter");
+    connect.record(true, `Connected to OpenRouter. The key is saved in ${where === "keychain" ? "the macOS Keychain" : "a file only you can read"}.`);
+  } catch (e: any) {
+    const message = `OpenRouter signed in, but Leanfare could not save the key: ${String(e?.message ?? e).slice(0, 160)}`;
+    connect.record(false, message);
+    return connectPage(false, message);
+  }
+  return connectPage(true, "You can close this tab.");
+}
+
+// The small page your browser lands on. Only fixed words and OpenRouter's error
+// text (escaped); nothing from the address is printed back.
+function connectPage(ok: boolean, message: string): Response {
+  const esc = (t: string) => t.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><title>Leanfare</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f6f7f7;color:#16191a}main{max-width:26rem;padding:2rem;text-align:center}h1{font-size:1.5rem;margin:0 0 .5rem}p{margin:0;color:#4a5356}@media(prefers-color-scheme:dark){body{background:#16191a;color:#f1f3f3}p{color:#b6bdbf}}</style></head>
+<body><main><h1>${ok ? "Connected." : "Not connected."}</h1><p>${esc(message)}</p></main></body></html>`;
+  return new Response(html, { status: ok ? 200 : 400, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": CSP, "x-content-type-options": "nosniff", "referrer-policy": "no-referrer" } });
 }
 
 function v1Models() {

@@ -10,6 +10,7 @@ import { resetBudget } from "../src/budget";
 import { forgetHistoryCache, setPaused, stopRunning } from "../src/engine";
 import { setNow } from "../src/util";
 import { KEYS, type startFake } from "./fake";
+import * as connect from "../src/connect";
 
 export const FIXTURE = new URL("./fixtures/catalog.json", import.meta.url).pathname;
 export const fake = (globalThis as any).__fake as ReturnType<typeof startFake>;
@@ -38,8 +39,11 @@ export async function reset(patch: Partial<Settings> = {}) {
   for (const f of [paths.catalog, paths.openrouter]) { try { unlinkSync(f); } catch {} }
   loadCatalog(FIXTURE);
   store.ollama = []; store.ollamaFound = false; store.openrouter = [];
+  connect.cancel(); connect.forgetCredit();
   for (const id of Object.keys(KEYS)) await removeKey(id as any);
   fake.seen.length = 0;
+  Object.assign(fake.oauth, { expireNext: false, deny: false, failExchange: 0, failMessage: "fake failure", badKey: false, credits: true });
+  fake.oauth.codes.clear();
   if (Object.keys(patch).length) saveSettings(patch);
 }
 

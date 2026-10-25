@@ -16,6 +16,11 @@
 //   [cut1]                  the first time: stop sending after one piece, with no end marker
 //   [thinkall1]             the first time: only think, and stop at the answer limit
 //   [filter]                decline (finish_reason content_filter), with no text
+import { createHash } from "node:crypto";
+
+// The key OpenRouter's sign in hands out. It works on the fake like the paste key does.
+export const OAUTH_KEY = "sk-or-test-oauth";
+
 export const KEYS: Record<string, string> = {
   openai: "sk-test-openai-0001", anthropic: "sk-ant-test-0002", google: "AIzaTestGoogleKey0000000000003", openrouter: "sk-or-test-0004",
   deepseek: "sk-test-deepseek-05", xai: "xai-test-key-000006", mistral: "test-mistral-key-07",
@@ -64,6 +69,10 @@ function promptText(body: any): string {
 export function startFake() {
   const seen: Seen[] = [];
   const onceSeen = new Set<string>();
+  // OpenRouter's sign in: /openrouter/auth shows the "Authorize" step and sends the browser back with a
+  // one time code; /openrouter/api/v1/auth/keys trades the code for a key and checks the PKCE proof
+  // (the verifier must hash to the challenge). The switches steer the unhappy paths.
+  const oauth = { n: 0, codes: new Map<string, { challenge: string; method: string; expired: boolean }>(), expireNext: false, deny: false, failExchange: 0, failMessage: "fake failure", badKey: false, credits: true };
   let dataJson: any = null;
   let dataStatus = 200;
   const server = Bun.serve({
@@ -82,10 +91,39 @@ export function startFake() {
       seen.push(rec);
       req.signal.addEventListener("abort", () => { rec.aborted = true; });
 
+      if (provider === "openrouter" && url.pathname === "/openrouter/auth" && req.method === "GET") {
+        const back = new URL(url.searchParams.get("callback_url") ?? "http://127.0.0.1:1/");
+        if (!oauth.deny) {
+          const code = `code-${++oauth.n}`;
+          oauth.codes.set(code, { challenge: url.searchParams.get("code_challenge") ?? "", method: url.searchParams.get("code_challenge_method") ?? "", expired: oauth.expireNext });
+          oauth.expireNext = false;
+          back.searchParams.set("code", code);
+          const st = url.searchParams.get("state");
+          if (st) back.searchParams.set("state", st);
+        }
+        return new Response(null, { status: 302, headers: { location: back.href } });
+      }
+      if (provider === "openrouter" && url.pathname === "/openrouter/api/v1/auth/keys") {
+        const no = (status: number, message: string) => Response.json({ error: { message } }, { status });
+        if (req.method !== "POST") return no(405, "Method Not Allowed");
+        if (oauth.failExchange) return no(oauth.failExchange, oauth.failMessage);
+        const c = oauth.codes.get(String(body?.code));
+        if (body?.code_challenge_method !== "S256" || (c && c.method !== "S256")) return no(400, "Invalid code_challenge_method");
+        if (!c) return no(403, "Invalid code or code_verifier");
+        if (c.expired) return no(403, "Authorization code expired");
+        if (createHash("sha256").update(String(body?.code_verifier ?? "")).digest("base64url") !== c.challenge) return no(403, "Invalid code or code_verifier");
+        oauth.codes.delete(String(body.code)); // single use
+        return Response.json({ key: oauth.badKey ? "sk-or-test-rejected" : OAUTH_KEY, user_id: "user_fake" });
+      }
+      if (provider === "openrouter" && url.pathname.endsWith("/credits")) {
+        if (auth !== KEYS.openrouter && auth !== OAUTH_KEY) return Response.json({ error: { message: "invalid key" } }, { status: 401 });
+        if (!oauth.credits) return Response.json({ error: { message: "this key cannot read credits" } }, { status: 403 });
+        return Response.json({ data: { total_credits: 10, total_usage: 2.5 } });
+      }
       if (url.pathname === "/data.json") return dataStatus === 200 && dataJson ? Response.json(dataJson) : new Response("down", { status: dataStatus });
       if (provider === "ollama" && url.pathname.endsWith("/api/tags")) return Response.json({ models: [{ name: "llama3.2:latest", modified_at: "2026-10-01T00:00:00Z" }] });
 
-      const keyOk = provider === "ollama" || auth === KEYS[provider];
+      const keyOk = provider === "ollama" || auth === KEYS[provider] || (provider === "openrouter" && auth === OAUTH_KEY);
       if (url.pathname.endsWith("/models") || url.pathname.endsWith("/key") || url.pathname.includes("/v1/models")) {
         if (provider === "openrouter" && url.pathname.endsWith("/models")) return Response.json({ data: [
           { id: "acme/acme-large", name: "Acme: Large", pricing: { prompt: "0.000001", completion: "0.000004" }, context_length: 100000, created: 1790000000, architecture: { input_modalities: ["text", "image"], output_modalities: ["text"] }, supported_parameters: ["tools", "reasoning"] },
@@ -199,7 +237,7 @@ export function startFake() {
     deepseek: `${base}/deepseek`, xai: `${base}/xai/v1`, mistral: `${base}/mistral/v1`, ollama: `${base}/ollama/v1`,
   };
   return {
-    server, base, bases, seen,
+    server, base, bases, seen, oauth,
     setData(j: any, status = 200) { dataJson = j; dataStatus = status; },
     pointEnv() { for (const [id, b] of Object.entries(bases)) process.env[`LEANFARE_${id.toUpperCase()}_BASE`] = b; },
   };
