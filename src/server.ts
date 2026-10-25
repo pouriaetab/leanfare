@@ -15,6 +15,7 @@ import * as connect from "./connect";
 import * as local from "./local";
 import { plansBrief, plansView } from "./plans";
 import { meterViews, setStatusline } from "./meter";
+import { checkDelegate, runDelegate } from "./delegate";
 import { retirementNotices } from "./retire";
 import { savings } from "./savings";
 import { checkKey, effortLevels, UserError } from "./upstream";
@@ -428,6 +429,12 @@ async function api(req: Request, url: URL): Promise<Response> {
     saveSettings({ providers: { ...settings().providers, [def.id]: next } });
     return json(state());
   }
+  // Claude's delegate (see delegate.ts): a task and its files, handed over by the MCP door.
+  if (p === "/api/delegate" && m === "POST") {
+    const v = checkDelegate(await readBody(req));
+    if (typeof v === "string") return fail(400, v);
+    return json(await runDelegate(v, req.signal));
+  }
   if (p === "/api/estimate" && m === "POST") {
     const b = await readBody(req);
     const messages = Array.isArray(b.messages) ? describeFiles(b.messages) : [];
@@ -614,7 +621,7 @@ export async function handle(req: Request, server: { timeout(r: Request, s: numb
     if (!ownOrigin) return fail(403, "Only Leanfare's own page can use this.");
     if (url.pathname !== "/api/control/stop" && req.headers.get("x-leanfare") !== "1") return fail(403, "Missing the x-leanfare header.");
     if (url.pathname !== "/api/unlock" && !url.pathname.startsWith("/api/control/") && !pageAllowed(req, controlToken)) return json({ error: "Leanfare is locked. Paste its access key to open it.", locked: true }, 401);
-    if (url.pathname === "/api/chat" || url.pathname === "/api/keys" || url.pathname === "/api/refresh" || url.pathname === "/api/import") server?.timeout(req, 0);
+    if (url.pathname === "/api/chat" || url.pathname === "/api/delegate" || url.pathname === "/api/keys" || url.pathname === "/api/refresh" || url.pathname === "/api/import") server?.timeout(req, 0);
     try { return await api(req, url); }
     catch (e: any) { return fail(e instanceof UserError ? e.status : 500, e instanceof UserError ? e.message : `Leanfare hit an unexpected problem: ${String(e?.message ?? e)}`); }
   }

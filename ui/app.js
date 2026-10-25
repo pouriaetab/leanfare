@@ -1301,6 +1301,22 @@
     return card;
   }
 
+  // Delegated tasks (delegate.ts): what other apps handed over, and what the checks found.
+  function delegateCardEl(d) {
+    if (!d) return null;
+    const pct = (x) => `${Math.round(x * 100)}%`;
+    const ran = d.passed + d.failed + d.unclear;
+    const again = d.reruns ? `, ${num(d.failed)} failed and ${d.reruns === d.failed ? (d.failed === 1 ? "was" : "were") : `${num(d.reruns)} ${d.reruns === 1 ? "was" : "were"}`} asked again one tier up` : d.failed ? `, ${num(d.failed)} failed` : "";
+    return h("div", { class: "card", id: "delegateCard" },
+      h("h3", {}, "Delegated tasks", h("span", { class: "grow" }), h("small", { text: "through the delegate tool" })),
+      h("p", { text: `${num(d.tasks)} task${d.tasks === 1 ? "" : "s"} handed over this month, ${money(d.cost)} in all${d.checkCost > 0 ? ` (checks ${money(d.checkCost)})` : ""}.` }),
+      d.kept > 0 ? h("p", { text: `Leanfare read about ${num(d.kept)} tokens of files so the app that asked did not have to; the answers came to about ${num(d.answerTokens)}.` }) : null,
+      d.passed + d.failed > 0
+        ? h("p", { text: `Checks: ${num(ran)} run, ${num(d.passed)} passed (${pct(d.passRate)}, 90% range ${pct(d.passLo)} to ${pct(d.passHi)})${again}.` })
+        : h("p", { text: ran ? `Checks: ${num(ran)} run, none with a clear verdict.` : "No answer was checked yet." }),
+      d.weighted !== null && d.passed + d.failed >= 5 ? h("p", { class: "fine", text: `Weighted by each answer's chance of being checked, about ${pct(d.weighted)} of all handed over answers would pass.` }) : null);
+  }
+
   function stat(key, label, value, sub, cls = "") {
     const def = S.savings.definitions[key];
     return h("div", { class: "stat" },
@@ -1361,11 +1377,13 @@
     const notes = [];
     if (v.unpriced) notes.push(`${num(v.unpriced)} answer${v.unpriced === 1 ? " has" : "s have"} no listed price and count as $0 here.`);
     if (v.estimated) notes.push(`Token counts were estimated for ${num(v.estimated)} answer${v.estimated === 1 ? "" : "s"} (the provider did not report them).`);
-    const src = v.bySource.map((s) => `${s.source === "chat" ? "Chat" : s.source === "openai" ? "Apps (OpenAI address)" : "Apps (Anthropic address)"}: ${num(s.answers)}`).join(" · ");
+    const SOURCES = { chat: "Chat", openai: "Apps (OpenAI address)", anthropic: "Apps (Anthropic address)", delegate: "Delegated", check: "Checks" };
+    const src = v.bySource.map((s) => `${SOURCES[s.source] ?? s.source}: ${num(s.answers)}`).join(" · ");
     el.replaceChildren(
       h("div", { class: "sv-head" }, h("h2", { text: title }), h("span", { class: "grow" }), pickMonth, runButton("Refresh", async (signal) => { await loadSavings(); await loadPlans(true, signal); toast("Up to date.", "done"); })),
       cards,
       plansCardEl(),
+      delegateCardEl(v.delegate),
       h("div", { class: "sv-grid" },
         h("div", { class: "card" }, h("h3", {}, "By model", h("span", { class: "grow" }), h("small", { text: src })), h("div", { class: "scroll" }, byModel)),
         h("div", { class: "card" }, h("h3", { text: "By task" }), h("div", { class: "scroll" }, byTask)),

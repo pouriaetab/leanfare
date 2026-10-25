@@ -826,3 +826,37 @@ describe("The plan meter", () => {
     expect(bad(doc)).toBe(false);
   }, 20000);
 });
+
+describe("Delegated tasks", () => {
+  const bad = (doc: any) => /\bnull\b|\bundefined\b|NaN|\[object Object\]/.test(doc.body.textContent);
+  async function waitFor(ok: () => boolean, ms = 8000) { for (let i = 0; i < ms / 50 && !ok(); i++) await Bun.sleep(50); }
+  const goSavings = async (doc: any) => {
+    doc.querySelector('.tabs button[data-tab="savings"]').click();
+    await waitFor(() => !!doc.querySelector("#tab-savings .sv-head"));
+  };
+  const LOG = { name: "app.log", text: "10:00 start\n10:01 error: disk full\n" };
+  beforeEach(async () => { await reset({ ticked: ALL_TICKED }); });
+
+  test("no card until something is handed over; then what it cost, what stayed out of context, and how the checks went", async () => {
+    await keys("openai", "anthropic", "google", "deepseek", "xai", "mistral");
+    let doc = await openApp();
+    await goSavings(doc);
+    expect(doc.querySelector("#delegateCard")).toBeNull();
+    closeApp();
+    await ui(url, "/api/delegate", { task: "Summarize. [reply@google PASS]", files: [LOG], kind: "read", effort: "low", check: "always" });
+    await ui(url, "/api/delegate", { task: "Find the errors. [reply@google FAIL: misses one]", files: [LOG], kind: "read", effort: "low", check: "always" });
+    doc = await openApp();
+    await goSavings(doc);
+    const t = doc.querySelector("#delegateCard").textContent;
+    expect(t).toContain("Delegated tasks");
+    expect(t).toContain("2 tasks handed over this month, $");
+    expect(t).toContain("(checks $");
+    expect(t).toContain("Leanfare read about 18 tokens of files so the app that asked did not have to");
+    expect(t).toMatch(/Checks: 2 run, 1 passed \(50%, 90% range 12% to 88%\), 1 failed and was asked again one tier up\./);
+    expect(t).not.toContain("Weighted"); // shown from five checks on
+    const by = doc.querySelector("#tab-savings .sv-grid h3 small").textContent;
+    expect(by).toContain("Delegated: 3");
+    expect(by).toContain("Checks: 2");
+    expect(bad(doc)).toBe(false);
+  }, 20000);
+});

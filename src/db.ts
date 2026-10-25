@@ -70,6 +70,29 @@ CREATE TABLE IF NOT EXISTS files(
   ts TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS files_chat ON files(chat_id, message_id);
+-- Tasks handed over through the delegate tool (delegate.ts): models, verdicts, counts and costs, never words.
+CREATE TABLE IF NOT EXISTS delegations(
+  id INTEGER PRIMARY KEY,
+  ts TEXT NOT NULL,
+  month TEXT NOT NULL,
+  day TEXT NOT NULL,
+  task TEXT NOT NULL,
+  kind TEXT,
+  effort TEXT NOT NULL,
+  model TEXT,
+  cost REAL,
+  files INTEGER NOT NULL DEFAULT 0,
+  file_tokens INTEGER NOT NULL DEFAULT 0,
+  answer_tokens INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL,
+  chance REAL NOT NULL DEFAULT 0,
+  checker TEXT,
+  verdict TEXT,
+  check_cost REAL,
+  rerun TEXT,
+  rerun_cost REAL
+);
+CREATE INDEX IF NOT EXISTS delegations_month ON delegations(month);
 `;
 
 // Columns added after 0.1: an older file gets them on its first start.

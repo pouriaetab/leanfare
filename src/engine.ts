@@ -123,6 +123,10 @@ export interface PlanInput {
   hasTools?: boolean; // the request uses tools (Claude takes those only through /v1/messages)
   effort?: string | null; // thinking effort asked for (the chat screen); sent only to models that take it
   copies?: number; // answers asked for at once (OpenAI's n): each is billed
+  guess?: Guess; // the task, when the caller knows it (the delegate): used instead of the guess
+  only?: (m: Model) => boolean; // a further limit on the models Auto may pick (the delegate: long enough, stronger)
+  onlyWhy?: string; // what to say when that limit leaves no model
+  optional?: boolean; // work that can be skipped (the delegate's check): never sent past the budget
 }
 
 export interface Plan {
@@ -147,6 +151,7 @@ export interface Plan {
   capOverride?: number | null; // a second try with a higher answer limit (the first one spent it thinking)
   copies: number;
   cheapestId: string | null; // the cheapest model this request could use (the only one allowed past the budget)
+  optional?: boolean; // never sent past the budget, not even on the cheapest model
 }
 
 const AUTO = /^(leanfare\/)?(auto|leanfare)(-(save|balanced|best))?$/i;
@@ -180,7 +185,7 @@ function reserveAgain(p: Plan, m: Model, maxOut: number | null): boolean {
   if (s.budget === null) return true;
   const amount = reserveFor(m, p.inMax, maxOut, p.copies);
   p.reservation = tryReserve(amount);
-  if (!p.reservation && s.atLimit === "cheapest" && p.cheapestId === m.id) p.reservation = tryReserve(amount, true);
+  if (!p.reservation && !p.optional && s.atLimit === "cheapest" && p.cheapestId === m.id) p.reservation = tryReserve(amount, true);
   return !!p.reservation;
 }
 
@@ -201,7 +206,9 @@ export async function plan(input: PlanInput): Promise<Plan> {
   // Images and PDFs go only to models that take them.
   const media = mediaIn(input.messages as any);
   const takes = (m: Model) => (!media.images || takesImages(m)) && (!media.pdfs || takesPdfs(m));
-  const only = media.images || media.pdfs ? (m: Model) => (!byAddress || byAddress(m)) && takes(m) : byAddress;
+  const base = media.images || media.pdfs ? (m: Model) => (!byAddress || byAddress(m)) && takes(m) : byAddress;
+  const extra = input.only;
+  const only = extra ? (m: Model) => (!base || base(m)) && extra(m) : base;
   const mediaWords = [media.images ? "images" : "", media.pdfs ? "PDFs" : ""].filter(Boolean).join(" and ");
   const amode = autoMode(input.asked, input.mode ?? s.mode);
   const mode = amode ?? input.mode ?? s.mode;
@@ -213,6 +220,7 @@ export async function plan(input: PlanInput): Promise<Plan> {
   let alternatives: Plan["alternatives"] = [];
   if (amode) {
     const usable = usableModels(only);
+    if (!usable.length && extra && usableModels(base).length) throw new UserError(400, input.onlyWhy ?? "None of the models you ticked can take this request.", "no_model_fits");
     if (!usable.length && mediaWords && usableModels(byAddress).length) {
       throw new UserError(400, `None of the models you ticked takes ${mediaWords} through Leanfare. In Settings, tick one that does: ${media.pdfs ? "a Claude or GPT model reads PDFs" : "most Claude, GPT and Gemini models see images"}.`, "unsupported_attachment");
     }
@@ -224,13 +232,13 @@ export async function plan(input: PlanInput): Promise<Plan> {
           : `No model is ready yet. Open Leanfare at http://127.0.0.1:${runtime.port}, add a key and tick a model, or start Ollama.`, "no_model_ready");
     }
     const effortAsked = input.effort ?? null;
-    const p = pickModel(input.messages, usable, amode, (t, mid) => outputHistory(t, mid, effortAsked && mid ? effortFor(getModel(mid)!, effortAsked) : null), input.system);
+    const p = pickModel(input.messages, usable, amode, (t, mid) => outputHistory(t, mid, effortAsked && mid ? effortFor(getModel(mid)!, effortAsked) : null), input.system, input.guess);
     if (p) {
       model = p.model; guess = p.guess; reason = p.reason;
       candidates = p.candidates.map((c) => c.model);
       alternatives = p.candidates.slice(1, 4).map((c) => ({ id: c.model.id, label: c.model.label, estimate: chargeOf(c.model, c.estimate).cost, rating: c.rating === null ? null : Math.round(c.rating) }));
     } else {
-      guess = guessTask(input.messages);
+      guess = input.guess ?? guessTask(input.messages);
       const u = usualModel();
       model = u && usable.includes(u) ? u : usable[0];
       reason = `None of the models you ticked has both a rating and a price, so Auto used ${model.label}.`;
@@ -246,7 +254,7 @@ export async function plan(input: PlanInput): Promise<Plan> {
       const what = media.pdfs && !takesPdfs(m) ? (m.provider === "google" ? "cannot read PDFs through Leanfare yet" : "does not read PDFs") : "does not take images";
       throw new UserError(400, `${m.label} ${what}. Pick Auto, or a model that does${media.pdfs ? " (a Claude or GPT model reads PDFs)" : ""}.`, "unsupported_attachment");
     }
-    model = m; guess = guessTask(input.messages); reason = "You chose this model."; candidates = [m];
+    model = m; guess = input.guess ?? guessTask(input.messages); reason = "You chose this model."; candidates = [m];
   }
 
   // A retired model is replaced by its successor.
@@ -276,6 +284,7 @@ export async function plan(input: PlanInput): Promise<Plan> {
       if (s.atLimit === "stop") {
         throw new UserError(402, `${why}. Raise the budget in Settings, or set it to keep going on the cheapest model.`, "budget_reached");
       }
+      if (input.optional) throw new UserError(402, `${why}. Work Leanfare can skip, like a check, never goes past the budget.`, "budget_reached");
       const cheap = cheapest(only, inTok);
       if (cheap && cheap.id !== model.id) {
         notes.push(`${why}, so Leanfare used the cheapest model you ticked, ${cheap.label}.`);
@@ -288,7 +297,7 @@ export async function plan(input: PlanInput): Promise<Plan> {
   const effortAsked = input.effort && input.effort !== "auto" ? input.effort : null;
   const estimate = chargeOf(model, estimateFor(model, inTok, expectedOutput(guess.task, model, (t, mid) => outputHistory(t, mid, effortFor(model, effortAsked))))).cost;
   const cheapestId = s.budget !== null ? cheapest(only, inTok)?.id ?? null : null;
-  return { model, auto: !!amode, mode, guess, reason, estimate, candidates, alternatives, usual: usualModel(), switchedFrom, notes, reservation, inTok, inMax, maxOut: input.maxOut, capped, asked: input.asked, effortAsked, copies, cheapestId };
+  return { model, auto: !!amode, mode, guess, reason, estimate, candidates, alternatives, usual: usualModel(), switchedFrom, notes, reservation, inTok, inMax, maxOut: input.maxOut, capped, asked: input.asked, effortAsked, copies, cheapestId, optional: input.optional };
 }
 
 // ---- the ledger --------------------------------------------------------------
@@ -743,6 +752,12 @@ export interface ChatOptions {
   effort?: string | null; // thinking effort (auto: each model's default)
   system?: string; // the chat's instructions, sent first as a system message
   meta?: Record<string, unknown>; // added to the answer's details (the answer it is compared with)
+  source?: string; // where the ledger says it came from (default "chat"; the delegate's work is "delegate", its checks "check")
+  guess?: Guess; // the task, when the caller knows it
+  only?: (m: Model) => boolean; // a further limit on the models Auto may pick
+  onlyWhy?: string; // what to say when that limit leaves no model
+  maxOut?: number | null; // the answer limit, in tokens (the chat has none of its own)
+  optional?: boolean; // work that can be skipped: never sent past the budget
 }
 
 // The chat's instructions go first, as a system message (Claude's translation moves it to "system").
@@ -750,10 +765,11 @@ export const withSystem = (messages: Msg[], system?: string): Msg[] => (system ?
 
 export async function runChat(messages: Msg[], asked: string | null, signal: AbortSignal, emit: (e: ChatEvent) => void, label = "Chat", opts: ChatOptions = {}): Promise<{ text: string; meta: any; status: "ok" | "stopped" | "error" }> {
   const ac = linked(signal);
+  const source = opts.source ?? "chat";
   if (paused) emit({ type: "waiting", message: "Paused. This message goes out when you press Start again." });
   let p: Plan;
   try {
-    p = await plan({ source: "chat", asked, messages, system: opts.system || undefined, maxOut: null, signal: ac.signal, effort: opts.effort ?? null });
+    p = await plan({ source: "chat", asked, messages, system: opts.system || undefined, maxOut: opts.maxOut ?? null, signal: ac.signal, effort: opts.effort ?? null, guess: opts.guess, only: opts.only, onlyWhy: opts.onlyWhy, optional: opts.optional });
   } catch (e: any) {
     const status = e instanceof UserError ? e.status : 500;
     const message = e instanceof UserError ? e.message : String(e?.message ?? e);
@@ -762,7 +778,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
     emit({ type: "done", result: meta }); // the page always learns how it ended
     return { text: "", meta, status: status === 499 ? "stopped" : "error" };
   }
-  const rid = register("chat", `${label} · ${p.model.label}`, ac);
+  const rid = register(source, `${label} · ${p.model.label}`, ac);
   emit({ type: "meta", plan: planView(p) });
   const body = { messages: withSystem(messages, opts.system) };
 
@@ -773,7 +789,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
     const notesBefore = p.notes.length;
     p.capOverride = cap;
     try {
-      const sent = await sendWithFallback(p, "chat", body, true, ac.signal);
+      const sent = await sendWithFallback(p, source, body, true, ac.signal);
       t.model = sent.model; t.t0 = sent.t0; t.answered = true;
       if (p.notes.length > notesBefore) emit({ type: "meta", plan: planView(p) }); // Auto passed it on: say so
       for await (const { j, data } of openaiChunks(sent.res, t.model, t.model.apiId)) {
@@ -799,10 +815,10 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
   // A try that failed before the provider answered was written down where it failed (sendWithFallback).
   const recordTry = (t: Try, status: "ok" | "stopped" | "error", error?: string) =>
     status !== "error" || t.answered || t.usage
-      ? record(p, t.model, "chat", t.usage ?? estimatedUsage(p, t.text.length + t.thinking.length), { status, error, ms: performance.now() - t.t0, firstMs: t.firstMs, reportedCost: t.reported, estimated: !t.usage })
+      ? record(p, t.model, source, t.usage ?? estimatedUsage(p, t.text.length + t.thinking.length), { status, error, ms: performance.now() - t.t0, firstMs: t.firstMs, reportedCost: t.reported, estimated: !t.usage })
       : null;
 
-  let t = await attempt(null);
+  let t = await attempt(opts.maxOut ?? null);
   let retried = false;
   let written: ReturnType<typeof recordTry> | undefined; // the first try, when it was not asked again (already in the ledger)
   // An answer that came back empty, or was cut off on the way, is asked once more (noted on the answer).
@@ -822,7 +838,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
         emit({ type: "retry", message: why.note });
         emit({ type: "meta", plan: planView(p) });
         retried = true;
-        t = await attempt(why.cap);
+        t = await attempt(why.cap ?? opts.maxOut ?? null);
       } else {
         p.notes.push(`${why.note.replace(/, so Leanfare .*$/, ".")} The budget does not leave room to ask again.`);
         written = first;
@@ -861,6 +877,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
     thinking: thinking ? thinking.slice(0, 200_000) : undefined,
     effort: effortFor(model, p.effortAsked),
     retried,
+    finish: finishReason, // why the answer ended, as the provider said ("length": at the answer limit)
     ...(opts.meta ?? {}),
   };
   if (status === "error") emit({ type: "error", message: failed ?? "The answer failed.", status: 502 });

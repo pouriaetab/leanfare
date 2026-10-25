@@ -9,6 +9,7 @@
 //    model, divided by what they cost.
 import { TASKS, getModel } from "./data";
 import { db } from "./db";
+import { weightedPass, wilson } from "./delegate";
 import { budgetState } from "./budget";
 import { settings } from "./settings";
 import { localDay, localMonth } from "./util";
@@ -21,6 +22,7 @@ export const DEFINITIONS = {
   answers: "Finished answers this month, from the chat and from your other apps. Stopped answers are counted separately.",
   budget: "Your monthly budget minus what was spent and what requests still running have reserved.",
   top: "The model that wrote the most answers this month.",
+  delegate: "Tasks another app (Claude Code, Claude Desktop) handed to Leanfare through its delegate tool. Leanfare read the files itself, so their text stayed out of that app's context. The pass rate counts checked answers only, with a 90% range (Wilson). The weighted rate counts each checked answer once for every answer it stands for (one over its chance of being checked), so it speaks for all handed over answers.",
 };
 
 const taskLabel = (t: string) => TASKS.find(([id]) => id === t)?.[1] ?? t;
@@ -52,6 +54,21 @@ export function savings(month = localMonth()) {
     WHERE month = ? AND status != 'error' GROUP BY day ORDER BY day`);
   const bySource = all(`SELECT source, SUM(status = 'ok') AS answers, COALESCE(SUM(cost), 0) AS cost FROM ledger
     WHERE month = ? AND status != 'error' GROUP BY source`);
+  // Claude's delegate (delegate.ts): what was handed over, what the checks found.
+  const dg = q(`SELECT COUNT(*) AS n, COALESCE(SUM(status = 'ok'), 0) AS ok,
+      COALESCE(SUM(cost), 0) + COALESCE(SUM(check_cost), 0) + COALESCE(SUM(rerun_cost), 0) AS cost, COALESCE(SUM(check_cost), 0) AS checkCost,
+      COALESCE(SUM(CASE WHEN status = 'ok' THEN file_tokens END), 0) AS kept, COALESCE(SUM(CASE WHEN status = 'ok' THEN answer_tokens END), 0) AS answerTokens,
+      COALESCE(SUM(verdict = 'pass'), 0) AS passed, COALESCE(SUM(verdict = 'fail'), 0) AS failed, COALESCE(SUM(verdict = 'unclear'), 0) AS unclear,
+      COALESCE(SUM(rerun IS NOT NULL), 0) AS reruns
+    FROM delegations WHERE month = ?`);
+  const checked = dg.passed + dg.failed;
+  const interval = wilson(dg.passed, checked);
+  const delegate = dg.n === 0 ? null : {
+    tasks: dg.n, ok: dg.ok, cost: dg.cost, checkCost: dg.checkCost, kept: dg.kept, answerTokens: dg.answerTokens,
+    passed: dg.passed, failed: dg.failed, unclear: dg.unclear, reruns: dg.reruns,
+    passRate: checked ? dg.passed / checked : null, passLo: interval?.lo ?? null, passHi: interval?.hi ?? null,
+    weighted: weightedPass(all("SELECT verdict, chance FROM delegations WHERE month = ? AND verdict IN ('pass', 'fail')")),
+  };
   const s = settings();
   const b = budgetState();
   const answers = counts.ok ?? 0;
@@ -78,6 +95,7 @@ export function savings(month = localMonth()) {
     byTask,
     byDay,
     bySource,
+    delegate,
     definitions: DEFINITIONS,
   };
 }
