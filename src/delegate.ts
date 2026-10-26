@@ -106,8 +106,11 @@ export function doerSystem(numbered: boolean, write: boolean, hasFiles: boolean)
   return [
     "Another AI assistant handed you this task so that it does not have to do the reading itself. Your answer goes straight back to it, and it pays for every word it reads.",
     "Do only what the task asks, as briefly as the task allows: no greeting, no restating of the task, no offer at the end.",
+    "Answer in the form the task asks for: when it asks for names, numbers or text, give those themselves, not where to find them.",
     write ? "Give the finished text or code itself, ready to use." : "",
-    numbered && hasFiles ? "The files' lines are numbered: point to a place as name:line." : "",
+    // Leanfare's own trial (26 Oct) showed the cheapest models answering "README.md:46" to "which keys...?"
+    // when this line said to point to places by line: they took it as the form of every answer.
+    numbered && hasFiles ? "The files' lines are numbered: only when the task asks where something is, point to it as name:line." : "",
     hasFiles ? "If the files do not hold what is needed, say so plainly; never guess." : "If you are not sure, say so plainly; never guess.",
   ].filter(Boolean).join(" ");
 }
