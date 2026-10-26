@@ -3,7 +3,8 @@
 // tests use them to point Leanfare at a throwaway folder and a fake provider.
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 export const VERSION = "0.3.0";
 export const BUN_TESTED = "1.4"; // the Bun minor version this release is tested on
@@ -16,6 +17,10 @@ export const BUILT_IN_CATALOG = new URL("../data/catalog.json", import.meta.url)
 export const UI_DIR = new URL("../ui/", import.meta.url).pathname;
 
 mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+
+// A short fingerprint of the data folder (never its path), on /healthz: a command that finds a Leanfare
+// at a port acts on it only when it uses this folder (leanfare stop, status, a second start).
+export const DATA_ID = createHash("sha256").update(realpathSync(DATA_DIR)).digest("hex").slice(0, 12);
 
 export const paths = {
   db: join(DATA_DIR, "leanfare.db"),

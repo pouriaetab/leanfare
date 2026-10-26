@@ -5,7 +5,7 @@
 // sites unless you allowed them in Settings.
 import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { BUN_TESTED, HOST, PORT, PROVIDERS, UI_DIR, VERSION, baseOf, paths, provider, runtime, type ProviderId } from "./config";
+import { BUN_TESTED, DATA_ID, HOST, PORT, PROVIDERS, UI_DIR, VERSION, baseOf, paths, provider, runtime, type ProviderId } from "./config";
 import { TASKS, allModels, getModel, isRetired, refreshCatalog, refreshOllama, refreshOpenRouter, retiresWithin, store, type Model } from "./data";
 import { db, lastRepair } from "./db";
 import { allKeys, getKey, keyWhere, keychainNote, removeKey, saveKey, storeName } from "./keys";
@@ -577,7 +577,7 @@ export async function handle(req: Request, server: { timeout(r: Request, s: numb
   const origin = req.headers.get("origin");
   const ownOrigin = !origin || own.some((h) => origin === `http://${h}`);
 
-  if (url.pathname === "/healthz") return json({ ok: true, app: "leanfare", version: VERSION, pid: process.pid, locked: locked() });
+  if (url.pathname === "/healthz") return json({ ok: true, app: "leanfare", version: VERSION, pid: process.pid, locked: locked(), data: DATA_ID });
   // Leanfare's own command and Mac app open the page through this link, so a locked page opens unlocked.
   if (url.pathname === "/unlock" && req.method === "GET") {
     const t = url.searchParams.get("t") ?? "";
