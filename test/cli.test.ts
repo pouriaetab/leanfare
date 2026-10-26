@@ -10,7 +10,9 @@ import { KEYS } from "./fake";
 const cliPath = new URL("../src/cli.ts", import.meta.url).pathname;
 const port = 4600 + Math.floor(Math.random() * 50);
 const env = (dir = mkdtempSync(join(tmpdir(), "leanfare-cli-"))) => {
-  const e: Record<string, string> = { ...(process.env as Record<string, string>), LEANFARE_DATA_DIR: dir, LEANFARE_KEYSTORE: "file", LEANFARE_NO_OPEN: "1", LEANFARE_DATA_URL: `${fake.base}/data.json` };
+  // LEANFARE_PORT: a command with no record of a running Leanfare looks at the test's port, never at the
+  // one a real Leanfare uses on this computer (the Mac app's, 4747).
+  const e: Record<string, string> = { ...(process.env as Record<string, string>), LEANFARE_DATA_DIR: dir, LEANFARE_KEYSTORE: "file", LEANFARE_NO_OPEN: "1", LEANFARE_DATA_URL: `${fake.base}/data.json`, LEANFARE_PORT: String(port) };
   delete e.LEANFARE_NOW;
   return e;
 };
@@ -77,6 +79,24 @@ describe("leanfare", () => {
     const again = await run(["stop"], env(dir));
     expect(again.code).toBe(0);
     expect(again.out).toContain("not running");
+  });
+  test("stop and status leave alone a Leanfare that uses another data folder, even when its port is named", async () => {
+    const q = 4800 + Math.floor(Math.random() * 50);
+    const otherEnv = { ...env(), LEANFARE_PORT: String(q) };
+    const other = Bun.spawn([process.execPath, cliPath, "--port", String(q)], { env: otherEnv, stdout: "pipe", stderr: "pipe" });
+    try {
+      expect(await upOn(q)).toBe(true);
+      const mine = { ...env(), LEANFARE_PORT: String(q) }; // no record of it here, and its port is this folder's default
+      const s = await run(["stop"], mine);
+      expect(s.code).toBe(0);
+      expect(s.out).toContain("not running from this data folder");
+      expect((await run(["status"], mine)).code).toBe(3);
+      expect((await run(["stop", "--port", String(q)], mine)).out).toContain("not running from this data folder");
+      expect(await upOn(q)).toBe(true); // still running
+      const own = await run(["stop"], otherEnv); // its own folder stops it
+      expect(own.out).toContain("Leanfare stopped.");
+      expect(await other.exited).toBe(0);
+    } finally { try { other.kill(); } catch {} }
   });
 });
 
