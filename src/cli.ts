@@ -6,7 +6,7 @@
 // Exit codes: 0 done, 1 failed, 2 wrong command, 3 not running (status),
 // 4 the port is taken by another program.
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { BUN_TESTED, PORT, VERSION, paths } from "./config";
+import { BUN_TESTED, DATA_ID, PORT, VERSION, paths } from "./config";
 
 const args = process.argv.slice(2);
 const flag = (name: string) => args.includes(`--${name}`);
@@ -48,6 +48,13 @@ async function health(p: number): Promise<any | null> {
   } catch { return null; }
 }
 
+// Whether the Leanfare that answered uses this data folder. One that names no folder (0.3 and before)
+// counts when this folder's record points to its port, or when the port was given on purpose.
+function ours(h: any, pf: PidFile | null, p: number): boolean {
+  if (h?.data) return h.data === DATA_ID;
+  return (pf !== null && pf.port === p) || value("port") !== null;
+}
+
 function openBrowser(url: string) {
   if (flag("no-open") || process.env.LEANFARE_NO_OPEN === "1") return;
   const cmd = process.platform === "darwin" ? ["open", url] : process.platform === "win32" ? ["cmd", "/c", "start", "", url] : ["xdg-open", url];
@@ -64,7 +71,7 @@ async function start() {
   const existing = readPid();
   if (existing) {
     const h = await health(existing.port);
-    if (h) {
+    if (h && ours(h, existing, existing.port)) {
       const url = `http://127.0.0.1:${existing.port}`;
       console.log(`Leanfare is already running at ${url}`);
       openBrowser(pageUrl(url, !!h.locked, readToken()));
@@ -147,8 +154,15 @@ async function start() {
 async function stop() {
   const pf = readPid();
   const p = pf?.port ?? port;
-  if (!(await health(p))) {
+  const first = await health(p);
+  if (!first) {
     console.log("Leanfare is not running.");
+    if (pf) { try { unlinkSync(paths.pid); } catch {} }
+    process.exit(0);
+  }
+  if (!ours(first, pf, p)) {
+    // Another copy answers there: never stop it from here.
+    console.log(`Leanfare is not running from this data folder: the one at http://127.0.0.1:${p} uses another folder (the Mac app, or another copy). Stop it there.`);
     if (pf) { try { unlinkSync(paths.pid); } catch {} }
     process.exit(0);
   }
@@ -177,6 +191,7 @@ async function status() {
   const p = pf?.port ?? port;
   const h = await health(p);
   if (!h) { console.log(`Leanfare is not running. ${versionLine().text}`); process.exit(3); }
+  if (!ours(h, pf, p)) { console.log(`Leanfare is not running from this data folder: the one at http://127.0.0.1:${p} uses another. ${versionLine().text}`); process.exit(3); }
   const st: any = await fetch(`http://127.0.0.1:${p}/api/state`, { headers: { "x-leanfare": "1", "x-leanfare-token": readToken() } }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
   console.log(`Leanfare ${h.version} is running at http://127.0.0.1:${p} (process ${h.pid}).`);
   if (st) {
