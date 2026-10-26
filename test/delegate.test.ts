@@ -239,7 +239,10 @@ describe("handing a task over", () => {
     const req = sent("deepseek").at(-1)!;
     expect(req.body.messages[0].role).toBe("system");
     expect(req.body.messages[0].content).toContain("it pays for every word it reads");
-    expect(req.body.messages[0].content).toContain("point to a place as name:line");
+    expect(req.body.messages[0].content).toContain("only when the task asks where something is, point to it as name:line");
+    // The trial's misses: an answer in the form asked for, not a place in the file.
+    expect(req.body.messages[0].content).toContain("Answer in the form the task asks for");
+    expect(req.body.messages[0].content).not.toContain("point to a place as name:line");
     expect(req.body.messages[1].content).toBe("List the errors in the log as file:line.\n\n[File: app.log, 4 lines]\n1: 10:00 start\n2: 10:01 error: disk full\n3: 10:02 retry\n4: 10:03 error: disk full again\n[End of app.log]");
     expect(req.body.max_tokens).toBe(8192); // the delegate's answer limit
     // The ledger has it as delegated work, at Save more, for long prompts.
