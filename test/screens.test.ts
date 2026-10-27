@@ -862,3 +862,56 @@ describe("Delegated tasks", () => {
     expect(bad(doc)).toBe(false);
   }, 20000);
 });
+
+describe("Setting up with no typing (Settings)", () => {
+  const { SHAPED } = require("./fake") as typeof import("./fake");
+  const bad = (doc: any) => /\bnull\b|\bundefined\b|NaN|\[object Object\]/.test(doc.body.textContent);
+  const toasts = (doc: any) => [...doc.querySelectorAll("#toasts .toast")].map((t: any) => t.textContent).join(" | ");
+  async function waitFor(ok: () => boolean, ms = 8000) { for (let i = 0; i < ms / 50 && !ok(); i++) await Bun.sleep(50); }
+  const set = (el: any, v: string) => { el.value = v; el.dispatchEvent(new win.Event("input", { bubbles: true })); };
+  const press = (doc: any, text: string, within = "body") => [...doc.querySelector(within).querySelectorAll("button")].find((b: any) => b.textContent === text)?.click();
+  const goSettings = async (doc: any) => {
+    doc.querySelector('.tabs button[data-tab="settings"]').click();
+    await waitFor(() => !!doc.querySelector("input[aria-label='Any API key']"));
+  };
+  beforeEach(async () => { await reset({ ticked: ALL_TICKED, custom: [] }); });
+
+  test("Paste any key: Leanfare says whose it is, saves it, and the provider moves up from More providers", async () => {
+    const doc = await openApp();
+    await goSettings(doc);
+    const names = () => [...doc.querySelectorAll(".colL > .prov .prov-head .name")].map((n: any) => n.textContent);
+    expect(names().some((n: string) => n.startsWith("More providers (Perplexity, Groq"))).toBe(true);
+    expect(names()).not.toContain("Perplexity");
+    set(doc.querySelector("input[aria-label='Any API key']"), SHAPED.perplexity);
+    press(doc, "Add key", ".keys-any");
+    await waitFor(() => toasts(doc).includes("A Perplexity key."));
+    expect(toasts(doc)).toContain("Saved in");
+    expect(names()).toContain("Perplexity"); // it has a key now, so it is listed with the others
+    expect(doc.querySelector("input[aria-label='Any API key']").value).toBe("");
+    expect(doc.body.textContent).not.toContain(SHAPED.perplexity.slice(0, 20));
+    expect(bad(doc)).toBe(false);
+  }, 20000);
+
+  test("an unknown key opens Add a provider, with the reason", async () => {
+    const doc = await openApp();
+    await goSettings(doc);
+    set(doc.querySelector("input[aria-label='Any API key']"), "zzzz-unknown-key-1234567");
+    press(doc, "Add key", ".keys-any");
+    await waitFor(() => toasts(doc).includes("does not recognize"));
+    await waitFor(() => !!doc.querySelector("input[aria-label='Provider address']"));
+    expect(doc.querySelector("input[aria-label='Provider address']")).toBeTruthy();
+    expect(bad(doc)).toBe(false);
+  }, 20000);
+
+  test("Find my keys lists what it found with the last four characters only, and nothing when there is nothing", async () => {
+    const doc = await openApp();
+    await goSettings(doc);
+    press(doc, "Find my keys", ".keys-any");
+    await waitFor(() => !!doc.querySelector(".found"));
+    expect(doc.querySelector(".found").textContent).toMatch(/No keys found|Found on this computer/);
+    expect(doc.querySelector(".found").textContent).not.toMatch(/sk-proj-|pplx-[a-z0-9]{8}/);
+    press(doc, "Close", ".found");
+    await waitFor(() => !doc.querySelector(".found"));
+    expect(bad(doc)).toBe(false);
+  }, 20000);
+});

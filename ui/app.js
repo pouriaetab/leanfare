@@ -331,6 +331,8 @@
     search: null, // { q, results } while searching chats
     local: null, // what Ollama has (Settings, Local models), from /api/local
     confirmRemove: null, // the local model whose Remove is waiting for a yes
+    found: null, // Find my keys: { keys, picked } while its list is open
+    registry: null, // Add a provider: models.dev's list of providers that speak OpenAI's format
   };
   const ready = () => S.st && S.st.usableCount > 0;
   const modelsOf = (pid) => (S.st?.models?.[pid] ?? []);
@@ -1397,7 +1399,7 @@
   }
 
   // ---- settings -----------------------------------------------------------------------------------
-  const LOGO = { openai: "OA", anthropic: "A", google: "G", openrouter: "OR", deepseek: "DS", xai: "X", mistral: "M", ollama: "OL" };
+  const LOGO = { openai: "OA", anthropic: "A", google: "G", openrouter: "OR", deepseek: "DS", xai: "X", mistral: "M", ollama: "OL", perplexity: "PX", groq: "GQ", cerebras: "CB", together: "TG", fireworks: "FW", lmstudio: "LM", jan: "J", llamacpp: "LC", vllm: "VL", localai: "LA", koboldcpp: "KC", gpt4all: "G4", lemonade: "LE" };
 
   async function saveKey(p, input, signal) {
     const key = input.value.trim();
@@ -1457,12 +1459,14 @@
   }
 
   async function refreshList(what, signal) {
-    const t = toast(what === "ollama" ? "Looking for Ollama…" : what === "openrouter" ? "Updating OpenRouter's model list…" : "Updating prices and ratings…");
+    const t = toast(what === "ollama" ? "Looking for Ollama…" : what === "local" ? "Looking for model apps on this computer…" : what === "custom" ? "Updating the model lists…" : what === "openrouter" ? "Updating OpenRouter's model list…" : "Updating prices and ratings…");
     try {
       const r = await api("/api/refresh", { body: { what }, signal });
       S.st = r.state;
       const st = r.status;
-      if (st.state === "ok") t.set(what === "ollama" ? `Found Ollama with ${modelsOf("ollama").length} models.` : what === "openrouter" ? "OpenRouter's list is up to date." : `Prices and ratings updated (built ${dayLabel(S.st.data.built)}).`, "done");
+      if (what === "local") { const f = S.st.extra?.local?.found ?? []; t.set(f.length ? `Found ${f.map((x) => `${x.name} (${x.models} model${x.models === 1 ? "" : "s"})`).join(", ")}.` : "No other model apps are running on this computer.", "done"); }
+      else if (what === "custom") t.set("The model lists are up to date.", "done");
+      else if (st.state === "ok") t.set(what === "ollama" ? `Found Ollama with ${modelsOf("ollama").length} models.` : what === "openrouter" ? "OpenRouter's list is up to date." : `Prices and ratings updated (built ${dayLabel(S.st.data.built)}).`, "done");
       else t.set(`${what === "ollama" ? "Ollama" : what === "openrouter" ? "OpenRouter" : "The price update"}: tried ${st.tried}: ${st.error}.`, "error");
       renderShell(); renderSettings(); renderComposerBar(); if (!S.messages.length) renderMessages();
     } catch (e) { t.close(); throw e; }
@@ -1665,7 +1669,7 @@
     let status;
     if (!p.on) status = h("span", { class: "chip", text: "Off" });
     else if (p.ready) status = h("span", { class: "chip good", text: `Ready · ${tickedCount} of ${ms.length} ticked` });
-    else if (p.id === "ollama") status = h("span", { class: "chip", text: "Not running" });
+    else if (p.id === "ollama" || p.local) status = h("span", { class: "chip", text: "Not running" });
     else status = h("span", { class: "chip", text: "Add a key" });
     const head = h("div", { class: "prov-head", role: "button", tabindex: "0", "aria-expanded": String(open), onclick: () => { S.open[p.id] = !open; store.set("open", S.open); renderSettings(); }, onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } } },
       h("span", { class: "logo", text: LOGO[p.id] ?? p.name[0] }), h("span", { class: "name", text: p.name }), h("span", { class: "grow" }), status, h("span", { class: "caret", text: "›" }));
@@ -1687,6 +1691,13 @@
         h("a", { class: "btn quiet", href: p.keyUrl, target: "_blank", rel: "noopener noreferrer", text: "Get a key ↗" })));
     }
     if (p.note) body.append(h("div", { class: "note", text: p.note }));
+    if (p.custom) {
+      const c = (S.st.extra?.custom ?? []).find((x) => x.id === p.id);
+      body.append(h("div", { class: "row" },
+        h("span", { class: "note grow", text: c?.state?.error ? `Its model list did not load: ${c.state.error}.` : `${ms.length} model${ms.length === 1 ? "" : "s"} from its own list${c?.state?.at ? `, ${ago(c.state.at)}` : ""}. Prices come from models.dev when it lists the model.` }),
+        runButton("Update list", (signal) => refreshList("custom", signal)),
+        h("button", { class: "btn small", type: "button", text: "Remove provider", onclick: () => removeCustom(p) })));
+    }
     if (p.id === "google") body.append(h("label", { class: "check" }, h("input", { type: "checkbox", checked: p.free, onchange: (e) => patchProvider(p.id, { free: e.target.checked }) }), "My Google key is on the free plan (count its answers as $0)"));
     if (p.id === "ollama") {
       const l = p.list;
@@ -1702,7 +1713,7 @@
         runButton("Update list", (signal) => refreshList("openrouter", signal))));
       if (p.key?.saved) body.append(h("div", { class: "note", text: `${p.credit ? `Credit left on OpenRouter: ${money(p.credit.remaining)} of ${money(p.credit.purchased)} bought. ` : ""}OpenRouter may expire unused credits a year after purchase (its terms, section 4.2).` }));
     }
-    if (p.needsKey || p.id === "ollama") body.append(h("label", { class: "check" }, h("input", { type: "checkbox", checked: p.on, onchange: (e) => patchProvider(p.id, { on: e.target.checked }) }), `Use ${p.name}`));
+    if (p.needsKey || p.id === "ollama" || p.local || p.custom) body.append(h("label", { class: "check" }, h("input", { type: "checkbox", checked: p.on, onchange: (e) => patchProvider(p.id, { on: e.target.checked }) }), `Use ${p.name}`));
     if (ms.length) {
       const all = S.showAll[p.id];
       const shown = all ? ms : ms.filter((m) => m.top || m.ticked);
@@ -1751,13 +1762,133 @@
       h("p", { text: "Leanfare only counts here. Anthropic does not let other apps use a Claude subscription login, so Auto never uses one." }));
   }
 
+  // ---- adding keys and providers with no typing (Settings) -------------------------------------------
+  // Paste any key: Leanfare finds its provider by how it looks and tests it there. Find my keys: the
+  // keys already on this computer (your environment, your shell's settings, other AI tools), each
+  // used only after you tick it. The page only ever sees their last four characters.
+  function keysCardEl() {
+    const input = h("input", { type: "password", placeholder: "Paste any API key: Leanfare finds its provider", autocomplete: "off", "aria-label": "Any API key", "data-keep": "any-key" });
+    return h("div", { class: "setting keys-any" },
+      h("div", { class: "row" }, input, runButton("Add key", (signal) => addAnyKey(input, signal), "btn primary"), runButton("Find my keys", (signal) => findMyKeys(signal))),
+      S.found ? foundListEl() : null);
+  }
+  async function addAnyKey(input, signal) {
+    const key = input.value.trim();
+    if (!key) { toast("Paste a key first.", "error"); return; }
+    const r = await api("/api/keys/recognize", { body: { key }, signal });
+    S.st = r.state;
+    if (r.ok) input.value = "";
+    if (r.unknown) { S.open.__add = true; store.set("open", S.open); loadRegistry(); }
+    renderShell(); renderSettings(); renderComposerBar();
+    toast(r.message, r.ok ? "done" : "error");
+  }
+  async function findMyKeys(signal) {
+    const r = await api("/api/keys/found", { signal });
+    S.found = { keys: r.keys, picked: new Set(r.keys.filter((k) => k.status === "new").map((k) => k.ref)) };
+    renderSettings();
+  }
+  function foundListEl() {
+    const f = S.found;
+    if (!f.keys.length) return h("div", { class: "found" }, h("p", { class: "note", text: "No keys found in your environment, your shell's settings, llm, aider, Gemini CLI, Codex CLI, OpenCode or Continue. Subscription sign ins are never used." }),
+      h("button", { class: "btn quiet", type: "button", text: "Close", onclick: () => { S.found = null; renderSettings(); } }));
+    const rows = f.keys.map((k) => h("label", { class: "check found-row" },
+      h("input", { type: "checkbox", checked: f.picked.has(k.ref), disabled: k.status === "same", onchange: (e) => { if (e.target.checked) f.picked.add(k.ref); else f.picked.delete(k.ref); } }),
+      h("span", { text: `${k.label} key ${k.hint}` }),
+      h("span", { class: "note", text: ` · ${k.where}${k.status === "same" ? " · already in Leanfare" : k.status === "different" ? " · Leanfare has a different key for it" : ""}${k.registry ? " · will be added as a provider" : ""}` })));
+    return h("div", { class: "found" },
+      h("p", { class: "note", text: "Found on this computer. Tick the keys to use: each is tested with its own provider first, and nothing is sent anywhere else." }),
+      ...rows,
+      h("div", { class: "row" }, runButton("Use the ticked keys", (signal) => importFound(signal), "btn primary"), h("button", { class: "btn quiet", type: "button", text: "Close", onclick: () => { S.found = null; renderSettings(); } })));
+  }
+  async function importFound(signal) {
+    const refs = [...S.found.picked];
+    if (!refs.length) { toast("Tick a key first.", "error"); return; }
+    const r = await api("/api/keys/import", { body: { refs }, signal });
+    S.st = r.state;
+    S.found = null;
+    const ok = r.results.filter((x) => x.ok).length;
+    renderShell(); renderSettings(); renderComposerBar();
+    toast(`${ok} of ${r.results.length} key${r.results.length === 1 ? "" : "s"} added.${r.results.filter((x) => !x.ok).map((x) => " " + x.message).join("")}`, ok === r.results.length ? "done" : "error");
+  }
+
+  function moreProvidersEl(list) {
+    if (!list.length) return null;
+    const open = S.open.__more ?? false;
+    const head = h("div", { class: "prov-head", role: "button", tabindex: "0", "aria-expanded": String(open), onclick: () => { S.open.__more = !open; store.set("open", S.open); renderSettings(); }, onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } } },
+      h("span", { class: "logo", text: "…" }), h("span", { class: "name", text: `More providers (${list.map((p) => p.name).join(", ")})` }), h("span", { class: "grow" }), h("span", { class: "caret", text: "›" }));
+    const card = h("div", { class: "prov" + (open ? " open" : "") }, head);
+    if (open) card.append(h("div", { class: "prov-body more-list" }, ...list.map(providerCard)));
+    return card;
+  }
+
+  async function loadRegistry() {
+    if (S.registry) return;
+    S.registry = { loading: true, choices: [] };
+    try { const r = await api("/api/providers/registry"); S.registry = { choices: r.choices, ok: r.ok }; }
+    catch { S.registry = { choices: [], ok: false }; }
+    renderSettings();
+  }
+  function addProviderEl() {
+    const open = S.open.__add ?? false;
+    const head = h("div", { class: "prov-head", role: "button", tabindex: "0", "aria-expanded": String(open), onclick: () => { S.open.__add = !open; store.set("open", S.open); renderSettings(); if (!open) loadRegistry(); }, onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } } },
+      h("span", { class: "logo", text: "+" }), h("span", { class: "name", text: "Add a provider" }), h("span", { class: "grow" }), h("span", { class: "caret", text: "›" }));
+    const card = h("div", { class: "prov" + (open ? " open" : "") }, head);
+    if (!open) return card;
+    const name = h("input", { type: "text", placeholder: "Name, for example NVIDIA", maxlength: "40", autocomplete: "off", "aria-label": "Provider name", "data-keep": "add-name" });
+    const base = h("input", { type: "url", placeholder: "Address, for example https://integrate.api.nvidia.com/v1", autocomplete: "off", "aria-label": "Provider address", "data-keep": "add-base" });
+    const key = h("input", { type: "password", placeholder: "Its key, if it needs one", autocomplete: "off", "aria-label": "Provider key", "data-keep": "add-key" });
+    let registry = null;
+    const choices = S.registry?.choices ?? [];
+    const pick = h("select", { "aria-label": "Pick a provider from models.dev", onchange: (e) => { const c = choices.find((x) => x.id === e.target.value); registry = c?.id ?? null; if (c) { name.value = c.name; base.value = c.api; } } },
+      h("option", { value: "", text: S.registry?.loading ? "Loading models.dev's list…" : choices.length ? `Pick one of ${choices.length} providers (models.dev), or type below` : "Type the name and address below" }),
+      ...choices.map((c) => h("option", { value: c.id, text: `${c.name} · ${c.models} models` })));
+    card.append(h("div", { class: "prov-body" },
+      h("p", { class: "note", text: "Any provider that speaks OpenAI's format: pick it from the list or type its address. Leanfare reads its model list there, and takes prices from models.dev when it lists the model." }),
+      choices.length || S.registry?.loading ? h("div", { class: "row" }, pick) : null,
+      h("div", { class: "row" }, name), h("div", { class: "row" }, base), h("div", { class: "row" }, key),
+      h("div", { class: "row" }, runButton("Test and add", (signal) => addCustom({ name: name.value, base: base.value, key: key.value, registry }, signal), "btn primary"))));
+    return card;
+  }
+  async function addCustom(fields, signal) {
+    const r = await api("/api/providers/custom", { body: fields, signal });
+    S.st = r.state;
+    if (r.ok) { S.open.__add = false; S.open[r.id] = true; store.set("open", S.open); }
+    renderShell(); renderSettings(); renderComposerBar();
+    toast(r.message, r.ok ? "done" : "error");
+  }
+  async function removeCustom(p) {
+    try {
+      const r = await api("/api/providers/custom/remove", { body: { id: p.id } });
+      S.st = r.state;
+      renderShell(); renderSettings(); renderComposerBar();
+      toast(`Removed ${p.name}.`, "done");
+    } catch (e) { failed(e); }
+  }
+
+  // The model apps Leanfare looks for on this computer, besides Ollama (they show as providers when found).
+  function localAppsEl() {
+    const x = S.st.extra?.local;
+    if (!x) return null;
+    const found = x.found ?? [];
+    return h("div", { class: "setting" }, h("div", { class: "row" },
+      h("span", { class: "note grow", text: found.length
+        ? `Also running here: ${found.map((f) => `${f.name} (${f.models} model${f.models === 1 ? "" : "s"})`).join(", ")}. They are listed with the providers above.`
+        : `Leanfare also looks for ${x.apps.map((a) => a.name).join(", ")} running on this computer${x.at ? ` (last look ${ago(x.at)})` : ""}.` }),
+      runButton("Look again", (signal) => refreshList("local", signal))));
+  }
+
   function renderSettings() {
     const el = $("#tab-settings");
     const st = S.st;
     if (!st) return;
     const scrollL = el.querySelector(".colL")?.scrollTop ?? 0, scrollR = el.querySelector(".colR")?.scrollTop ?? 0;
 
-    const left = h("div", { class: "colL" }, h("div", { class: "section-title", text: `Providers · ${st.readyCount} ready` }), ...st.providers.map(providerCard), h("div", { class: "section-title", text: "Local models" }), localCardEl());
+    // Providers with a key or running come first; the ones kept for later wait under More providers.
+    const shown = st.providers.filter((p) => !(p.more && !p.ready && !p.key?.saved) && !(p.local && p.id !== "ollama" && !p.ready));
+    const later = st.providers.filter((p) => p.more && !p.ready && !p.key?.saved);
+    const left = h("div", { class: "colL" }, h("div", { class: "section-title", text: `Providers · ${st.readyCount} ready` }),
+      keysCardEl(), ...shown.map(providerCard), moreProvidersEl(later), addProviderEl(),
+      h("div", { class: "section-title", text: "Local models" }), localAppsEl(), localCardEl());
 
     const s = st.settings;
     const modeSeg = h("div", { class: "seg", role: "group", "aria-label": "How Auto picks" },
