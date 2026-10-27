@@ -2,10 +2,10 @@
 // Mac): the summary it reads every few seconds, the files build.sh copies into
 // the app, and that Leanfare runs from that copy.
 import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { cpSync, mkdtempSync, mkdirSync, readFileSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ALL_TICKED, boot, keys, post, reset } from "./app";
+import { ALL_TICKED, boot, keys, post, reset, ui } from "./app";
 
 let url = "";
 beforeAll(async () => { url = (await boot()).url; });
@@ -33,6 +33,26 @@ describe("the Mac app's needs", () => {
     expect(s.todayText).toBe("<$0.01");
     expect(s.budget).toMatchObject({ amount: 10, warn: false, reached: false });
     for (const k of ["amount", "left", "pct", "warn", "reached"]) expect(k in s.budget).toBe(true);
+  });
+
+  test("a plan line has every field the app decodes, with the type it expects", async () => {
+    const { plansBrief, plansView } = await import("../src/plans");
+    await ui(url, "/api/settings", { plans: { claude: { name: "Claude Max 20x", price: 200 } } });
+    const { saveSnap } = await import("../src/statusline");
+    saveSnap({ at: Date.parse("2026-10-21T11:00:00Z"), five: { used: 40, resets: Date.parse("2026-10-21T15:00:00Z") }, week: { used: 10, resets: Date.parse("2026-10-27T12:00:00Z") } });
+    await plansView();
+    const line: any = plansBrief().claude;
+    for (const f of ["limits-last.json", "limits.jsonl"]) rmSync(join(process.env.LEANFARE_DATA_DIR!, f), { force: true }); // no window left for other tests
+    expect(line).toBeTruthy();
+    const block = /struct PlanLine: Decodable \{([\s\S]*?)\n    \}/.exec(swift)![1];
+    const fields = [...block.matchAll(/^\s{8}let (\w+): (\w+)(\?)?$/gm)].map((m) => ({ name: m[1], type: m[2], optional: !!m[3] }));
+    expect(fields.map((f) => f.name).sort()).toEqual(Object.keys(line).sort());
+    for (const f of fields) {
+      if (f.optional && line[f.name] === null) continue;
+      expect(typeof line[f.name]).toBe(f.type === "String" ? "string" : "number");
+    }
+    expect(swift).toContain("5 hours"); // the menu tells a plan in its windows and tokens
+    expect(swift).toContain("tokens this month");
   });
 
   test("the menu bar text stays short", async () => {

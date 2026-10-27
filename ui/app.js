@@ -1277,22 +1277,35 @@
   const sessionsText = (n) => n < 1 ? "under 1 session" : n >= 1000 ? "more than 1,000 sessions" : `about ${Math.floor(n).toLocaleString("en-US")} session${Math.floor(n) === 1 ? "" : "s"}`;
   const weekShare = (p) => p < 0.1 ? "under 0.1%" : p < 1 ? `about ${p.toFixed(1)}%` : `about ${Math.round(p)}%`;
 
-  // The plan meter: the plan's two windows, what is left of each in work, and what still fits.
+  // The plan meter: the plan's two windows, how much of each is used, and what is left in tokens.
+  // Dollars of work at API prices only when Settings says to show them.
+  const showValue = () => !!S.st?.settings?.showValue;
+  const whenShort = (iso) => new Date(iso).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
+  function leftText(w) {
+    const parts = [];
+    if (w.tokensLeft) parts.push(`about ${bigTok(w.tokensLeft)} tokens left at your recent mix`);
+    if (showValue() && w.left !== null) parts.push(`about ${money(w.left)} of work at API prices${w.leftLo !== null && w.leftHi !== null ? ` (${money(w.leftLo)} to ${money(w.leftHi)})` : ""}`);
+    if (!parts.length) return null;
+    return `${parts.join(", ")} · ${w.from === "starting estimate" ? "a starting estimate" : `measured from ${w.windows} windows`}`;
+  }
   function meterBlock(m) {
-    if (!m || (!m.windows.length && !m.projects.length)) return null;
-    const when = (iso) => new Date(iso).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
+    if (!m || !m.windows.length) return null;
     const rows = m.windows.map((w) => h("div", { class: "mt-row" },
       h("span", { class: "n", text: w.kind === "week" ? "This week" : "5 hours" }),
       h("span", { class: "track" + (w.used >= 90 ? " hot" : "") }, h("i", { style: { width: Math.min(100, w.used) + "%" } })),
-      h("span", { class: "v", text: `${Math.round(w.used)}% used${w.resets ? ` · resets ${when(w.resets)}` : ""}` }),
-      w.left !== null ? h("span", { class: "sub", text: `about ${money(w.left)} of work left${w.leftLo !== null && w.leftHi !== null ? ` (${money(w.leftLo)} to ${money(w.leftHi)})` : ""}${w.tokensLeft ? `, about ${bigTok(w.tokensLeft)} tokens at your recent mix` : ""} · ${w.from === "starting estimate" ? "a starting estimate" : `measured from ${w.windows} windows`}` }) : null));
+      h("span", { class: "v", text: `${Math.round(w.used)}% used${w.resets ? ` · resets ${whenShort(w.resets)}` : ""}` }),
+      leftText(w) ? h("span", { class: "sub", text: leftText(w) }) : null));
+    return h("div", { class: "meter" }, h("div", { class: "mt-head", text: `Right now${m.at ? `, as of ${ago(m.at)}` : ""}` }), ...rows);
+  }
+  // What the meter knows beyond the two bars: which projects still fit, and use the logs do not show.
+  function meterMore(m) {
+    if (!m) return [];
     const fits = m.projects.filter((p) => p.sessionsLeft !== null).slice(0, 5).map((p) => h("li", { text: `${p.name}: ${sessionsText(p.sessionsLeft)}${p.pctOfWeek !== null ? ` (a session is ${weekShare(p.pctOfWeek)} of the week)` : ""}` }));
-    return h("div", { class: "meter" },
-      h("div", { class: "mt-head", text: `Right now${m.at ? `, as of ${ago(m.at)}` : ""}` }),
-      ...rows,
+    return [
       fits.length ? h("div", { class: "mt-fits" }, h("b", { text: "What still fits" }), h("ul", {}, ...fits)) : null,
       m.other ? h("p", { class: "pl-note", text: `About ${Math.round(m.other)}% of this week went to use the logs do not show (Claude chats, Cowork, the phone apps).` }) : null,
-      m.rough ? h("p", { class: "pl-note", text: "Max 5x was not measured by anyone yet, so this starts from a rough guess until your own windows replace it." }) : null);
+      m.rough ? h("p", { class: "pl-note", text: "Max 5x was not measured by anyone yet, so this starts from a rough guess until your own windows replace it." }) : null,
+    ].filter(Boolean);
   }
 
   function statuslineRow(st) {
@@ -1308,33 +1321,47 @@
       }, "btn small"));
   }
 
+  // One subscription, small: its limits and its tokens first (what a plan is measured in), the rest
+  // folded away. Its value at API prices only when Settings says to show it.
+  const ratioText = (r) => `${r < 0.05 ? "under 0.1" : r.toFixed(r >= 10 ? 0 : 1)}× what you pay`;
   function planBlock(v) {
-    const mb = v.logs ? meterBlock(S.meter?.[v.provider]) : null;
+    const show = showValue();
+    const m = v.logs ? S.meter?.[v.provider] : null;
     const rec = !v.plan && v.recognized ? v.recognized : null; // the plan Codex says you are on
-    const head = v.plan
-      ? h("div", { class: "pl-head" }, h("b", { text: v.plan.name }), h("span", { class: "grow" }), h("small", { text: `${money(v.plan.price)} a month` }))
+    const named = v.plan?.name ?? rec?.name ?? null;
+    const action = v.plan
+      ? h("small", { text: `${money(v.plan.price)} a month` })
       : rec
-        ? h("div", { class: "pl-head" }, h("b", { text: rec.name }), h("small", { text: ` · ${v.logs} says you are on this plan` }), h("span", { class: "grow" }),
-            rec.price !== null
-              ? h("button", { class: "btn small", type: "button", text: "Use this plan", onclick: () => patchSettings({ plans: { [v.provider]: { name: rec.name, price: rec.price } } }, `${v.label} plan saved.`) })
-              : h("button", { class: "btn small", type: "button", text: "Enter its price", onclick: () => setTab("settings") }))
-        : h("div", { class: "pl-head" }, h("b", { text: v.logs ?? v.label }), h("span", { class: "grow" }), h("button", { class: "btn small", type: "button", text: "Enter your plan", onclick: () => setTab("settings") }));
+        ? rec.price !== null
+          ? h("button", { class: "btn small", type: "button", text: "Use this plan", onclick: () => patchSettings({ plans: { [v.provider]: { name: rec.name, price: rec.price } } }, `${v.label} plan saved.`) })
+          : h("button", { class: "btn small", type: "button", text: "Enter its price", onclick: () => setTab("settings") })
+        : h("button", { class: "btn small", type: "button", text: "Enter your plan", onclick: () => setTab("settings") });
+    const head = h("div", { class: "pl-head" }, h("b", { text: v.label }), named ? h("span", { class: "pl-name", text: named }) : null,
+      rec ? h("small", { text: `· ${v.logs} says you are on this plan` }) : null, h("span", { class: "grow" }), action);
     const limits = v.limitsText ? h("div", { class: "sub", text: `Its limits: ${v.limitsText}.` }) : null;
-    if (!v.logs) return h("div", { class: "pl" }, head, limits, h("p", { class: "pl-note" }, `${v.label} keeps no usage numbers on this computer, so Leanfare cannot count your use. `,
+    const tile = (...kids) => h("div", { class: "pl" }, head, ...kids.filter(Boolean));
+    if (!v.logs) return tile(limits, h("p", { class: "pl-note" }, `${v.label} keeps no usage numbers on this computer, so Leanfare cannot count your use. `,
       v.usageUrl ? h("a", { href: v.usageUrl, target: "_blank", rel: "noopener noreferrer", text: `See it on ${v.label}'s own page ↗` }) : null));
-    if (!v.found) return h("div", { class: "pl" }, head, limits, mb, h("p", { class: "pl-note", text: `No ${v.logs} log files found on this computer.` }));
-    if (!v.tokens) return h("div", { class: "pl" }, head, limits, mb, h("p", { class: "pl-note", text: `No ${v.logs} use in this month's log files.` }));
-    const maxV = Math.max(...v.models.map((m) => m.value ?? 0), 0);
-    return h("div", { class: "pl" }, head, limits, mb,
-      h("div", { class: "pl-val" }, h("span", { class: "big", text: money(v.value) }), h("span", { class: "sub", text: "if this use were paid per use (at API prices)" }),
-        v.ratio !== null ? h("span", { class: "chip " + (v.ratio >= 1 ? "good" : ""), text: `${v.ratio < 0.05 ? "under 0.1" : v.ratio.toFixed(v.ratio >= 10 ? 0 : 1)}× what you pay` }) : null),
-      h("div", { class: "sub", text: `${bigTok(v.tokens)} tokens in ${v.logs}: ${bigTok(v.input)} in, ${bigTok(v.cached)} from the cache, ${bigTok(v.output)} out` }),
-      v.limits ? h("div", { class: "sub", text: `${v.logs} limits at its last message (${ago(v.limits.at)}): ${v.limits.windows.map((w) => `${Number(w.used.toFixed(1))}% of the ${w.label} used${w.resets ? `, resets ${new Date(w.resets).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}` : ""}`).join("; ")}` }) : null,
-      h("div", { class: "bars" }, ...v.models.slice(0, 5).map((m) => h("div", { class: "barrow", title: m.id ? `${m.model}\npriced as ${m.id}` : `${m.model}\nno listed price` },
-        h("span", { class: "n", text: m.label }), h("span", { class: "v", text: `${bigTok(m.tokens)} tokens · ${m.value === null ? "no listed price" : money(m.value)}` }),
-        h("span", { class: "track" }, h("i", { style: { width: (maxV > 0 && m.value ? (m.value / maxV) * 100 : 0) + "%" } }))))),
-      v.models.length > 5 ? h("div", { class: "sub", text: `and ${v.models.length - 5} more model${v.models.length - 5 === 1 ? "" : "s"}` }) : null,
-      v.unpricedTokens ? h("p", { class: "pl-note", text: `${bigTok(v.unpricedTokens)} tokens are on models with no listed price and count as $0 here.` }) : null);
+    const bars = meterBlock(m);
+    const codexLine = v.limits ? h("div", { class: "sub", text: `${v.logs} limits at its last message (${ago(v.limits.at)}): ${v.limits.windows.map((w) => `${Number(w.used.toFixed(1))}% of the ${w.label} used${w.resets ? `, resets ${whenShort(w.resets)}` : ""}`).join("; ")}` }) : null;
+    const codex = bars ? null : codexLine; // the bars say it already: the last message's numbers go in the fold
+    if (!v.found) return tile(bars, limits, h("p", { class: "pl-note", text: `No ${v.logs} log files found on this computer.` }));
+    if (!v.tokens) return tile(bars, codex, limits, h("p", { class: "pl-note", text: `No ${v.logs} use in this month's log files.` }));
+    const tok = h("div", { class: "pl-tok" }, h("span", { class: "big", text: bigTok(v.tokens) }),
+      h("span", { class: "sub", text: `tokens this month in ${v.logs}: ${bigTok(v.cached)} read from the cache, ${bigTok(v.input)} in, ${bigTok(v.output)} out` }));
+    const value = show ? h("div", { class: "pl-val" }, h("span", { class: "sub", text: `If this were pay per use: ${money(v.value)} at API prices` }),
+      v.ratio !== null ? h("span", { class: "chip " + (v.ratio >= 1 ? "good" : ""), text: ratioText(v.ratio) }) : null) : null;
+    const models = [...v.models].sort((a, b) => b.tokens - a.tokens);
+    const maxT = Math.max(...models.map((x) => x.tokens), 0);
+    const byModel = h("div", { class: "bars" }, ...models.slice(0, 5).map((x) => h("div", { class: "barrow", title: x.id ? `${x.model}\npriced as ${x.id}` : `${x.model}\nno listed price` },
+      h("span", { class: "n", text: x.label }), h("span", { class: "v", text: `${bigTok(x.tokens)} tokens${show ? ` · ${x.value === null ? "no listed price" : money(x.value)}` : ""}` }),
+      h("span", { class: "track" }, h("i", { style: { width: (maxT > 0 ? (x.tokens / maxT) * 100 : 0) + "%" } })))));
+    const more = h("details", { class: "pl-more" }, h("summary", { text: "By model, and what still fits" }),
+      byModel,
+      models.length > 5 ? h("div", { class: "sub", text: `and ${models.length - 5} more model${models.length - 5 === 1 ? "" : "s"}` }) : null,
+      ...meterMore(m), bars ? codexLine : null, limits,
+      show && v.unpricedTokens ? h("p", { class: "pl-note", text: `${bigTok(v.unpricedTokens)} tokens are on models with no listed price and count as $0 here.` }) : null);
+    return tile(bars, codex, tok, value, more);
   }
 
   function plansCardEl() {
@@ -1345,7 +1372,7 @@
     if (!P) { card.append(h("div", { class: "empty", text: "Reading the Claude Code and Codex log files on this computer…" })); return card; }
     const shown = P.providers.filter((v) => v.plan || v.found);
     if (!shown.length) {
-      card.append(h("p", { class: "pl-note", text: "Enter your Claude, ChatGPT or other plan to see its limits, and what your Claude Code and Codex use would cost per use, next to what you pay." }),
+      card.append(h("p", { class: "pl-note", text: "Enter your Claude, ChatGPT or other plan to see its limits, and the tokens your Claude Code and Codex use." }),
         h("div", { class: "row" }, h("button", { class: "btn small", type: "button", text: "Enter a plan", onclick: () => setTab("settings") })));
     } else card.append(h("div", { class: "pl-grid" }, ...shown.map(planBlock)));
     if (S.meter?.statusline) card.append(statuslineRow(S.meter.statusline));
@@ -1475,8 +1502,7 @@
     const cards = h("div", { class: "cards6" },
       stat("spent", "Spent", money(v.spent), `Today ${money(v.today)}`),
       stat("saved", "Saved by Auto", money(v.saved.amount), h("span", { text: moreText }), v.saved.amount > 0 ? "good" : ""),
-      v.subscription === null
-        ? stat("gap", "Against a subscription", "—", h("button", { class: "btn small", text: "Enter a price", onclick: () => setTab("settings") }), "small")
+      v.subscription === null ? null
         : stat("gap", "Against a subscription", money(Math.abs(v.gap)), `${v.gap >= 0 ? "under" : "over"} your ${money(v.subscription)} a month`, v.gap >= 0 ? "good" : ""),
       stat("answers", "Answers", num(v.answers), `${num(v.autoAnswers)} picked by Auto${v.stopped ? ` · ${num(v.stopped)} stopped` : ""}${v.errors ? ` · ${num(v.errors)} failed` : ""}`),
       b.amount === null
@@ -1755,6 +1781,7 @@
       const before = S.st?.settings.instructions ?? "";
       S.st = await api("/api/settings", { body: patch });
       if ("plans" in patch) S.plans = null; // the Savings card is read again with the new plan
+      if ("showValue" in patch && S.savings) renderSavings();
       followDefault(before);
       renderShell(); renderSettings(); renderComposerBar();
       if (done) toast(done, "done");
@@ -1892,7 +1919,8 @@
     const hidden = keys.filter((k) => !shown.includes(k));
     return h("div", { class: "setting" }, h("h3", { text: "Your subscriptions" }), ...rows,
       hidden.length ? h("button", { class: "more-toggle", type: "button", text: `▸ More subscriptions (${hidden.map((k) => subs[k].label).join(", ")})`, onclick: () => { S.showAllPlans = true; renderSettings(); } }) : null,
-      h("p", { text: "Savings then shows each plan's limits (the 5 hours and the week, where Leanfare can read them) and what your Claude Code and Codex use this month would cost per use, next to the price you pay. Leanfare reads only the token counts in those programs' log files on this computer, never the words." }),
+      h("p", { text: "Savings then shows each plan's limits (the 5 hours and the week, where Leanfare can read them) and the tokens your Claude Code and Codex use. Leanfare reads only the token counts in those programs' log files on this computer, never the words." }),
+      h("label", { class: "check" }, h("input", { type: "checkbox", checked: !!s.showValue, onchange: (e) => patchSettings({ showValue: e.target.checked }, e.target.checked ? "Savings also shows what your plan use would cost per use." : "Savings shows your plans in tokens and limits only.") }), "Also show what that use would cost per use, at API prices"),
       h("p", { text: "Leanfare only counts here. Anthropic does not let other apps use a Claude subscription login, so Auto never uses one." }));
   }
 

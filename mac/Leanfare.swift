@@ -85,11 +85,15 @@ struct Summary: Decodable {
         let warn: Bool
         let reached: Bool
     }
-    // Your plans: what the month's Claude Code and Codex use would cost at API prices (read from their log files).
+    // Your plans, in what they are measured in: the 5 hour and weekly windows (percent used) and the
+    // month's tokens in Claude Code's and Codex's log files. value: at API prices, only when Settings shows it.
     struct PlanLine: Decodable {
         let plan: String
         let price: Double
-        let value: Double
+        let tokens: Double
+        let five: Double?
+        let week: Double?
+        let value: Double?
         let ratio: Double?
     }
     struct Plans: Decodable {
@@ -468,10 +472,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 menu.addItem(info("Budget: \(left) left of \(String(format: "$%.2f", b.amount)) (\(Int(b.pct ?? 0))% used)"))
             }
             menu.addItem(info("\(s.answers) answers this month\(s.running > 0 ? " · \(s.running) running" : "")"))
-            // One line per plan you entered: its use at API prices next to its price. An estimate, as the Savings page says.
+            // One line per plan you entered: how much of its windows is used, and the month's tokens.
             for line in [s.plans?.claude, s.plans?.chatgpt].compactMap({ $0 }) {
-                let times = line.ratio.map { String(format: " (%.1f× the $%.0f)", $0, line.price) } ?? ""
-                menu.addItem(info("\(line.plan): about \(String(format: "$%.0f", line.value)) at API prices\(times)"))
+                var parts: [String] = []
+                if let f = line.five { parts.append("5 hours \(Int(f.rounded()))%") }
+                if let w = line.week { parts.append("week \(Int(w.rounded()))%") }
+                if line.tokens > 0 { parts.append("\(tokensText(line.tokens)) tokens this month") }
+                if let v = line.value { parts.append("about \(String(format: "$%.0f", v)) at API prices" + (line.ratio.map { String(format: " (%.1f× the $%.0f)", $0, line.price) } ?? "")) }
+                menu.addItem(info("\(line.plan): " + (parts.isEmpty ? "no numbers yet" : parts.joined(separator: " · "))))
             }
             menu.addItem(.separator())
         }
@@ -488,6 +496,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(login)
         menu.addItem(.separator())
         menu.addItem(item("Quit Leanfare", #selector(quit), "q"))
+    }
+
+    // 1.2B, 412M, 35k: tokens in a few characters.
+    func tokensText(_ n: Double) -> String {
+        if n >= 1e9 { return String(format: "%.1fB", n / 1e9) }
+        if n >= 1e6 { return String(format: "%.1fM", n / 1e6) }
+        if n >= 1e3 { return String(format: "%.0fk", n / 1e3) }
+        return String(format: "%.0f", n)
     }
 
     func info(_ title: String) -> NSMenuItem {

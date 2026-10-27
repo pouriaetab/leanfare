@@ -624,22 +624,33 @@ describe("Your plans", () => {
     expect(bad(doc)).toBe(false);
   }, 20000);
 
-  test("log files and a plan: the value at API prices, how many times the price, and each model", async () => {
+  test("log files and a plan: tokens first and each model in tokens; dollars at API prices only when Settings shows them", async () => {
     logs(line("1", "claude-sonnet-4-6", { input_tokens: 1_000_000, output_tokens: 100_000 }), line("2", "claude-future-9", { input_tokens: 5000, output_tokens: 10 }));
     await ui(url, "/api/settings", { plans: { claude: { name: "Claude Max", price: 1.5 } } });
-    const doc = await openApp();
+    let doc = await openApp();
     await goSavings(doc);
-    const t = doc.querySelector("#plansCard").textContent;
+    let t = doc.querySelector("#plansCard").textContent;
     expect(t).toContain("Claude Max");
     expect(t).toContain("$1.50 a month");
+    expect(t).toContain("1.1Mtokens this month in Claude Code"); // the big number, then what it is
+    expect(t).toContain("Claude Sonnet 4.6");
+    expect(t).toContain("1.1M tokens"); // its bar
+    expect(t).toContain("claude-future-9");
+    expect(t).not.toContain("$4.50");
+    expect(t).not.toContain("at API prices");
+    expect(t).not.toContain("what you pay");
+    expect(doc.querySelectorAll("#plansCard .pl").length).toBe(1); // no Codex logs and no ChatGPT plan: nothing to show for it
+    expect(doc.querySelector("#plansCard .pl details summary").textContent).toBe("By model, and what still fits"); // the rest is folded
+    expect(bad(doc)).toBe(false);
+    await ui(url, "/api/settings", { showValue: true });
+    doc = await openApp();
+    await goSavings(doc);
+    t = doc.querySelector("#plansCard").textContent;
     expect(t).toContain("$4.50"); // $3 in + $1.50 out
     expect(t).toContain("at API prices");
     expect(t).toContain("3.0× what you pay");
-    expect(t).toContain("Claude Sonnet 4.6");
-    expect(t).toContain("claude-future-9");
     expect(t).toContain("no listed price");
     expect(t).toContain("5.0k tokens are on models with no listed price");
-    expect(doc.querySelectorAll("#plansCard .pl").length).toBe(1); // no Codex logs and no ChatGPT plan: nothing to show for it
     expect(bad(doc)).toBe(false);
   }, 20000);
 
@@ -663,13 +674,14 @@ describe("Your plans", () => {
     expect(bad(doc)).toBe(false);
   }, 20000);
 
-  test("log files but no plan yet: the value is shown with a way to enter the plan", async () => {
+  test("log files but no plan yet: the tokens show, with a way to enter the plan", async () => {
     logs(line("1", "claude-sonnet-4-6", { input_tokens: 1_000_000, output_tokens: 0 }));
     const doc = await openApp();
     await goSavings(doc);
     const t = doc.querySelector("#plansCard").textContent;
     expect(t).toContain("Claude Code");
-    expect(t).toContain("$3");
+    expect(t).toContain("1.0Mtokens this month");
+    expect(t).not.toContain("$3");
     expect(t).not.toContain("what you pay");
     press(doc, "Enter your plan", "#plansCard");
     await waitFor(() => !!doc.querySelector("input[aria-label='Claude plan name']"));
@@ -688,12 +700,12 @@ describe("Your plans", () => {
     await ui(url, "/api/settings", { plans: { claude: { name: "Claude Pro", price: 6 } } });
     const doc = await openApp();
     await goSavings(doc);
-    expect(doc.querySelector("#plansCard").textContent).toContain("$3");
+    expect(doc.querySelector("#plansCard").textContent).toContain("1.0Mtokens this month");
     logs(line("1", "claude-sonnet-4-6", { input_tokens: 1_000_000, output_tokens: 0 }), line("2", "claude-sonnet-4-6", { input_tokens: 1_000_000, output_tokens: 0 }));
     press(doc, "Look again", "#plansCard");
     expect(doc.querySelector("#plansCard button").textContent).toBe("Stop"); // it is its own Stop while it reads
-    await waitFor(() => doc.querySelector("#plansCard").textContent.includes("2.0M tokens"));
-    expect(doc.querySelector("#plansCard").textContent).toContain("1.0× what you pay");
+    await waitFor(() => doc.querySelector("#plansCard").textContent.includes("2.0Mtokens this month"));
+    expect(doc.querySelector("#plansCard").textContent).toContain("2.0M tokens"); // the model's bar too
     expect(toasts(doc)).toContain("Log files read again.");
     expect(doc.querySelector("#plansCard button").textContent).toBe("Look again"); // the button is back with its label
   }, 20000);
@@ -702,14 +714,14 @@ describe("Your plans", () => {
     logs(line("1", "claude-sonnet-4-6", { input_tokens: 1_000_000, output_tokens: 0 }));
     const doc = await openApp();
     await goSavings(doc);
-    expect(doc.querySelector("#plansCard").textContent).toContain("$3");
+    expect(doc.querySelector("#plansCard").textContent).toContain("1.0Mtokens this month");
     await Bun.sleep(300);
     const pick = doc.querySelector("#tab-savings select[aria-label='Month']");
     pick.value = "2026-09";
     pick.dispatchEvent(new win.Event("change", { bubbles: true }));
     await waitFor(() => doc.querySelector("#plansCard")?.textContent.includes("No Claude Code use in this month"));
     expect(doc.querySelector("#plansCard").textContent).toContain("No Claude Code use in this month's log files.");
-    expect(doc.querySelector("#plansCard").textContent).not.toContain("$3");
+    expect(doc.querySelector("#plansCard").textContent).not.toContain("1.0Mtokens");
   }, 20000);
 
   test("Settings: save a plan, see it on Savings, change it, remove it", async () => {
@@ -723,6 +735,16 @@ describe("Your plans", () => {
     expect((await ui(url, "/api/state")).json.settings.plans).toEqual({ claude: { name: "Claude Max", price: 100 } });
     expect(doc.querySelector("input[aria-label='Claude plan name']").value).toBe("Claude Max");
     await goSavings(doc);
+    expect(doc.querySelector("#plansCard").textContent).toContain("$100.00 a month");
+    expect(doc.querySelector("#plansCard").textContent).not.toContain("what you pay"); // no dollars of use unless asked
+    await goSettings(doc);
+    const showIt = [...doc.querySelectorAll("label.check")].find((l: any) => l.textContent.includes("cost per use, at API prices"))!.querySelector("input");
+    showIt.checked = true;
+    showIt.dispatchEvent(new win.Event("change", { bubbles: true }));
+    await waitFor(() => toasts(doc).includes("also shows what your plan use would cost"));
+    expect((await ui(url, "/api/state")).json.settings.showValue).toBe(true);
+    await goSavings(doc);
+    await waitFor(() => doc.querySelector("#plansCard").textContent.includes("what you pay"));
     expect(doc.querySelector("#plansCard").textContent).toContain("under 0.1× what you pay"); // never "0.0×"
     await goSettings(doc);
     const remove = [...doc.querySelectorAll(".plan-row button")].find((b: any) => b.textContent === "Remove");
@@ -746,7 +768,7 @@ describe("Your plans", () => {
     await goSavings(doc);
     await waitFor(() => doc.querySelector("#plansCard").textContent.includes("Claude Max"));
     expect(doc.querySelector("#plansCard").textContent).toContain("$6.00 a month");
-    expect(doc.querySelector("#plansCard").textContent).toContain("0.5× what you pay");
+    expect(doc.querySelector("#plansCard").textContent).toContain("1.0Mtokens this month");
   }, 20000);
 
   test("Settings: a plan with a name and no price is refused with the reason, and nothing is saved", async () => {
@@ -804,13 +826,25 @@ describe("The plan meter", () => {
     expect(t).toContain("60% used");
     expect(t).toContain("This week");
     expect(t).toContain("90% used");
-    expect(t).toContain("of work left");
+    expect(t).toContain("tokens left at your recent mix");
+    expect(t).not.toContain("of work"); // dollars of work only when Settings shows them
     expect(t).toContain("a starting estimate");
     expect(t).toContain("What still fits");
     expect(t).toContain("llmledger: about");
     expect(t).toMatch(/a session is (about [\d.]+%|under 0\.1%) of the week/);
     expect(t).not.toContain("0.0%"); // a small session reads "under 0.1%", never nothing
     expect(doc.querySelector("#plansCard .meter .track.hot i")).toBeTruthy(); // the week at 90% is coloured
+    expect(bad(doc)).toBe(false);
+  }, 20000);
+
+  test("with the value shown (Settings), the meter also gives the work left in dollars at API prices", async () => {
+    someUse();
+    await ui(url, "/api/settings", { plans: { claude: { name: "Claude Max", price: 200 } }, showValue: true });
+    const doc = await openApp();
+    await goSavings(doc);
+    const t = doc.querySelector("#plansCard").textContent;
+    expect(t).toContain("tokens left at your recent mix");
+    expect(t).toMatch(/about \$[\d,.]+ of work at API prices/);
     expect(bad(doc)).toBe(false);
   }, 20000);
 

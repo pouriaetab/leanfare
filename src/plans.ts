@@ -32,6 +32,7 @@ import { basename, join } from "node:path";
 import { costOf, fromAnthropicUsage, type Usage } from "./cost";
 import { getModel } from "./data";
 import { PLAN_KEYS, settings, type PlanProvider } from "./settings";
+import { lastSnap } from "./statusline";
 import { SUBSCRIPTIONS, chatgptPlan, presetLimits } from "./subscriptions";
 import { localMonth, now } from "./util";
 
@@ -371,24 +372,43 @@ async function readMonth(provider: PlanProvider, month: string): Promise<PlanVie
 export async function plansView(month = localMonth(), force = false) {
   const wanted = planProviders.filter((p) => LOGGED.includes(p) || settings().plans?.[p]);
   const views = await Promise.all(wanted.map((p) => planView(p, month, force)));
-  return { month, providers: views, note: NOTE };
+  return { month, providers: views, note: settings().showValue ? NOTE + VALUE_NOTE : NOTE };
 }
 
-export const NOTE = "Subscriptions have a fixed price and limits; Leanfare shows the limits it can read, and what the same use would cost on pay per use: an estimate at the providers' list prices, from the usage numbers in the log files on this computer. Codex writes how much of its limits each message had used, so ChatGPT shows that, as of its last message; Claude's limits show once Leanfare is in Claude Code's status line (the button above), which hands it the two percentages. Work done on other computers or in the apps' own chat windows is not in these logs.";
+export const NOTE = "A subscription is measured in its limits and its tokens: Leanfare shows the limits it can read and the tokens in the log files on this computer (only the numbers, never the words). Codex writes how much of its limits each message had used; Claude's two percentages come from Claude Code's status line once Leanfare is in it. Work on other computers or in the apps' own chat windows is not in these logs.";
+export const VALUE_NOTE = " What the same use would cost per use is an estimate at the providers' list prices.";
+
+// The plan's two windows as last seen, in percent used, or null: Claude's from Claude Code's status
+// line, ChatGPT's from Codex's last message. A window that has reset since says nothing.
+export function windowsNow(provider: PlanProvider, view: PlanView | null, at = now().getTime()): { five: number | null; week: number | null } {
+  if (provider === "claude") {
+    const s = lastSnap();
+    const live = (w: { used: number; resets: number | null } | null | undefined) => (w && (w.resets === null || w.resets > at) ? w.used : null);
+    return { five: live(s?.five), week: live(s?.week) };
+  }
+  const ws = view?.limits?.windows.filter((w) => w.resets === null || Date.parse(w.resets) > at) ?? [];
+  return { five: ws.find((w) => w.label === "5 hour limit")?.used ?? null, week: ws.find((w) => w.label === "weekly limit")?.used ?? null };
+}
 
 // What the Mac menu shows, from what was last worked out. Asking never waits for the log files:
 // when the numbers are older than ten minutes (or missing) a new reading starts in the background.
+// A plan is told in its limits and tokens; its value at API prices only when Settings says to show it.
 const BRIEF_STALE_MS = 10 * 60_000;
-export interface Brief { plan: string; price: number; value: number; ratio: number | null }
+export interface Brief { plan: string; price: number; tokens: number; five: number | null; week: number | null; value: number | null; ratio: number | null }
 export function plansBrief(): Partial<Record<PlanProvider, Brief>> {
   const out: Partial<Record<PlanProvider, Brief>> = {};
   const month = localMonth();
+  const show = settings().showValue;
   for (const p of planProviders) {
     const plan = settings().plans?.[p];
     if (!plan) continue;
     const hit = viewCache.get(`${p}:${month}`);
     if (!hit || Date.now() - hit.at > BRIEF_STALE_MS) planView(p, month, true).catch(() => {});
-    if (hit && hit.view.found) out[p] = { plan: plan.name, price: plan.price, value: hit.view.value, ratio: plan.price > 0 ? hit.view.value / plan.price : null };
+    const w = windowsNow(p, hit?.view ?? null);
+    const found = !!hit?.view.found;
+    if (!found && w.five === null && w.week === null) continue;
+    const value = found && show ? hit!.view.value : null;
+    out[p] = { plan: plan.name, price: plan.price, tokens: found ? hit!.view.tokens : 0, five: w.five, week: w.week, value, ratio: value !== null && plan.price > 0 ? value / plan.price : null };
   }
   return out;
 }
