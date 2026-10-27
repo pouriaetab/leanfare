@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0
+
+- Plan a task across models: write what you want done, and Leanfare splits it into parts with where each runs and its model, as a table with the time, the tokens kept out of your plan and the cost. Changes to your project and the hardest judgement stay with the app you work in, each with the model to pick there (in Claude Code: Opus, Sonnet or Haiku, by the part); reading and drafting go to local, free or cheap models, at once where they can. In the new Plan tab, and as the MCP tools `plan`, `plan_run`, `plan_status` and `plan_stop`.
+- Paid parts of a plan run only with your yes, or up to an amount you set in Settings; parts on local and free models run on their own, their checks too. The answers are saved in the project's `.leanfare` folder, which git ignores.
+- Claude Desktop and Cowork show the plan as a page in the chat, with Run, Stop and the answers as they come.
+- Plan by itself: Claude Code, Codex and Gemini CLI can call the plan on their own for a task with several parts. In Claude Code this adds a worker subagent for Leanfare's parts and a prompt hook that says how much of your plan is left.
+- Your subscriptions in tokens and limits: Savings shows what you used and what is left, with smaller tiles. What that use would cost at API prices is now a choice in Settings.
+- Savings finds the AI apps on this computer and counts each plan only in its own months (a start month, and an end month for a plan you ended). Grok plans are new.
+- Short answers in the chat by default: the answer first, a table or a short list, more only when you ask. Settings can turn it off.
+
+Fixed from 0.4.0:
+
+- A plan's run hands over the files its parts name, measured by the app that named them.
+- Leanfare's own changes to an app's files no longer count as using that app, and looking for apps no longer holds up the server.
+- The estimate before sending counts the short answers line.
+
 ## 0.4.0
 
 - Install with one line: Leanfare is now one file for macOS, Linux and Windows, with an installer that checks the download against the release's checksums. Leanfare says when a new version is out (Settings can turn that off).
