@@ -308,12 +308,15 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   if (picked) {
     const checkPrompt = `The task:\n${input.task}${block ? `\n\n${block}` : ""}\n\nThe answer to check:\n${first.text}`;
     const ckFit = fit(checkPrompt.length + CHECKER_SYSTEM.length, CHECK_MAX_OUT);
-    const above = within(doer ? ratedAbove(doer) : () => false);
-    const stronger = (m: Model) => above(m) && ckFit.ok(m);
+    // Rated above the model that answered and able to take the check's text; the grades' preference
+    // comes last, so a moved-down model still checks when it is the only one that can.
+    const above0 = doer ? ratedAbove(doer) : () => false;
+    const above = kept(above0);
+    const stronger = within((m) => above0(m) && ckFit.ok(m));
     if (!usableModels(above).length) {
       check.verdict = "skipped";
       check.why = doer ? `${doer.label} is the best rated model you ticked for this, so there is no stronger one to check it` : "the model that answered is no longer in Leanfare's price list";
-    } else if (!usableModels(stronger).length) {
+    } else if (!usableModels((m) => above(m) && ckFit.ok(m)).length) {
       check.verdict = "skipped";
       check.why = `the models rated above ${doer!.label} cannot take the check's text (about ${num(ckFit.need)} tokens)`;
     } else {
@@ -334,7 +337,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
           const up = UP[TIER[input.effort]];
           const note = `\n\nA checker found a problem with an earlier answer to this task: ${(v.why || "it was judged wrong").replace(/[.!]?$/, ".")} Avoid it.`;
           const againFit = fit(prompt.length + note.length + system.length, input.maxOut);
-          const again = await run([{ role: "user", content: prompt + note }], up ? `auto-${up}` : checker.id, "Delegate, asked again", { system, source, guess, only: (m: Model) => above(m) && againFit.ok(m), onlyWhy: tooMuch(againFit.need), effort: input.effort, maxOut: input.maxOut, optional: true, speed: input.speed });
+          const again = await run([{ role: "user", content: prompt + note }], up ? `auto-${up}` : checker.id, "Delegate, asked again", { system, source, guess, only: within((m) => above0(m) && againFit.ok(m)), onlyWhy: tooMuch(againFit.need), effort: input.effort, maxOut: input.maxOut, optional: true, speed: input.speed });
           rerunCost = again.cost;
           spent.push(again.cost);
           if (again.status === "stopped" && gone()) throw stopped();

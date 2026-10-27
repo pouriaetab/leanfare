@@ -48,11 +48,12 @@ export function standings(): Standing[] {
   return [...standingsMap().values()].sort((a, b) => Number(b.down) - Number(a.down) || a.label.localeCompare(b.label) || a.kind.localeCompare(b.kind));
 }
 
-// One grade; a part graded again replaces its earlier grade (id: the earlier one's row).
+// One grade; a part graded again replaces its earlier grade (id: the earlier one's row, when it is still
+// that model's grade for that kind: another chance deletes rows, and SQLite gives their ids out again).
 export function addGrade(g: { model: string; kind: GradedKind; effort: string | null; verdict: Verdict; source: string }, replace: number | null = null): number {
   forgetGrades();
   if (replace !== null) {
-    const r = db.query("UPDATE grades SET verdict = ?, source = ?, ts = ? WHERE id = ?").run(g.verdict, g.source, now().toISOString(), replace);
+    const r = db.query("UPDATE grades SET verdict = ?, source = ?, ts = ? WHERE id = ? AND model = ? AND kind = ?").run(g.verdict, g.source, now().toISOString(), replace, g.model, g.kind);
     if (r.changes) return replace;
   }
   const r = db.query("INSERT INTO grades(ts, model, kind, effort, verdict, source) VALUES (?, ?, ?, ?, ?, ?)").run(now().toISOString(), g.model, g.kind, g.effort, g.verdict, g.source);

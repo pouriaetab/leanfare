@@ -4,6 +4,7 @@
 // partly counting half) is moved down: Auto, plans and the delegate skip it for that kind while another
 // model can take it, until it gets another chance.
 import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { store, type Model } from "../src/data";
 import { db } from "../src/db";
 import { addGrade, giveAnotherChance, movedDown, standing, standingText, standings } from "../src/grades";
 import { forgetPlans } from "../src/planner";
@@ -84,6 +85,24 @@ describe("what a model moved down changes", () => {
   });
 });
 
+describe("the delegate's check", () => {
+  const m = (apiId: string, rating: number, price: number, context: number): Model => ({
+    id: `openai/${apiId}`, provider: "openai", apiId, source: "test", maker: "openai", name: apiId, label: apiId, input: price, output: price, cacheRead: null, cacheWrite: null,
+    context, skills: [], added: "2026-01-01", retire: null, ratings: { overall: rating, longer_query: rating },
+  }) as Model;
+  test("the only stronger model that can take the check's text, moved down, still checks: the grades come after the size", async () => {
+    await reset({ ticked: ["openai/doer-x", "openai/strong-small", "openai/strong-big"] });
+    store.catalog.models.push(m("doer-x", 1380, 0.1, 1_000_000), m("strong-small", 1450, 1, 6_000), m("strong-big", 1450, 2, 1_000_000));
+    await ui(url, "/api/refresh", { what: "ollama" }); // the catalogue is read again
+    await keys("openai");
+    grade("openai/strong-big", "read", "wrong", "wrong", "wrong");
+    const r = await ui(url, "/api/delegate", { task: "List the errors.", files: [{ name: "app.log", text: "10:01 error: disk full\n".repeat(1300) }], kind: "read", effort: "low", check: "always" });
+    expect(r.status).toBe(200);
+    expect(r.json.model.id).toBe("openai/doer-x");
+    expect(r.json.check.checker?.id).toBe("openai/strong-big");
+  });
+});
+
 describe("grading a plan's part", () => {
   async function ranPlan() {
     await keys("openai", "google", "deepseek");
@@ -113,6 +132,17 @@ describe("grading a plan's part", () => {
     expect(again.json.standing).toMatchObject({ n: 1, good: 1, wrong: 0 }); // replaced, not added
     expect((db.query("SELECT source FROM grades").all() as any[]).map((r) => r.source)).toEqual(["you"]); // one row: its verdict and grader replaced
     expect((await ui(url, `/api/plan/run?id=${plan.id}`)).json.parts[0]).toMatchObject({ verdict: "good", gradedBy: "you" });
+  });
+  test("grading a part again after another chance changes only that part's grade (SQLite gives deleted rows' ids out again)", async () => {
+    const { plan, v } = await ranPlan();
+    const answered = v.parts.find((r: any) => r.n === 1).modelId as string;
+    await ui(url, "/api/grades", { id: plan.id, part: 1, verdict: "wrong", source: "you" });
+    await ui(url, "/api/grades/reset", { model: answered, kind: "read" }); // Settings: another chance (its grades go)
+    const other = answered === "openai/gpt-5-mini" ? "deepseek/deepseek-v4-flash" : "openai/gpt-5-mini";
+    await ui(url, "/api/grades", { model: other, kind: "write", verdict: "wrong" }); // takes the freed id
+    await ui(url, "/api/grades", { id: plan.id, part: 1, verdict: "good", source: "you" }); // you change your mind
+    expect(standing(other, "write")).toMatchObject({ n: 1, wrong: 1 });
+    expect(standing(answered, "read")).toMatchObject({ n: 1, good: 1 });
   });
   test("what cannot be graded says why", async () => {
     const { plan } = await ranPlan();
