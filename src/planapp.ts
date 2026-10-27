@@ -60,13 +60,15 @@ export const PLAN_APP_HTML = `<!doctype html>
   const tok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(Math.round(n)));
   const secs = (s) => (s === null || s === undefined ? "" : s < 90 ? "~" + Math.max(1, Math.round(s)) + " s" : "~" + Math.round(s / 60) + " min");
   const RUNS = { you: "you", local: "Leanfare, this computer", free: "Leanfare, free", paid: "Leanfare, pay per use" };
-  const NOW = { waiting: "waiting", running: "running…", done: "done", failed: "failed", stopped: "stopped", yours: "yours", blocked: "waits", asks: "waits for a yes" };
+  const NOW = { waiting: "waiting", running: "running…", done: "done", failed: "failed", stopped: "stopped", yours: "yours", after_yours: "after yours", blocked: "waits", asks: "waits for a yes" };
   let plan = null, run = null, timer = null;
 
   function draw() {
     const app = $("#app");
     if (!plan) return;
     const st = (n) => (run ? run.parts.find((p) => p.n === n) : null);
+    const byN = (n) => plan.parts.find((q) => q.n === n) || {};
+    const laterOf = (p, seen = 0) => seen < 50 && p.needs.some((n) => byN(n).runs_on === "you" || (byN(n).needs && laterOf(byN(n), seen + 1))); // it waits for one of yours, through its needs
     const rows = plan.parts.map((p) => el("tr", { class: p.runs_on === "you" ? "you" : "" },
       el("td", { class: "n", text: p.n }),
       el("td", {}, el("b", { text: p.title }), el("div", { class: "why", text: p.kind + ", " + p.effort + (p.needs.length ? " · after " + p.needs.join(", ") : "") })),
@@ -77,8 +79,12 @@ export const PLAN_APP_HTML = `<!doctype html>
       el("td", { class: "c", "data-l": "Cost", text: p.runs_on === "you" ? "in your plan" : usd(p.cost_usd) }),
       run ? el("td", { class: "s " + ((st(p.n) || {}).status === "done" ? "done" : ["failed", "blocked", "asks"].includes((st(p.n) || {}).status) ? "bad" : ""), "data-l": "Now", text: NOW[(st(p.n) || {}).status] || "" }) : null));
     const t = plan.totals;
-    const paid = plan.parts.filter((p) => p.runs_on === "paid").reduce((n, p) => n + (p.cost_usd || 0), 0);
+    const paidParts = plan.parts.filter((p) => p.runs_on === "paid");
+    const paid = paidParts.reduce((n, p) => n + (p.cost_usd || 0), 0);
+    const unknown = paidParts.some((p) => p.cost_usd === null || p.cost_usd === undefined);
     const mine = plan.parts.filter((p) => p.runs_on !== "you").length;
+    const now = mine - (t.later || 0); // the parts of Leanfare's that do not wait for yours
+    const later = plan.parts.filter((p) => p.runs_on !== "you" && laterOf(p)).map((p) => p.n);
     const going = run && run.running;
     // Something of Leanfare's left to run: never run, or ended without an answer.
     const left = !run || plan.parts.some((p) => p.runs_on !== "you" && ["waiting", "asks", "failed", "stopped", "blocked"].includes((st(p.n) || {}).status));
@@ -87,11 +93,13 @@ export const PLAN_APP_HTML = `<!doctype html>
       el("table", {}, el("thead", {}, el("tr", {}, ...["#", "Part", "Runs on", "Model", "Time", "Tokens", "Cost", ...(run ? ["Now"] : [])].map((x) => el("th", { text: x })))), el("tbody", {}, ...rows)),
       el("p", { class: "sum", text: "About " + tok(t.kept) + " tokens kept out of your plan" + (t.used ? ", about " + tok(t.used) + " stay in it" : "") + ". Pay per use: " + usd(t.cost) + "." }),
       el("div", { class: "row" },
-        mine && (left || going) ? el("button", { class: "go", id: "run", disabled: going ? "" : null, onclick: start, text: going ? "Running…" : run ? "Run the rest" : "Run Leanfare's parts" + (paid > 0 ? " (about " + usd(paid) + " paid)" : "") }) : null,
+        now && (left || going) ? el("button", { class: "go", id: "run", disabled: going ? "" : null, onclick: start, text: going ? "Running…" : (run ? "Run the rest" : "Run Leanfare's parts") + (paidParts.length ? (unknown ? " (paid parts, cost not known)" : " (about " + usd(paid) + " paid)") : "") }) : null,
+        going ? el("button", { id: "stop", onclick: stop, text: "Stop" }) : null,
         run && !going && run.parts.some((p) => p.answer) ? el("button", { id: "back", onclick: handBack, text: "Hand the answers to Claude" }) : null,
         el("span", { class: "muted", text: going ? "Leanfare runs its parts on your computer; this updates as they finish." : "" })),
     ];
     if (run) for (const p of run.parts.filter((x) => x.answer || x.error)) kids.push(el("details", {}, el("summary", { text: "Part " + p.n + " · " + p.title + " · " + (NOW[p.status] || p.status) + (p.model ? " · " + p.model : "") }), p.answer ? el("pre", { text: p.answer }) : null, p.error ? el("p", { class: "bad", text: p.error }) : null));
+    if (later.length) kids.push(el("p", { class: "muted", text: (later.length === 1 ? "Part " + later[0] + " waits" : "Parts " + later.join(", ") + " wait") + " for yours: once yours are done, Claude hands " + (later.length === 1 ? "it" : "them") + " to Leanfare." }));
     if (run && run.asks) kids.push(el("p", { class: "bad", text: "Parts " + run.asks.parts.join(", ") + " are paid and wait for a yes: press Run to say yes." }));
     app.replaceChildren(...kids);
     size();
@@ -110,6 +118,10 @@ export const PLAN_APP_HTML = `<!doctype html>
       if (r && r.structuredContent) { run = r.structuredContent; draw(); }
     } catch (e) { shout(e); return; }
     if (run && run.running) timer = setTimeout(follow, 2000);
+  }
+  async function stop() {
+    try { const r = await request("tools/call", { name: "plan_stop", arguments: { id: plan.id } }); if (r && r.structuredContent) run = { ...run, ...r.structuredContent, parts: run.parts.map((p) => ({ ...p, ...((r.structuredContent.parts || []).find((x) => x.n === p.n) || {}) })) }; draw(); follow(); }
+    catch (e) { shout(e); }
   }
   async function handBack() {
     try { await request("ui/message", { role: "user", content: { type: "text", text: "Leanfare finished its parts of plan " + plan.id + ". Read their answers with plan_status, then do the parts left to you." } }); $("#back").disabled = true; }
