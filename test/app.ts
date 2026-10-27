@@ -8,6 +8,7 @@ import { startServer } from "../src/server";
 import { resetSettingsCache, saveSettings, type Settings } from "../src/settings";
 import { resetBudget } from "../src/budget";
 import { forgetHistoryCache, setPaused, stopRunning } from "../src/engine";
+import { forgetSpeeds } from "../src/speed";
 import { setNow } from "../src/util";
 import { KEYS, type startFake } from "./fake";
 import * as connect from "../src/connect";
@@ -37,6 +38,7 @@ export async function reset(patch: Partial<Settings> = {}) {
   resetSettingsCache();
   resetBudget();
   forgetHistoryCache();
+  forgetSpeeds();
   for (const f of [paths.catalog, paths.openrouter]) { try { unlinkSync(f); } catch {} }
   loadCatalog(FIXTURE);
   store.ollama = []; store.ollamaFound = false; store.openrouter = [];

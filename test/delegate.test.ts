@@ -18,6 +18,7 @@ import { CHANCE, checkDelegate, draw, filesBlock, taskFor, verdictOf, weightedPa
 import { DELEGATE_LIMITS, readForDelegate, secretReason, shownName, tilde } from "../src/readfiles";
 import { getModel } from "../src/data";
 import { runningList } from "../src/engine";
+import { secondsText } from "../src/speed";
 import { ALL_TICKED, boot, fake, keys, ledger, reset, ui } from "./app";
 
 let url = "";
@@ -234,7 +235,8 @@ describe("handing a task over", () => {
     expect(r.json.check).toEqual({ chance: 0, picked: false, verdict: null, why: "", checker: null, cost: null });
     expect(r.json.tokens).toEqual({ files: Math.ceil(LOG.text.length / 4), answer: Math.ceil("Hello from deepseek-v4-flash.".length / 4) });
     expect(r.json.total).toBe(r.json.cost);
-    expect(r.json.receipt).toBe(`Leanfare delegate: DeepSeek V4 Flash, $${r.json.cost.toPrecision(2)}. About ${r.json.tokens.files} tokens of files stayed out of your context; this answer is about ${r.json.tokens.answer}.`);
+    expect(r.json.receipt).toBe(`Leanfare delegate: DeepSeek V4 Flash, $${r.json.cost.toPrecision(2)}. About ${r.json.tokens.files} tokens of files stayed out of your context; this answer is about ${r.json.tokens.answer}. It took ${secondsText(r.json.seconds)}.`);
+    expect(r.json.seconds).toBeGreaterThan(0);
     // What the model got: the brief instructions, the task first, then the file with numbered lines.
     const req = sent("deepseek").at(-1)!;
     expect(req.body.messages[0].role).toBe("system");

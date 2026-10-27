@@ -5,6 +5,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ALL_TICKED, boot, keys, ledger, reset } from "./app";
+import { db } from "../src/db";
+import { forgetSpeeds } from "../src/speed";
 
 let url = "";
 let child: ReturnType<typeof Bun.spawn> | null = null;
@@ -107,8 +109,26 @@ describe("the tools", () => {
     const m = await rpc("tools/call", { name: "models", arguments: { provider: "openai" } });
     expect(m.result.content[0].text).toContain("openai/gpt-5-mini: GPT-5 mini, $0.25 in / $2 out per 1M tokens");
     const e = await rpc("tools/call", { name: "estimate", arguments: { prompt: "Write a Python function to sort a list" } });
-    expect(e.result.content[0].text).toMatch(/^About \$[\d.]+ on GPT-5 mini \(an estimate\)\./);
+    expect(e.result.content[0].text).toMatch(/^About \$[\d.]+ on GPT-5 mini, about (a second|\d+ s) \(an estimate; the time is a rough guess\)\./);
+    expect(e.result.structuredContent.seconds).toBeGreaterThan(0);
+    expect(e.result.structuredContent.speed).toBe("cheapest");
     expect(ledger()).toHaveLength(1); // estimating sends nothing
+  });
+
+  test("estimate: the time, and at the same quality the cheapest and the fastest; speed changes the pick", async () => {
+    await keys("anthropic", "google", "xai");
+    const row = db.query(`INSERT INTO ledger(ts, month, day, source, provider, model, price_status, usage_status, status, ms, first_ms, out_tokens)
+      VALUES ('2026-10-21T11:00:00Z', '2026-10', '2026-10-21', 'chat', ?, ?, 'listed', 'reported', 'ok', ?, ?, 400)`);
+    for (let i = 0; i < 3; i++) { row.run("google", "google/gemini-3.8-flash", 700, 300); row.run("xai", "xai/grok-4.20-beta", 29_000, 9_000); }
+    forgetSpeeds();
+    const e = await rpc("tools/call", { name: "estimate", arguments: { prompt: "What is the capital of Australia?" } });
+    const t = e.result.content[0].text;
+    expect(t).toMatch(/^About \$[\d.]+ on Grok 4\.20 Beta, about 29 s \(an estimate\)\./);
+    expect(t).toMatch(/\nAt the same quality: the cheapest is Grok 4\.20 Beta \(about \$[\d.]+, about 29 s\), the fastest is Gemini 3\.8 Flash \(about \$[\d.]+, about a second\)\./);
+    expect(e.result.structuredContent.choices.fastest.id).toBe("google/gemini-3.8-flash");
+    const f = await rpc("tools/call", { name: "estimate", arguments: { prompt: "What is the capital of Australia?", speed: "fastest" } });
+    expect(f.result.content[0].text).toMatch(/^About \$[\d.]+ on Gemini 3\.8 Flash, about a second \(an estimate\)\./);
+    expect(f.result.structuredContent.speed).toBe("fastest");
   });
 
   test("delegate: the door reads the files itself, and the answer comes back with its receipt", async () => {
@@ -121,7 +141,7 @@ describe("the tools", () => {
       expect(r.result.isError).toBeUndefined();
       const [answer, receipt] = r.result.content[0].text.split("\n\n");
       expect(answer).toBe("Hello from deepseek-v4-flash.");
-      expect(receipt).toMatch(/^\(Leanfare delegate: DeepSeek V4 Flash, \$[\d.e-]+\. About 9 tokens of files stayed out of your context; this answer is about 8\.\)$/);
+      expect(receipt).toMatch(/^\(Leanfare delegate: DeepSeek V4 Flash, \$[\d.e-]+\. About 9 tokens of files stayed out of your context; this answer is about 8\. It took about (a second|\d+ s)\.\)$/);
       expect(r.result.structuredContent).toMatchObject({ answer: "Hello from deepseek-v4-flash.", model: "deepseek/deepseek-v4-flash", task: "longer_query", effort: "low", check: null, first: null, tokens: { files: 9, answer: 8 }, cut: false });
       expect(ledger().map((l) => l.source)).toEqual(["delegate"]);
       // A file that holds secrets never leaves the computer, and nothing is sent.

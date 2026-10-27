@@ -8,7 +8,8 @@ import { ZERO, costOf, fromAnthropicUsage, fromOpenAIUsage, mediaIn, promptMax, 
 import { db } from "./db";
 import { getKey } from "./keys";
 import { MODES, settings, type Mode } from "./settings";
-import { estimateFor, expectedOutput, guessTask, ledgerWhy, pickModel, resolveModel, type Guess, type Msg } from "./router";
+import { estimateFor, expectedOutput, guessTask, ledgerWhy, pickModel, resolveModel, type Candidate, type Guess, type Msg } from "./router";
+import { forgetSpeeds, parseSpeed, secondsFor, type SpeedChoice } from "./speed";
 import { successor } from "./retire";
 import { addSpent, budgetState, release, tryReserve, wouldFit } from "./budget";
 import { AnthropicStreamTranslator, UserError, anthropicDefaultMax, anthropicToOpenAI, effortFor, headersFor, networkError, openaiBody, plainError, toAnthropic } from "./upstream";
@@ -133,7 +134,10 @@ export interface PlanInput {
   only?: (m: Model) => boolean; // a further limit on the models Auto may pick (the delegate: long enough, stronger)
   onlyWhy?: string; // what to say when that limit leaves no model
   optional?: boolean; // work that can be skipped (the delegate's check): never sent past the budget
+  speed?: SpeedChoice; // cheapest, fastest or within N seconds (speed.ts); default: Settings
 }
+
+export interface Choice { id: string; label: string; estimate: number | null; seconds: number | null; measured: boolean }
 
 export interface Plan {
   model: Model;
@@ -143,7 +147,12 @@ export interface Plan {
   reason: string;
   estimate: number | null;
   candidates: Model[];
-  alternatives: { id: string; label: string; estimate: number | null; rating: number | null }[];
+  alternatives: { id: string; label: string; estimate: number | null; rating: number | null; seconds: number | null }[];
+  seconds: number | null; // about how long the answer takes (speed.ts)
+  secondsMeasured: boolean; // from this model's own answers here, or a rough guess
+  speed: SpeedChoice;
+  // Auto only: at the same quality, the cheapest and the fastest (the pick is one of them, or the cheapest within a time).
+  choices: { cheapest: Choice; fastest: Choice | null } | null;
   usual: Model | null;
   switchedFrom: string | null;
   notes: string[];
@@ -221,9 +230,11 @@ export async function plan(input: PlanInput): Promise<Plan> {
   const inTok = promptTokens(input.messages as any, input.system);
   const inMax = promptMax(input.messages, input.system, input.tools);
   const capped = s.budget !== null && input.maxOut === null;
+  const speed: SpeedChoice = input.speed ?? s.speed ?? "cheapest";
   const copies = Math.max(1, Math.min(128, Math.floor(input.copies ?? 1)));
   let model: Model, guess: Guess, reason: string, candidates: Model[] = [];
   let alternatives: Plan["alternatives"] = [];
+  let choices: Plan["choices"] = null;
   if (amode) {
     const usable = usableModels(only);
     if (!usable.length && extra && usableModels(base).length) throw new UserError(400, input.onlyWhy ?? "None of the models you ticked can take this request.", "no_model_fits");
@@ -238,11 +249,14 @@ export async function plan(input: PlanInput): Promise<Plan> {
           : `No model is ready yet. Open Leanfare at http://127.0.0.1:${runtime.port}, add a key and tick a model, or start Ollama.`, "no_model_ready");
     }
     const effortAsked = input.effort ?? null;
-    const p = pickModel(input.messages, usable, amode, (t, mid) => outputHistory(t, mid, effortAsked && mid ? effortFor(getModel(mid)!, effortAsked) : null), input.system, input.guess);
+    const p = pickModel(input.messages, usable, amode, (t, mid) => outputHistory(t, mid, effortAsked && mid ? effortFor(getModel(mid)!, effortAsked) : null), input.system, input.guess,
+      speed, (m, out) => secondsFor(m, out, effortAsked ? effortFor(m, effortAsked) : null));
     if (p) {
       model = p.model; guess = p.guess; reason = p.reason;
       candidates = p.candidates.map((c) => c.model);
-      alternatives = p.candidates.slice(1, 4).map((c) => ({ id: c.model.id, label: c.model.label, estimate: chargeOf(c.model, c.estimate).cost, rating: c.rating === null ? null : Math.round(c.rating) }));
+      alternatives = p.candidates.slice(1, 4).map((c) => ({ id: c.model.id, label: c.model.label, estimate: chargeOf(c.model, c.estimate).cost, rating: c.rating === null ? null : Math.round(c.rating), seconds: c.seconds ?? null }));
+      const choice = (c: Candidate): Choice => ({ id: c.model.id, label: c.model.label, estimate: chargeOf(c.model, c.estimate).cost, seconds: c.seconds ?? null, measured: !!c.measured });
+      choices = { cheapest: choice(p.cheapest), fastest: p.fastest ? choice(p.fastest) : null };
     } else {
       guess = input.guess ?? guessTask(input.messages);
       const u = usualModel();
@@ -301,9 +315,11 @@ export async function plan(input: PlanInput): Promise<Plan> {
     }
   }
   const effortAsked = input.effort && input.effort !== "auto" ? input.effort : null;
-  const estimate = chargeOf(model, estimateFor(model, inTok, expectedOutput(guess.task, model, (t, mid) => outputHistory(t, mid, effortFor(model, effortAsked))))).cost;
+  const outGuess = expectedOutput(guess.task, model, (t, mid) => outputHistory(t, mid, effortFor(model, effortAsked)));
+  const estimate = chargeOf(model, estimateFor(model, inTok, outGuess)).cost;
+  const time = secondsFor(model, outGuess, effortFor(model, effortAsked));
   const cheapestId = s.budget !== null ? cheapest(only, inTok)?.id ?? null : null;
-  return { model, auto: !!amode, mode, guess, reason, estimate, candidates, alternatives, usual: usualModel(), switchedFrom, notes, reservation, inTok, inMax, maxOut: input.maxOut, capped, asked: input.asked, effortAsked, copies, cheapestId, optional: input.optional };
+  return { model, auto: !!amode, mode, guess, reason, estimate, seconds: time.seconds, secondsMeasured: time.measured, speed, choices, candidates, alternatives, usual: usualModel(), switchedFrom, notes, reservation, inTok, inMax, maxOut: input.maxOut, capped, asked: input.asked, effortAsked, copies, cheapestId, optional: input.optional };
 }
 
 // ---- the ledger --------------------------------------------------------------
@@ -346,6 +362,7 @@ export function record(p: Plan, m: Model, source: string, usage: Usage | null, o
   ];
   unwritten.push(row);
   if (!retryTimer) writeRows();
+  forgetSpeeds(m.id); // this answer's time counts in the next estimate
   if (unwritten.length && !retryTimer) retryTimer = setTimeout(writeRows, 1000);
   if (unwritten.length === 1 && retryTimer) console.error("leanfare: the database is busy; the cost ledger will be written when it is free.");
   if (billed) addSpent(charge.cost, month);
@@ -509,6 +526,7 @@ function leanHeaders(p: Plan, m: Model): Record<string, string> {
     "x-leanfare-auto": p.auto ? MODES[p.mode].label : "no",
     "x-leanfare-task": p.guess.task,
     "x-leanfare-estimate-usd": p.estimate === null ? "unknown" : usd8(p.estimate),
+    "x-leanfare-estimate-seconds": p.seconds === null ? "unknown" : p.seconds.toFixed(1),
   };
   const reason = [p.reason, ...p.notes].join(" ").slice(0, 600);
   h["x-leanfare-reason"] = encodeURIComponent(reason);
@@ -528,6 +546,8 @@ const headerMode = (req: Request): Mode | undefined => {
   const v = req.headers.get("x-leanfare-mode")?.toLowerCase();
   return v === "save" || v === "balanced" || v === "best" ? v : undefined;
 };
+// x-leanfare-speed: cheapest, fastest, or a number of seconds to answer within.
+const headerSpeed = (req: Request): SpeedChoice | undefined => parseSpeed(req.headers.get("x-leanfare-speed")?.toLowerCase() ?? null) ?? undefined;
 
 function register(source: string, label: string, ac: AbortController) {
   const id = randomId(6);
@@ -545,7 +565,7 @@ export async function handleOpenAI(req: Request, body: any): Promise<Response> {
   let p: Plan;
   try {
     const hasTools = !!(body.tools || body.functions || body.tool_choice || body.messages.some((m: any) => m?.role === "tool" || m?.role === "function" || m?.tool_calls));
-    p = await plan({ source: "openai", asked: typeof body.model === "string" ? body.model : null, messages: body.messages, tools: body.tools ?? body.functions, hasTools, maxOut: toNum(body.max_completion_tokens ?? body.max_tokens), mode: headerMode(req), signal: ac.signal, copies: toNum(body.n) ?? 1 });
+    p = await plan({ source: "openai", asked: typeof body.model === "string" ? body.model : null, messages: body.messages, tools: body.tools ?? body.functions, hasTools, maxOut: toNum(body.max_completion_tokens ?? body.max_tokens), mode: headerMode(req), speed: headerSpeed(req), signal: ac.signal, copies: toNum(body.n) ?? 1 });
   } catch (e) { return errorResponse(e); }
   const rid = register("openai", p.model.label, ac);
   let sent: { res: Response; model: Model; t0: number };
@@ -657,7 +677,7 @@ export async function handleAnthropic(req: Request, body: any): Promise<Response
   const stream = body.stream === true;
   let p: Plan;
   try {
-    p = await plan({ source: "anthropic", asked: typeof body.model === "string" ? body.model : null, messages: body.messages, system: body.system, tools: body.tools, maxOut: toNum(body.max_tokens), mode: headerMode(req), signal: ac.signal });
+    p = await plan({ source: "anthropic", asked: typeof body.model === "string" ? body.model : null, messages: body.messages, system: body.system, tools: body.tools, maxOut: toNum(body.max_tokens), mode: headerMode(req), speed: headerSpeed(req), signal: ac.signal });
   } catch (e) { return errorResponse(e, "anthropic"); }
   const rid = register("anthropic", p.model.label, ac);
   // Pass through the client's beta flags (Claude Code uses them).
@@ -756,6 +776,10 @@ export function planView(p: Plan) {
     reason: p.reason,
     notes: p.notes,
     estimate: p.estimate,
+    seconds: p.seconds,
+    secondsMeasured: p.secondsMeasured,
+    speed: p.speed,
+    choices: p.choices,
     alternatives: p.alternatives,
     usual: p.usual ? { id: p.usual.id, label: p.usual.label } : null,
     switchedFrom: p.switchedFrom,
@@ -773,6 +797,7 @@ export interface ChatOptions {
   onlyWhy?: string; // what to say when that limit leaves no model
   maxOut?: number | null; // the answer limit, in tokens (the chat has none of its own)
   optional?: boolean; // work that can be skipped: never sent past the budget
+  speed?: SpeedChoice; // cheapest, fastest or within N seconds (the delegate passes its own)
 }
 
 // The chat's instructions go first, as a system message (Claude's translation moves it to "system").
@@ -784,7 +809,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
   if (paused) emit({ type: "waiting", message: "Paused. This message goes out when you press Start again." });
   let p: Plan;
   try {
-    p = await plan({ source: "chat", asked, messages, system: opts.system || undefined, maxOut: opts.maxOut ?? null, signal: ac.signal, effort: opts.effort ?? null, guess: opts.guess, only: opts.only, onlyWhy: opts.onlyWhy, optional: opts.optional });
+    p = await plan({ source: "chat", asked, messages, system: opts.system || undefined, maxOut: opts.maxOut ?? null, signal: ac.signal, effort: opts.effort ?? null, guess: opts.guess, only: opts.only, onlyWhy: opts.onlyWhy, optional: opts.optional, speed: opts.speed });
   } catch (e: any) {
     const status = e instanceof UserError ? e.status : 500;
     const message = e instanceof UserError ? e.message : String(e?.message ?? e);
