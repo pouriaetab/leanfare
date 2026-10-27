@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0
+
+- Your ChatGPT plan, through Codex: turn it on in Settings, and a plan's reading, drafting and working out parts run on Codex, signed in with ChatGPT, before any pay per use model. Read only, in the folder of their files, without your MCP servers, apps or plugins, two at a time; they count toward your ChatGPT plan's Codex limits, and Leanfare pays nothing for them. Leanfare leaves Codex alone near 85% of the plan's 5 hours or week.
+- Grades: the app you work in grades each answer of Leanfare's it used (good, partly or wrong) with the new `grade` tool, and you can in the Plan tab. A model graded below good too often for a kind of work is moved down, so plans and the delegate pick better over time. Settings, How the models did for you, shows the grades and gives a model another chance. Only the grade is kept, never the words.
+- Models on your computer: Auto and plans use Ollama's models at the rating of the same model in the cloud, 15 points lower, and send them only plain prompts that fit their context.
+- A local model for this computer: Leanfare suggests the best rated open model (Apache 2.0) that runs in this computer's memory and fits on its disk, in Settings, in the plan, and as the new `local_model` tool. Ollama downloads it only after your yes.
+
+Fixed from 0.5.0:
+
+- Models in Ollama no longer cut long prompts at Ollama's default of 4,096 tokens: Leanfare asks for the context the prompt needs, up to 16k, and a model chosen by name says when a prompt is longer than that.
+
 ## 0.5.0
 
 - Plan a task across models: write what you want done, and Leanfare splits it into parts with where each runs and its model, as a table with the time, the tokens kept out of your plan and the cost. Changes to your project and the hardest judgement stay with the app you work in, each with the model to pick there (in Claude Code: Opus, Sonnet or Haiku, by the part); reading and drafting go to local, free or cheap models, at once where they can. In the new Plan tab, and as the MCP tools `plan`, `plan_run`, `plan_status` and `plan_stop`.
