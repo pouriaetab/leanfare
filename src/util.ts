@@ -7,6 +7,9 @@ let fixedNow: Date | null = process.env.LEANFARE_NOW ? new Date(process.env.LEAN
 export const now = (): Date => (fixedNow ? new Date(fixedNow) : new Date());
 export const setNow = (d: Date | string | null) => { fixedNow = d === null ? null : new Date(d); };
 
+// "about a second", "about 29 s", "about 7 min": a time said once, the same everywhere.
+export const secondsText = (s: number) => (s < 1.5 ? "about a second" : s < 90 ? `about ${Math.round(s)} s` : `about ${Math.round(s / 60)} min`);
+
 const pad = (n: number) => String(n).padStart(2, "0");
 // Calendar day and month in the computer's own time zone: a budget month is the
 // month on the user's calendar, not in London.

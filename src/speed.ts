@@ -71,5 +71,5 @@ export const parseSpeed = (v: unknown): SpeedChoice | null => {
   return Number.isFinite(n) && n >= 1 && n <= 3600 ? Math.round(n) : null;
 };
 
-export const secondsText = (s: number) => (s < 1.5 ? "about a second" : s < 90 ? `about ${Math.round(s)} s` : `about ${Math.round(s / 60)} min`);
+export { secondsText } from "./util";
 export const speedLabel = (c: SpeedChoice) => (c === "cheapest" ? "Cheapest" : c === "fastest" ? "Fastest" : `Within ${c < 90 ? `${c} seconds` : `${Math.round(c / 60)} minutes`}`);

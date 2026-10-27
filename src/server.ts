@@ -30,6 +30,7 @@ import { clearCookie, controlOk, engineAllowed, keyOk, locked, newAccessKey, pag
 import { chargeOf, errorResponse, handleAnthropic, handleOpenAI, idle, pauseState, plan, planView, providerReady, runChat, runningList, setPaused, stopRunning, usableModels, usualModel } from "./engine";
 import { guessTask } from "./router";
 import { parseSpeed } from "./speed";
+import { startTrial, stopTrial, trialView } from "./trial";
 import { dollars, localDay, now, randomId, redact } from "./util";
 
 const EFFORTS = ["auto", "low", "medium", "high"];
@@ -519,6 +520,10 @@ async function api(req: Request, url: URL): Promise<Response> {
     if (typeof v === "string") return fail(400, v);
     return json(await runDelegate(v, req.signal));
   }
+  // The delegate trial (trial.ts): its estimate and last report, start, stop.
+  if (p === "/api/trial" && m === "GET") return json(await trialView(req.signal));
+  if (p === "/api/trial/start" && m === "POST") { startTrial(); return json(await trialView(req.signal, false)); }
+  if (p === "/api/trial/stop" && m === "POST") { await stopTrial(); return json(await trialView(req.signal)); }
   if (p === "/api/estimate" && m === "POST") {
     const b = await readBody(req);
     const messages = Array.isArray(b.messages) ? describeFiles(b.messages) : [];

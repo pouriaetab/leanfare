@@ -19,6 +19,8 @@
 //   [filter]                decline (finish_reason content_filter), with no text
 //   [reply@xai FAIL: x]     answer with this text, only when the request goes to that provider
 //                           ([reply PASS] for any provider; the one for the provider wins)
+// A test can also answer by code: hooks.answer(prompt, provider, model) returns the text, or null for the usual;
+// hooks.fail(prompt, provider) returns an HTTP status to fail with, or null.
 import { createHash } from "node:crypto";
 
 // The key OpenRouter's sign in hands out. It works on the fake like the paste key does.
@@ -93,6 +95,10 @@ function promptText(body: any): string {
 
 export function startFake() {
   const seen: Seen[] = [];
+  const hooks = {
+    answer: null as null | ((prompt: string, provider: string, model: string) => string | null),
+    fail: null as null | ((prompt: string, provider: string) => number | null),
+  };
   const onceSeen = new Set<string>();
   // OpenRouter's sign in: /openrouter/auth shows the "Authorize" step and sends the browser back with a
   // one time code; /openrouter/api/v1/auth/keys trades the code for a key and checks the PKCE proof
@@ -234,7 +240,7 @@ export function startFake() {
       if (!keyOk) return Response.json({ error: { message: "wrong key for this provider" } }, { status: 401 });
 
       const text = promptText(body);
-      const fail = directive(text, "fail", provider);
+      const fail = hooks.fail?.(text, provider) ? [hooks.fail(text, provider)!] : directive(text, "fail", provider);
       if (fail?.[0]) return Response.json({ error: { message: `fake failure ${fail[0]}` } }, { status: fail[0] });
       const slow = directive(text, "slow", provider);
       if (slow?.[0]) await Bun.sleep(slow[0]);
@@ -254,7 +260,7 @@ export function startFake() {
       const empty = text.includes("[empty]") || (text.includes("[empty1]") && firstTime) || thinkAll || filtered;
       const cut = text.includes("[cut1]") && firstTime;
       if (thinkAll) capped = true; // it stopped at the limit
-      const answer = empty ? "" : replyFor(text, provider) ?? (text.includes("[md]") ? MARKDOWN : `Hello from ${body?.model ?? "?"}.`);
+      const answer = empty ? "" : hooks.answer?.(text, provider, String(body?.model ?? "")) ?? replyFor(text, provider) ?? (text.includes("[md]") ? MARKDOWN : `Hello from ${body?.model ?? "?"}.`);
       const stopReason = filtered ? "refusal" : capped ? "max_tokens" : "end_turn";
       const finishReason = filtered ? "content_filter" : capped ? "length" : "stop";
       const think = text.includes("[think]") || thinkAll ? "Let me think." : "";
@@ -335,7 +341,7 @@ export function startFake() {
     perplexity: `${base}/perplexity`, groq: `${base}/groq/openai/v1`, cerebras: `${base}/cerebras/v1`, together: `${base}/together/v1`, fireworks: `${base}/fireworks/inference/v1`,
   };
   return {
-    server, base, bases, seen, oauth, ollama,
+    server, base, bases, seen, oauth, ollama, hooks,
     setData(j: any, status = 200) { dataJson = j; dataStatus = status; },
     pointEnv() { for (const [id, b] of Object.entries(bases)) process.env[`LEANFARE_${id.toUpperCase()}_BASE`] = b; },
   };

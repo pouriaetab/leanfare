@@ -9,6 +9,7 @@ import { resetSettingsCache, saveSettings, type Settings } from "../src/settings
 import { resetBudget } from "../src/budget";
 import { forgetHistoryCache, setPaused, stopRunning } from "../src/engine";
 import { forgetSpeeds } from "../src/speed";
+import { stopTrial } from "../src/trial";
 import { setNow } from "../src/util";
 import { KEYS, type startFake } from "./fake";
 import * as connect from "../src/connect";
@@ -34,7 +35,8 @@ export async function reset(patch: Partial<Settings> = {}) {
   stopRunning();
   setPaused(false);
   setNow("2026-10-21T12:00:00Z");
-  db.exec("DELETE FROM ledger; DELETE FROM messages; DELETE FROM chats; DELETE FROM settings; DELETE FROM files; DELETE FROM delegations;");
+  await stopTrial();
+  db.exec("DELETE FROM ledger; DELETE FROM messages; DELETE FROM chats; DELETE FROM settings; DELETE FROM files; DELETE FROM delegations; DELETE FROM trials;");
   resetSettingsCache();
   resetBudget();
   forgetHistoryCache();
@@ -47,6 +49,8 @@ export async function reset(patch: Partial<Settings> = {}) {
   Object.assign(local.probe, { free: () => 200e9, memory: () => 16e9 }); // fixed numbers: tests never depend on this computer's disk or memory
   for (const id of Object.keys(KEYS)) await removeKey(id as any);
   fake.seen.length = 0;
+  fake.hooks.answer = null;
+  fake.hooks.fail = null;
   Object.assign(fake.oauth, { expireNext: false, deny: false, failExchange: 0, failMessage: "fake failure", badKey: false, credits: true });
   fake.oauth.codes.clear();
   if (Object.keys(patch).length) saveSettings(patch);

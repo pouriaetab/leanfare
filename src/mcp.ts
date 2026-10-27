@@ -8,17 +8,17 @@
 // carries its version in _meta; server/discover) and the earlier ones that
 // open with initialize (2025-11-25 and before). No SDK: JSON-RPC over stdin and
 // stdout, one message per line; anything for a person goes to stderr.
-import { existsSync, readFileSync } from "node:fs";
-import { PORT, VERSION, paths } from "./config";
-import { secondsText } from "./speed";
-import { selfCommand } from "./self";
+import { VERSION } from "./config";
+import { call } from "./client";
+import { secondsText } from "./util";
+import { reportText } from "./trialtext";
 import { readForDelegate } from "./readfiles";
 
 const MODERN = ["2026-07-28"];
 const LEGACY = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const SERVER = { name: "leanfare", title: "Leanfare", version: VERSION };
 const META = { "io.modelcontextprotocol/serverInfo": SERVER };
-const INSTRUCTIONS = "Leanfare runs every top AI model on this computer with the user's own keys, shows what each answer costs, and keeps a monthly budget. Use delegate to hand work that reads a lot (big files, logs, many documents) to a cheaper model: Leanfare reads the files itself, so their text stays out of your context, and returns a short answer with a receipt. Use ask to hand a question to another model (Auto picks the cheapest one that rates well for the task); spend to see what was spent and saved; models to see which models and prices are available; estimate to price a prompt before sending it.";
+const INSTRUCTIONS = "Leanfare runs every top AI model on this computer with the user's own keys, shows what each answer costs, and keeps a monthly budget. Use delegate to hand work that reads a lot (big files, logs, many documents) to a cheaper model: Leanfare reads the files itself, so their text stays out of your context, and returns a short answer with a receipt. Use ask to hand a question to another model (Auto picks the cheapest one that rates well for the task); spend to see what was spent and saved; models to see which models and prices are available; estimate to price a prompt before sending it; trial to measure how well delegate answers on the user's models before relying on it.";
 
 const TOOLS = [
   {
@@ -87,56 +87,16 @@ const TOOLS = [
       required: ["prompt"],
       additionalProperties: false,
     },
-    annotations: { title: "Estimate a cost", readOnlyHint: true, openWorldHint: false },
+    annotations: { title: "Estimate a cost and a time", readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: "trial",
+    title: "Try the delegate first",
+    description: "Measure how well delegate answers on the user's models before relying on it: 10 questions with known answers about files Leanfare makes up, each asked at low, medium and high effort (30 answers, a few minutes; it costs what those answers cost, $0 on free plans). start begins it and returns at once; status gives the progress or the report, with the lowest effort that passed and the line for CLAUDE.md; stop ends it. Nothing of the user's is sent.",
+    inputSchema: { type: "object", properties: { action: { type: "string", enum: ["status", "start", "stop"], description: "status (the default), start or stop." } }, additionalProperties: false },
+    annotations: { title: "Try the delegate first", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
 ];
-
-// ---- reaching the app --------------------------------------------------------------
-
-interface App { base: string; token: string }
-
-function where(): App {
-  if (process.env.LEANFARE_URL) return { base: process.env.LEANFARE_URL.replace(/\/+$/, ""), token: process.env.LEANFARE_TOKEN ?? "" };
-  let port = PORT;
-  try { port = JSON.parse(readFileSync(paths.pid, "utf8")).port ?? PORT; } catch {}
-  const token = existsSync(paths.token) ? readFileSync(paths.token, "utf8").trim() : "";
-  return { base: `http://127.0.0.1:${port}`, token };
-}
-
-async function healthy(base: string): Promise<boolean> {
-  try { const r = await fetch(`${base}/healthz`, { signal: AbortSignal.timeout(1500) }); return (await r.json())?.app === "leanfare"; } catch { return false; }
-}
-
-// Leanfare is started in the background if it is not running (as `leanfare --no-open` would).
-let starting: Promise<App> | null = null;
-async function app(): Promise<App> {
-  let a = where();
-  if (await healthy(a.base)) return a;
-  if (process.env.LEANFARE_URL) throw new Error(`Leanfare is not answering at ${a.base}.`);
-  starting ??= (async () => {
-    const self = selfCommand("--no-open");
-    const child = Bun.spawn([self.command, ...self.args], { stdin: "ignore", stdout: "ignore", stderr: "ignore", env: { ...process.env, LEANFARE_NO_OPEN: "1" } });
-    child.unref();
-    for (let i = 0; i < 100; i++) {
-      await Bun.sleep(100);
-      a = where();
-      if (a.token && (await healthy(a.base))) return a;
-    }
-    throw new Error("Leanfare did not start. Open it once from Terminal with: leanfare");
-  })().finally(() => { starting = null; });
-  return starting;
-}
-
-async function call(path: string, init: RequestInit & { json?: unknown } = {}, signal?: AbortSignal): Promise<any> {
-  const a = await app();
-  const headers: Record<string, string> = { "x-leanfare": "1", "x-leanfare-token": a.token, ...(init.json !== undefined ? { "content-type": "application/json" } : {}), ...((init.headers as Record<string, string>) ?? {}) };
-  const r = await fetch(a.base + path, { ...init, headers, body: init.json !== undefined ? JSON.stringify(init.json) : init.body, signal });
-  const text = await r.text();
-  let j: any = null;
-  try { j = JSON.parse(text); } catch {}
-  if (!r.ok) throw new Error(j?.error?.message ?? (typeof j?.error === "string" ? j.error : null) ?? `Leanfare answered ${r.status}.`);
-  return { j, headers: r.headers };
-}
 
 // ---- the tools -------------------------------------------------------------------------
 
@@ -170,6 +130,23 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
       first: j.first ? { model: j.first.model.id, cost_usd: j.first.cost } : null,
       tokens: j.tokens, cut: j.cut, seconds: j.seconds,
     });
+  }
+  if (name === "trial") {
+    const action = args?.action ?? "status";
+    if (!["status", "start", "stop"].includes(action)) return failure("action must be status, start or stop.");
+    let { j } = await call("/api/trial", {}, signal);
+    if (action === "start" && !j.running) {
+      if (!j.estimate?.models?.low) return failure("No model is ready yet. Open Leanfare, add a key and tick a model, then start the trial.");
+      const e = j.estimate;
+      ({ j } = await call("/api/trial/start", { method: "POST", json: {} }, signal));
+      const cost = e.estimate === 0 ? "$0 on the models ticked now (free)" : e.estimate === null ? "an unknown cost" : `about ${usd(e.estimate)}`;
+      return text(`The trial started: ${e.answers} answers, ${cost}${typeof e.seconds === "number" ? `, about ${Math.max(1, Math.round(e.seconds / 60))} min` : ""}. Ask for its status in a few minutes.`, { running: true, answers: e.answers, estimate_usd: e.estimate, seconds: e.seconds });
+    }
+    if (action === "stop" && j.running) ({ j } = await call("/api/trial/stop", { method: "POST", json: {} }, signal));
+    const r = j.report;
+    if (!r) return text("No trial has run yet. Call trial with action start to begin one.", { running: false, report: null });
+    if (j.running) return text(`The trial is running: ${r.done} of ${r.total} answers so far. ${r.arms.filter((a: any) => a.asked).map((a: any) => `${a.effort}: ${a.right} of ${a.answered} right`).join(", ")}.`, { running: true, done: r.done, total: r.total });
+    return text(reportText(r, "mcp"), { running: false, status: r.status, lowest_passing: r.lowest, claude_line: r.claudeLine, arms: r.arms.map((a: any) => ({ effort: a.effort, right: a.right, answered: a.answered, verdict: a.verdict, cost_usd: a.cost })), share_url: r.share.url });
   }
   if (name === "spend") {
     const { j: s } = await call("/api/summary", {}, signal);
