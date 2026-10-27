@@ -443,7 +443,7 @@
   const planBox = { ta: null, rules: null };
   let planTimer = null;
   const RUNS_ON = { you: "you", local: "Leanfare, on this computer", free: "Leanfare, free model", paid: "Leanfare, pay per use" };
-  const STATUS = { waiting: "waiting", running: "running…", done: "done", failed: "failed", stopped: "stopped", yours: "yours to do", blocked: "waits for a part that is not done" };
+  const STATUS = { waiting: "waiting", running: "running…", done: "done", failed: "failed", stopped: "stopped", yours: "yours to do", blocked: "waits for a part that is not done", asks: "paid: waits for a yes" };
   function renderPlan() {
     const el = $("#tab-plan");
     if (!planBox.ta) {
@@ -503,7 +503,8 @@
     const how = h("p", { class: "fine", text: P.split.note ?? (P.split.model ? `Split by ${P.split.model.label}${typeof P.split.cost === "number" ? `, ${money(P.split.cost)}` : ""}.` : "Split by rules.") });
     const canRun = t.out > 0 && !run?.running;
     const buttons = h("div", { class: "row" },
-      canRun ? runButton(run ? "Run again" : "Run Leanfare's parts", async (signal) => { S.planRun = await api("/api/plan/run", { body: { id: P.id }, signal }); renderPlan(); pollPlan(); }, "btn primary small") : null,
+      // Pressing Run is the yes for the paid parts too (their cost is in the table); the monthly budget still holds.
+      canRun ? runButton(run ? "Run the rest" : "Run Leanfare's parts", async (signal) => { S.planRun = await api("/api/plan/run", { body: { id: P.id, paid: true }, signal }); renderPlan(); pollPlan(); }, "btn primary small") : null,
       run?.running ? runButton("Stop", async () => { S.planRun = await api("/api/plan/stop", { body: { id: P.id } }); renderPlan(); toast("Stopped.", "done"); }, "btn small") : null,
       h("button", { class: "btn small", type: "button", text: "Copy for Claude Code", onclick: () => copyText(forClaudeCode(P)) }),
       h("button", { class: "btn small", type: "button", text: "Copy the table", onclick: () => copyText(P.table) }));
@@ -2161,6 +2162,15 @@
 
   // Speed: at the same quality (the level above), the cheapest, the cheapest within a time, or the fastest.
   // Times come from how fast each model answered you before (a rough guess until it has answered three times).
+  // A plan's paid parts (planner.ts): run without asking up to this much a plan; above it, Leanfare asks.
+  function planCapSettingEl(s) {
+    const box = moneyInput(s.planAuto || null, "Paid parts of a plan without asking, up to");
+    return h("div", { class: "setting" }, h("h3", { text: "Plans in your apps" }),
+      h("div", { class: "row" }, h("span", { text: "Run a plan's paid parts without asking, up to" }), box,
+        h("button", { class: "btn", type: "button", text: "Save", onclick: () => patchSettings({ planAuto: box.querySelector("input").value || 0 }, "Saved.") })),
+      h("p", { text: `When Claude Code or another app runs Leanfare's parts of a plan (plan_run), parts on local and free models run at once. Paid parts run without asking while they come to at most ${money(s.planAuto || 0)} a plan; above that, Leanfare asks you first (in Claude Code, a question in Claude Code). Your monthly budget holds either way.` }));
+  }
+
   function speedSettingEl(s) {
     const sel = h("select", { "aria-label": "Speed", onchange: (e) => patchSettings({ speed: speedValue(e.target.value) }, `Speed: ${e.target.selectedOptions[0].textContent.toLowerCase()}.`) },
       ...speedOptions(s.speed ?? "cheapest", 1));
@@ -2269,6 +2279,7 @@
         h("div", { class: "seg", role: "group", "aria-label": "Thinking effort" }, ...[["auto", "Model's default"], ["low", "Low"], ["medium", "Medium"], ["high", "High"]].map(([k, label]) =>
           h("button", { type: "button", "aria-pressed": String((s.effort ?? "auto") === k), text: label, onclick: () => patchSettings({ effort: k }, k === "auto" ? "Thinking models think as they do by default." : `Thinking effort: ${label.toLowerCase()}.`) }))),
         h("p", { text: "For models that think before they answer, at the levels each one takes. Thinking is billed as output, so a higher effort costs more and takes longer; the estimate learns from your answers at each level." })),
+      planCapSettingEl(s),
       h("div", { class: "setting" }, h("h3", { text: "Your usual model" }), usualSel,
         h("p", { text: "The model you would use without Leanfare. Savings are measured against it." })),
       h("div", { class: "setting" }, h("h3", { text: "Monthly budget" }),

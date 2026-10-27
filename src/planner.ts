@@ -20,6 +20,7 @@ import { DEFAULT_MAX_OUT, TIER, runDelegate, taskFor, type Effort, type Kind } f
 import type { Model } from "./data";
 import { chargeOf, plan as route, runChat, usableModels } from "./engine";
 import { windowsNow } from "./plans";
+import { settings } from "./settings";
 import { guessTask, type Msg } from "./router";
 import { UserError } from "./upstream";
 import { now, randomId, secondsText } from "./util";
@@ -315,29 +316,49 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
 // part that needs one of those (or one that failed) waits for them. Each part goes through the
 // delegate (checks included); a search part goes to the model the plan named.
 
-export type RunStatus = "waiting" | "running" | "done" | "failed" | "stopped" | "yours" | "blocked";
+export type RunStatus = "waiting" | "running" | "done" | "failed" | "stopped" | "yours" | "blocked" | "asks";
 export interface RunPart { n: number; title: string; status: RunStatus; answer: string | null; receipt: string | null; model: string | null; cost: number | null; seconds: number | null; error: string | null }
-export interface RunView { id: string; started: string; running: boolean; parts: RunPart[]; cost: number | null }
+export interface RunView { id: string; started: string; running: boolean; parts: RunPart[]; cost: number | null; asks: { parts: number[]; estimate: number | null; cap: number } | null }
+
+// What a plan's paid parts would cost, and whether they may run without asking: the person said
+// yes (paid), or their estimate is within the cap set in Settings. The monthly budget holds either way.
+export function paidOf(plan: PlanResult): { parts: number[]; estimate: number | null } {
+  const paid = plan.parts.filter((p) => p.where === "paid");
+  const costs = paid.map((p) => p.cost);
+  return { parts: paid.map((p) => p.n), estimate: costs.some((c) => c === null) ? null : costs.reduce<number>((a, b) => a + (b ?? 0), 0) };
+}
+export function paidAllowed(plan: PlanResult, yes: boolean): boolean {
+  const { parts, estimate } = paidOf(plan);
+  return yes || !parts.length || (estimate !== null && estimate <= settings().planAuto);
+}
 
 const KEEP = 20;
 const kept = new Map<string, PlanResult>();
 const wherePaths = new Map<string, Map<string, { path: string; size: number }>>(); // a plan's files, by name, when Leanfare measured them
-const runs = new Map<string, { view: RunView; ac: AbortController }>();
+const runs = new Map<string, { view: RunView; ac: AbortController; tick: () => void }>();
 export const keptPlan = (id: string) => kept.get(id) ?? null;
 export const forgetPlans = () => { for (const r of runs.values()) r.ac.abort(); kept.clear(); runs.clear(); wherePaths.clear(); };
 const HANDED = 20_000; // characters of an earlier part's answer handed on
 
 export function runView(id: string): RunView | null { return runs.get(id)?.view ?? null; }
 
-export function startRun(id: string): RunView {
+export function startRun(id: string, opts: { paid?: boolean } = {}): RunView {
   const plan = kept.get(id);
   if (!plan) throw new UserError(404, "This plan is no longer in Leanfare (it was restarted, or 20 newer plans were made). Make the plan again.", "plan_gone");
   const had = runs.get(id);
-  if (had?.view.running) return had.view;
+  if (had?.view.running) {
+    // A yes for the paid parts while the free ones run: they join this run.
+    if (opts.paid && had.view.asks) { for (const r of had.view.parts) if (r.status === "asks") r.status = "waiting"; had.view.asks = null; had.tick(); }
+    return had.view;
+  }
+  // Parts already done in an earlier run of this plan keep their answers; the rest run (again).
+  const before = new Map((had?.view.parts ?? []).filter((r) => r.status === "done").map((r) => [r.n, r]));
+  const ok = paidAllowed(plan, !!opts.paid);
+  const paid = paidOf(plan);
   const view: RunView = { id, started: now().toISOString(), running: true, cost: 0,
-    parts: plan.parts.map((p) => ({ n: p.n, title: p.title, status: p.where === "you" ? "yours" : "waiting", answer: null, receipt: null, model: null, cost: null, seconds: null, error: null })) };
+    asks: ok || !paid.parts.length ? null : { ...paid, cap: settings().planAuto },
+    parts: plan.parts.map((p) => before.get(p.n) ?? ({ n: p.n, title: p.title, status: p.where === "you" ? "yours" : p.where === "paid" && !ok ? "asks" : "waiting", answer: null, receipt: null, model: null, cost: null, seconds: null, error: null })) };
   const ac = new AbortController();
-  runs.set(id, { view, ac });
   const at = (n: number) => view.parts.find((x) => x.n === n)!;
   const going = new Set<number>();
   const finish = () => {
@@ -361,6 +382,7 @@ export function startRun(id: string): RunView {
     }
     if (!going.size) finish();
   };
+  runs.set(id, { view, ac, tick });
   tick();
   return view;
 }

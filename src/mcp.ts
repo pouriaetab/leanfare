@@ -12,7 +12,10 @@ import { VERSION } from "./config";
 import { call } from "./client";
 import { secondsText } from "./util";
 import { reportText } from "./trialtext";
-import { readForDelegate, sizesForPlan } from "./readfiles";
+import { readForDelegate, resolvePath, sizesForPlan } from "./readfiles";
+import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 
 const MODERN = ["2026-07-28"];
 const LEGACY = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
@@ -37,6 +40,37 @@ const TOOLS = [
       additionalProperties: false,
     },
     annotations: { title: "Split a task across models", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  {
+    name: "plan_run",
+    title: "Run Leanfare's parts of a plan",
+    description: "Start the parts of a plan that Leanfare runs (local, free and pay per use models), in the background: at once where they can, each as soon as the parts it needs are done, with their answers handed on. Returns at once; read the progress and the answers with plan_status. Parts on local or free models run without asking. Paid parts run only within the cap the user set in Leanfare, or when the user said yes: Leanfare asks them itself where this app can show a question; otherwise ask the user, and call again with paid yes only after they agree. The user's monthly budget in Leanfare always holds.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "The plan's id, from plan." },
+        paid: { type: "string", enum: ["yes", "no"], description: "yes: the user agreed to the paid parts. Default no." },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    annotations: { title: "Run Leanfare's parts of a plan", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  },
+  {
+    name: "plan_status",
+    title: "Progress of a plan",
+    description: "Where each part of a plan stands (waiting, running, done, failed, yours, waiting for a yes) and the answers of the parts Leanfare finished. Each answer is also saved in the project, in .leanfare/plans/<id>/ (a folder git ignores), where you and the user can read it. wait: up to that many seconds for something to change before answering (default 0, at most 50).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "The plan's id, from plan." },
+        wait: { type: "integer", minimum: 0, maximum: 50, description: "Seconds to wait for a part to change before answering." },
+        folder: { type: "string", description: "The project folder to save the answers in. By default, the folder the MCP client started Leanfare in." },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    annotations: { title: "Progress of a plan", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
     name: "ask",
@@ -132,14 +166,96 @@ export function clientLabel(name: unknown): string | null {
 }
 export const setClient = (name: unknown) => { client = clientLabel(name); };
 
+// ---- the shared folder: a plan and its answers, in the project ----------------------------------
+// .leanfare/plans/<id>/: plan.md (the task and the table), part-<n>.md (an answer and its receipt),
+// status.md. The folder holds a .gitignore of its own, so git leaves it out without your .gitignore
+// changing. Only in a project: never in the computer's top folder or straight in your home folder.
+export function sharedFolder(given?: unknown): string | null {
+  let dir = process.cwd();
+  if (typeof given === "string" && given.trim()) { try { dir = resolvePath(given, process.cwd()); } catch { return null; } }
+  dir = resolve(dir);
+  if (dir === resolve("/") || dir === resolve(homedir())) return null;
+  try { if (!statSync(dir).isDirectory()) return null; } catch { return null; }
+  return dir;
+}
+function writeShared(folder: string, id: string, files: Record<string, string>): string | null {
+  try {
+    const root = join(folder, ".leanfare");
+    mkdirSync(join(root, "plans", id), { recursive: true });
+    if (!existsSync(join(root, ".gitignore"))) writeFileSync(join(root, ".gitignore"), "# Leanfare's plans and their answers: kept out of git.\n*\n");
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(root, "plans", id, name), text);
+    return `.leanfare/plans/${id}`;
+  } catch { return null; } // a folder Leanfare may not write in: the answers are in the tool's result anyway
+}
+const STATUS: Record<string, string> = { waiting: "waiting", running: "running", done: "done", failed: "failed", stopped: "stopped", yours: "yours to do", blocked: "waits for a part that is not done", asks: "paid: waits for a yes" };
+const SHOWN = 3000; // characters of an answer in the tool's result (the whole answer is in its file)
+export function statusText(v: any, saved: string | null): string {
+  const rows = v.parts.map((r: any) => `| ${r.n} | ${String(r.title).replace(/\|/g, "/")} | ${STATUS[r.status] ?? r.status} | ${r.model ?? ""} | ${r.cost === null || r.cost === undefined ? "" : usd(r.cost)} |`);
+  const done = v.parts.filter((r: any) => r.answer);
+  const lines = ["| # | Part | Now | Model | Cost |", "|---|---|---|---|---|", ...rows, ""];
+  lines.push(v.running ? "Still running: ask plan_status again (wait up to 50 seconds)." : "Leanfare's parts have ended.");
+  if (v.asks) lines.push(`Parts ${v.asks.parts.join(", ")} are paid (about ${usd(v.asks.estimate)}, over the cap of ${usd(v.asks.cap)} set in Leanfare) and wait for the user's yes: ask them, then call plan_run with paid yes.`);
+  for (const r of done) lines.push("", `## Part ${r.n}: ${r.title}`, "", r.answer.length > SHOWN ? `${r.answer.slice(0, SHOWN)}\n\n(cut here: the whole answer is in ${saved ?? "Leanfare"}${saved ? `/part-${r.n}.md` : ""})` : r.answer, "", `(${r.receipt})`);
+  for (const r of v.parts.filter((x: any) => x.error)) lines.push("", `Part ${r.n} failed: ${r.error}`);
+  if (saved) lines.push("", `Saved in ${saved}/ in the project.`);
+  return lines.join("\n");
+}
+function sharedFiles(v: any): Record<string, string> {
+  const files: Record<string, string> = { "status.md": statusText(v, null) + "\n" };
+  for (const r of v.parts.filter((x: any) => x.answer)) files[`part-${r.n}.md`] = `# Part ${r.n}: ${r.title}\n\n${r.answer}\n\n---\n${r.receipt}\n`;
+  return files;
+}
+
+// Asking the user, where the app can show a question (MCP elicitation): yes or no to the paid parts.
+let canAsk = false;
+const asked = new Map<string, (msg: any) => void>();
+let askId = 0;
+function askUser(params: unknown, ms = 120_000): Promise<any> {
+  const id = `leanfare-${++askId}`;
+  return new Promise((done) => {
+    const t = setTimeout(() => { asked.delete(id); done(null); }, ms);
+    asked.set(id, (msg) => { clearTimeout(t); done(msg?.result ?? null); });
+    out({ jsonrpc: "2.0", id, method: "elicitation/create", params });
+  });
+}
+
 async function runTool(name: string, args: any, signal: AbortSignal): Promise<any> {
+  if (name === "plan_run") {
+    if (typeof args?.id !== "string" || !args.id.trim()) return failure("plan_run needs the plan's id, from plan.");
+    const yes = args.paid === "yes";
+    let { j: v } = await call("/api/plan/run", { method: "POST", json: { id: args.id, paid: yes } }, signal);
+    if (v.asks && !yes && canAsk) {
+      const a = await askUser({
+        message: `Leanfare's plan has paid parts (${v.asks.parts.map((n: number) => `part ${n}`).join(", ")}), about ${usd(v.asks.estimate)} on pay per use, over your cap of ${usd(v.asks.cap)}. The free and local parts are running. Run the paid ones too?`,
+        requestedSchema: { type: "object", properties: { run: { type: "boolean", title: "Run the paid parts", description: `About ${usd(v.asks.estimate)}, within your monthly budget in Leanfare.`, default: false } }, required: ["run"] },
+      });
+      if (a?.action === "accept" && a.content?.run === true) ({ j: v } = await call("/api/plan/run", { method: "POST", json: { id: args.id, paid: true } }, signal));
+    }
+    return text(statusText(v, null), { id: v.id, running: v.running, parts: v.parts.map((r: any) => ({ n: r.n, status: r.status })), asks: v.asks });
+  }
+  if (name === "plan_status") {
+    if (typeof args?.id !== "string" || !args.id.trim()) return failure("plan_status needs the plan's id, from plan.");
+    const wait = Number.isInteger(args.wait) ? Math.min(50, Math.max(0, args.wait)) : 0;
+    const look = async () => (await call(`/api/plan/run?id=${encodeURIComponent(args.id)}`, {}, signal)).j;
+    let v = await look();
+    const key = (x: any) => x.parts.map((r: any) => r.status).join(",");
+    const first = key(v);
+    for (let t = 0; t < wait && v.running && key(v) === first && !signal.aborted; t++) { await Bun.sleep(1000); v = await look(); }
+    const folder = sharedFolder(args.folder);
+    const saved = folder ? writeShared(folder, args.id, sharedFiles(v)) : null;
+    return text(statusText(v, saved), { id: v.id, running: v.running, cost_usd: v.cost, asks: v.asks, saved_in: saved, parts: v.parts.map((r: any) => ({ n: r.n, title: r.title, status: r.status, model: r.model, cost_usd: r.cost, seconds: r.seconds, answer: r.answer, error: r.error })) });
+  }
   if (name === "plan") {
     if (typeof args?.task !== "string" || !args.task.trim()) return failure("plan needs a task.");
     const files = sizesForPlan(args.files, args.folder);
     if (typeof files === "string") return failure(files);
     const { j } = await call("/api/plan", { method: "POST", json: { task: args.task, files: files.map((f) => ({ name: f.name, size: f.size })), manager: client, split: args.split === "rules" ? "rules" : "auto" } }, signal);
     const note = j.split?.note ? `\n\n(${j.split.note})` : j.split?.model ? `\n\n(Split by ${j.split.model.label}${typeof j.split.cost === "number" ? `, ${usd(j.split.cost)}` : ""}.)` : "";
-    return text(`${j.table}\n\n${j.next}${note}`, {
+    const folder = sharedFolder(args.folder);
+    const saved = folder ? writeShared(folder, j.id, { "plan.md": `# Plan ${j.id}\n\n${args.task.trim()}\n\n${j.table}\n\n${j.next}\n` }) : null;
+    const runNote = j.totals.out ? `\n\nOr call plan_run with id ${j.id} to run Leanfare's parts in the background, then plan_status for their answers.${saved ? ` The plan is saved in ${saved}/plan.md.` : ""}` : "";
+    return text(`${j.table}\n\n${j.next}${runNote}${note}`, {
+      id: j.id, saved_in: saved,
       parts: j.parts.map((p: any) => ({ n: p.n, title: p.title, kind: p.kind, effort: p.effort, needs: p.needs, runs_on: p.where, model: p.model?.id ?? null, seconds: p.seconds, tokens: p.tokens, cost_usd: p.cost, files: p.files, task: p.task })),
       totals: j.totals, split: j.split, limits: j.limits,
     });
@@ -241,6 +357,13 @@ const error = (id: Id | null, code: number, message: string, data?: unknown): vo
 const inflight = new Map<Id, AbortController>();
 
 export async function handleMessage(msg: any, send = { reply, error }): Promise<void> {
+  // The answer to a question Leanfare asked the client (elicitation/create).
+  if (msg && msg.jsonrpc === "2.0" && msg.method === undefined && typeof msg.id === "string" && asked.has(msg.id)) {
+    const done = asked.get(msg.id)!;
+    asked.delete(msg.id);
+    done(msg);
+    return;
+  }
   if (!msg || msg.jsonrpc !== "2.0" || typeof msg.method !== "string") {
     if (msg && msg.id !== undefined && msg.id !== null) send.error(msg.id, -32600, "Not a JSON-RPC 2.0 request.");
     return;
@@ -261,8 +384,10 @@ export async function handleMessage(msg: any, send = { reply, error }): Promise<
   const done = (result: any) => send.reply(id, modern ? { resultType: "complete", ...result, _meta: META } : result);
 
   if (modern && meta["io.modelcontextprotocol/clientInfo"]) setClient(meta["io.modelcontextprotocol/clientInfo"]?.name);
+  if (modern) canAsk = !!meta["io.modelcontextprotocol/clientCapabilities"]?.elicitation;
   if (method === "initialize") {
     setClient(params?.clientInfo?.name);
+    canAsk = !!params?.capabilities?.elicitation;
     const asked = params?.protocolVersion;
     return send.reply(id, { protocolVersion: LEGACY.includes(asked) ? asked : LEGACY[0], capabilities: { tools: { listChanged: false } }, serverInfo: SERVER, instructions: INSTRUCTIONS });
   }
