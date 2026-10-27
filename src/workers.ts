@@ -9,10 +9,10 @@
 //  - Gemini CLI: a block in ~/.gemini/GEMINI.md.
 // Leanfare adds and takes out only its own: the worker file it wrote, the block between its two
 // marker lines, its own hook entry. Everything else in those files stays as it was.
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { readClaudeSettings, writeClaudeSettings } from "./meter";
+import { dirname, join, resolve } from "node:path";
+import { claudeSettingsFile, readClaudeSettings, writeClaudeSettings } from "./meter";
 import { selfCommand } from "./self";
 import { quote } from "./statusline";
 
@@ -48,25 +48,67 @@ ${OWN}
 
 // ---- blocks in a markdown file ------------------------------------------------------------------
 
-// The file's text with Leanfare's block taken out (body null) or put in at the end, in place of any
-// block it had: only the block and the blank lines next to it change.
+// Leanfare's blocks in the text: a START line, then an END line, with no other marker between them.
+// A marker left on its own (its pair deleted by hand) is the user's text now: it stays, and so does
+// everything around it.
+function blocks(text: string): [number, number][] {
+  const out: [number, number][] = [];
+  for (let i = 0; ;) {
+    const s = text.indexOf(START, i);
+    if (s < 0) break;
+    const e = text.indexOf(END, s + START.length);
+    if (e < 0) break;
+    const next = text.indexOf(START, s + START.length);
+    if (next >= 0 && next < e) { i = next; continue; } // this START has no END of its own
+    out.push([s, e + END.length]);
+    i = e + END.length;
+  }
+  return out;
+}
+
+// The file's text with Leanfare's blocks taken out (body null), or with one block at the end in place
+// of any it had: only the blocks and the blank lines next to them change.
 export function withBlock(text: string, body: string | null): string {
-  const s = text.indexOf(START), e = text.indexOf(END);
+  const found = blocks(text);
+  if (body === null && !found.length) return text; // no whole block: nothing is taken out
   let rest = text;
-  if (s >= 0 && e > s) {
-    const before = text.slice(0, s).replace(/\n+$/, ""), after = text.slice(e + END.length).replace(/^\n+/, "");
+  for (const [s, e] of found.reverse()) { // the last first, so the earlier places stay right
+    const before = rest.slice(0, s).replace(/\n+$/, ""), after = rest.slice(e).replace(/^\n+/, "");
     rest = before && after ? `${before}\n\n${after}` : before + after;
   }
   rest = rest.replace(/\s+$/, "");
   if (body === null) return rest ? rest + "\n" : "";
   return `${rest ? rest + "\n\n" : ""}${START}\n${body}\n${END}\n`;
 }
-const hasBlock = (file: string) => { try { const t = readFileSync(file, "utf8"); return t.includes(START) && t.includes(END); } catch { return false; } };
+const hasBlock = (file: string) => { try { return blocks(readFileSync(file, "utf8")).length > 0; } catch { return false; } };
+// Written whole, then swapped in. A file that is a link (kept with your dotfiles) stays a link: the
+// file it points to is the one written; and the file keeps its permissions (a private one stays private).
+function target(file: string): string {
+  try { if (lstatSync(file).isSymbolicLink()) { try { return realpathSync(file); } catch { return resolve(dirname(file), readlinkSync(file)); } } } catch {}
+  return file;
+}
 function writeAtomic(file: string, text: string) {
-  mkdirSync(dirname(file), { recursive: true });
-  const tmp = `${file}.leanfare-${process.pid}`;
-  writeFileSync(tmp, text);
-  renameSync(tmp, file);
+  const to = target(file);
+  mkdirSync(dirname(to), { recursive: true });
+  let mode: number | undefined;
+  try { mode = statSync(to).mode & 0o777; } catch {}
+  const tmp = `${to}.leanfare-${process.pid}`;
+  try {
+    writeFileSync(tmp, text, mode !== undefined ? { mode } : undefined);
+    if (mode !== undefined) chmodSync(tmp, mode);
+    renameSync(tmp, to);
+  } catch (e) { try { unlinkSync(tmp); } catch {} throw e; }
+}
+// Whether Leanfare can write a file there, asked before anything changes.
+function writable(file: string): string | null {
+  const to = target(file);
+  try {
+    if (existsSync(to)) accessSync(to, constants.W_OK);
+    let d = dirname(to);
+    while (!existsSync(d)) d = dirname(d);
+    accessSync(d, constants.W_OK);
+    return null;
+  } catch { return `Leanfare cannot write ${file} (it is read only, or locked by another program), so it changed nothing.`; }
 }
 function setBlock(file: string, body: string | null) {
   const before = existsSync(file) ? readFileSync(file, "utf8") : "";
@@ -102,7 +144,7 @@ export { hookLine } from "./statusline"; // the line itself lives with the statu
 
 // ---- the apps ---------------------------------------------------------------------------------
 
-export interface AutoView { on: boolean; what: string }
+export interface AutoView { on: boolean; partly: boolean; what: string } // partly: some of it is there (Turn off takes it out)
 interface AutoDef { files: () => { rule: string; agent?: string }; hook?: boolean; rule: string; what: string }
 export const AUTO: Record<string, AutoDef> = {
   "claude-code": { files: () => ({ rule: join(claudeDir(), "CLAUDE.md"), agent: join(claudeDir(), "agents", "leanfare-worker.md") }), hook: true, rule: RULE_CLAUDE,
@@ -119,8 +161,8 @@ export function autoView(id: string): AutoView | null {
   const f = d.files();
   let hook = true;
   if (d.hook) { try { hook = hookIn(readClaudeSettings()); } catch { hook = false; } }
-  const on = hasBlock(f.rule) && (!f.agent || ourWorker(f.agent)) && hook;
-  return { on, what: d.what };
+  const have = [hasBlock(f.rule), ...(f.agent ? [ourWorker(f.agent)] : []), ...(d.hook ? [hook] : [])];
+  return { on: have.every(Boolean), partly: have.some(Boolean) && !have.every(Boolean), what: d.what };
 }
 
 export function setAuto(id: string, on: boolean): AutoView {
@@ -128,11 +170,23 @@ export function setAuto(id: string, on: boolean): AutoView {
   if (!d) throw new Error(`Leanfare cannot plan by itself in ${id}.`);
   const f = d.files();
   if (on && f.agent && existsSync(f.agent) && !ourWorker(f.agent)) throw new Error(`${f.agent} is not Leanfare's, so Leanfare left it alone. Rename it, then turn this on again.`);
-  if (d.hook) setHook(on); // first: a settings file that is not valid JSON stops here, before anything else changes
-  setBlock(f.rule, on ? d.rule : null);
-  if (f.agent) {
-    if (on) writeAtomic(f.agent, WORKER);
-    else if (ourWorker(f.agent)) { try { unlinkSync(f.agent); } catch {} }
+  // Everything is checked first: the settings file reads as JSON, and every file can be written.
+  if (d.hook) readClaudeSettings();
+  for (const file of [f.rule, ...(f.agent ? [f.agent] : []), ...(d.hook ? [claudeSettingsFile()] : [])]) { const why = writable(file); if (why) throw new Error(why); }
+  // Then each change, undone if a later one fails, so nothing is left half done.
+  const undo: (() => void)[] = [];
+  try {
+    if (d.hook) { const was = hookIn(readClaudeSettings()); setHook(on); undo.push(() => setHook(was)); }
+    const before = existsSync(f.rule) ? readFileSync(f.rule, "utf8") : null;
+    setBlock(f.rule, on ? d.rule : null);
+    undo.push(() => { if (before !== null) writeAtomic(f.rule, before); });
+    if (f.agent) {
+      if (on) writeAtomic(f.agent, WORKER);
+      else if (ourWorker(f.agent)) unlinkSync(f.agent);
+    }
+  } catch (e) {
+    for (const u of undo.reverse()) { try { u(); } catch {} }
+    throw e;
   }
   return autoView(id)!;
 }

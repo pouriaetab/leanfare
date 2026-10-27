@@ -17,7 +17,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { selfCommand } from "./self";
 import { shellEnv } from "./shellenv";
-import { autoView, type AutoView } from "./workers";
+import { autoView, setAuto, type AutoView } from "./workers";
 
 // Your home folder as the apps see it: HOME (what your shell and the tests use), but on Windows the
 // user profile, which is where the apps keep their files even when a Unix-style shell sets HOME.
@@ -268,5 +268,7 @@ export async function setApp(id: string, on: boolean): Promise<AppView> {
   if (a.format === "json") jsonSet(a, on);
   else if (a.format === "toml") tomlSet(a, on);
   else await claudeSet(on);
+  // Leanfare's tools out: its plan by itself goes too (the line, the worker and the hook would point at nothing).
+  if (!on) { const v = autoView(id); if (v && (v.on || v.partly)) setAuto(id, false); }
   return appsView().find((v) => v.id === id)!;
 }
