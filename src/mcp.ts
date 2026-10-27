@@ -83,6 +83,24 @@ const TOOLS = [
     annotations: { title: "Progress of a plan", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
+    name: "grade",
+    title: "Grade an answer",
+    description: "After you used the answer of a part Leanfare ran (plan_status) or of delegate, say how good it was: good, partly or wrong. Leanfare keeps only the grade, with the model that answered and the kind of part, never the words. A model graded below good too often for a kind is moved down, so Auto, plans and delegate stop picking it for that kind. Grade a plan's part with id and part; a delegate answer with model (from its receipt) and kind.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        verdict: { type: "string", enum: ["good", "partly", "wrong"], description: "good: you used it as it was. partly: you had to fix or redo some of it. wrong: you could not use it." },
+        id: { type: "string", description: "The plan's id, from plan." },
+        part: { type: "integer", minimum: 1, description: "The part's number in the plan." },
+        model: { type: "string", description: "For a delegate answer: the model id its receipt named, such as deepseek/deepseek-v4-flash." },
+        kind: { type: "string", enum: ["read", "write", "reason", "search"], description: "For a delegate answer: the kind you gave it." },
+      },
+      required: ["verdict"],
+      additionalProperties: false,
+    },
+    annotations: { title: "Grade an answer", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
     name: "ask",
     title: "Ask a model",
     description: "Ask a question through Leanfare and get the answer with its cost. By default Leanfare's Auto picks the cheapest model the user ticked that rates well for the task; name a model to use that one. The cost counts toward the user's budget.",
@@ -231,6 +249,7 @@ export function statusText(v: any, saved: string | null): string {
   if (v.asks) lines.push(`Parts ${v.asks.parts.join(", ")} are paid (about ${usd(v.asks.estimate)}, over the cap of ${usd(v.asks.cap)} set in Leanfare) and wait for the user's yes: ask them, then call plan_run with paid yes.`);
   for (const r of done) lines.push("", `## Part ${r.n}: ${r.title}`, "", r.answer.length > SHOWN ? `${r.answer.slice(0, SHOWN)}\n\n(cut here: the whole answer is in ${saved ?? "Leanfare"}${saved ? `/part-${r.n}.md` : ""})` : r.answer, "", `(${r.receipt})`);
   for (const r of v.parts.filter((x: any) => x.error)) lines.push("", `Part ${r.n} failed: ${r.error}`);
+  if (done.length) lines.push("", `Once you have used ${done.length === 1 ? "this answer" : "these answers"}, grade ${done.length === 1 ? "it" : "each"} with grade (good, partly or wrong, with the plan's id and the part): models graded below good too often are moved down.`);
   if (saved) lines.push("", `Saved in ${saved}/ in the project.`);
   return lines.join("\n");
 }
@@ -274,6 +293,14 @@ function pullLine(p: any): string {
 }
 
 async function runTool(name: string, args: any, signal: AbortSignal): Promise<any> {
+  if (name === "grade") {
+    if (!["good", "partly", "wrong"].includes(args?.verdict)) return failure("grade needs a verdict: good, partly or wrong.");
+    const body = typeof args.id === "string" && Number.isInteger(args.part) ? { id: args.id, part: args.part, verdict: args.verdict }
+      : typeof args.model === "string" && typeof args.kind === "string" ? { model: args.model, kind: args.kind, verdict: args.verdict } : null;
+    if (!body) return failure("grade needs the plan's id and the part's number, or, for a delegate answer, the model and the kind.");
+    const { j } = await call("/api/grades", { method: "POST", json: body }, signal);
+    return text(`Graded ${args.verdict}. ${j.text}`, j.standing);
+  }
   if (name === "local_model") {
     const action = args?.action ?? "suggest";
     if (action === "status") { const { j } = await call("/api/local/pull", {}, signal); return text(pullLine(j.pull), { pull: j.pull }); }
@@ -366,7 +393,8 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
     if (typeof files === "string") return failure(files);
     const body = { task: args.task, files, kind: args.kind ?? null, effort: args.effort ?? "medium", check: args.check ?? "auto", ...(args.max_tokens !== undefined ? { max_tokens: args.max_tokens } : {}), ...(args.speed !== undefined ? { speed: args.speed } : {}) };
     const { j } = await call("/api/delegate", { method: "POST", json: body }, signal);
-    return text(`${j.answer}\n\n(${j.receipt})`, {
+    const gradeIt = ["read", "write", "reason"].includes(args.kind) ? `\n\n(Once you have used it: grade, with model ${j.model.id} and kind ${args.kind}.)` : "";
+    return text(`${j.answer}\n\n(${j.receipt})${gradeIt}`, {
       answer: j.answer, model: j.model.id, cost_usd: j.cost, total_usd: j.total, task: j.task, effort: j.effort,
       check: j.check.picked ? { verdict: j.check.verdict, by: j.check.checker?.id ?? null, why: j.check.why || null, cost_usd: j.check.cost } : null,
       first: j.first ? { model: j.first.model.id, cost_usd: j.first.cost } : null,

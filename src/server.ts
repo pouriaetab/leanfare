@@ -18,11 +18,12 @@ import { BRIEF, MAX_INSTRUCTIONS, MODES, saveSettings, settings, validatePatch }
 import { budgetState } from "./budget";
 import * as connect from "./connect";
 import * as local from "./local";
-import { codexState } from "./codex";
+import { CODEX_ID, codexState } from "./codex";
+import { GRADED_KINDS, VERDICTS, addGrade, giveAnotherChance, standing, standingText, standings } from "./grades";
 import { plansBrief, plansView } from "./plans";
 import { meterViews, setStatusline } from "./meter";
 import { checkDelegate, runDelegate } from "./delegate";
-import { checkPlan, makePlan, runView, startRun, stopRun } from "./planner";
+import { checkPlan, gradePart, makePlan, runView, startRun, stopRun } from "./planner";
 import { setAuto } from "./workers";
 import { retirementNotices } from "./retire";
 import { savings } from "./savings";
@@ -411,6 +412,27 @@ async function api(req: Request, url: URL): Promise<Response> {
   if (p === "/api/local" && m === "GET") return json(await local.overview());
   if (p === "/api/local/pull" && m === "GET") return json({ pull: local.pullView() });
   if (p === "/api/local/suggest" && m === "GET") return json(local.suggestLocal());
+  // The manager's grades (grades.ts): a part's answer graded, the standings, and another chance.
+  if (p === "/api/grades" && m === "GET") return json({ standings: standings().map((x) => ({ ...x, text: standingText(x) })) });
+  if (p === "/api/grades" && m === "POST") {
+    const b = await readBody(req);
+    if (!VERDICTS.includes(b?.verdict)) return fail(400, "verdict must be good, partly or wrong.");
+    const source = b.source === "you" ? "you" : "manager";
+    if (typeof b.id === "string" && Number.isInteger(b.part)) return json(gradePart(b.id, b.part, b.verdict, source));
+    if (typeof b.model === "string" && GRADED_KINDS.includes(b.kind)) {
+      if (b.model !== CODEX_ID && !getModel(b.model)) return fail(404, `Leanfare does not know the model ${String(b.model).slice(0, 80)}.`);
+      addGrade({ model: b.model, kind: b.kind, effort: typeof b.effort === "string" ? b.effort.slice(0, 10) : null, verdict: b.verdict, source });
+      const st = standing(b.model, b.kind);
+      return json({ text: standingText(st), standing: st });
+    }
+    return fail(400, "Grade a plan's part (id and part) or a model's answer (model and kind: read, write, reason or search).");
+  }
+  if (p === "/api/grades/reset" && m === "POST") {
+    const b = await readBody(req);
+    if (typeof b?.model !== "string" || !GRADED_KINDS.includes(b?.kind)) return fail(400, "model and kind are needed.");
+    giveAnotherChance(b.model, b.kind);
+    return json({ standings: standings().map((x) => ({ ...x, text: standingText(x) })) });
+  }
   if (p === "/api/codex" && m === "GET") return json({ ...(await codexState(url.searchParams.get("fresh") === "1")), on: settings().codexPlan });
   if (p === "/api/local/pull" && m === "POST") { const b = await readBody(req); return json({ pull: await local.startPull(b.name, b.sizeBytes) }); }
   if (p === "/api/local/pull/stop" && m === "POST") { local.stopPull(); return json({ pull: local.pullView() }); }
