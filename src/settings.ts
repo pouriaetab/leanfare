@@ -35,6 +35,7 @@ export interface Settings {
   accessKey: string | null; // when set, other apps must send it (see lock.ts); null: no key needed
   custom: CustomProvider[]; // providers you added: a name and an address that speaks OpenAI's format (providers.ts)
   speed: SpeedChoice; // at the same quality: the cheapest, the fastest, or the cheapest expected within N seconds (speed.ts)
+  updateCheck: boolean; // ask GitHub once a day whether a newer Leanfare is out (update.ts)
 }
 
 export const DEFAULTS: Settings = {
@@ -54,6 +55,7 @@ export const DEFAULTS: Settings = {
   accessKey: null,
   custom: [],
   speed: "cheapest",
+  updateCheck: true,
 };
 
 export const MAX_INSTRUCTIONS = 20_000; // characters
@@ -111,6 +113,7 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
   if ("speed" in p) { const v = parseSpeed(p.speed); if (v === null) return { error: "speed must be cheapest, fastest, or a number of seconds from 1 to 3600" }; out.speed = v; }
   if ("atLimit" in p) { if (p.atLimit !== "cheapest" && p.atLimit !== "stop") return { error: "atLimit must be cheapest or stop" }; out.atLimit = p.atLimit; }
   if ("history" in p) out.history = !!p.history;
+  if ("updateCheck" in p) out.updateCheck = !!p.updateCheck;
   if ("successors" in p) {
     if (typeof p.successors !== "object" || p.successors === null) return { error: "successors must be an object" };
     out.successors = Object.fromEntries(Object.entries(p.successors).filter(([a, b]) => typeof a === "string" && typeof b === "string")) as Record<string, string>;
