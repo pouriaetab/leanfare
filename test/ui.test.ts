@@ -23,7 +23,7 @@ test("removals can be undone", () => {
 });
 test("a model's text only reaches the page through the escaping markdown renderer", () => {
   const sets = [...js.matchAll(/\.innerHTML\s*=\s*([^;]+);/g)].map((m) => m[1].trim());
-  expect(sets).toEqual(["markdown(m.content)"]);
+  expect(sets.sort()).toEqual(["markdown(m.content)", "markdown(r.answer)"]); // a chat answer, and a plan part's answer
 });
 test("drafts are kept in localStorage", () => {
   expect(js).toContain("localStorage.setItem");

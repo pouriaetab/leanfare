@@ -836,6 +836,53 @@ describe("Your plans", () => {
   }, 20000);
 });
 
+describe("The Plan tab", () => {
+  const toasts = (doc: any) => [...doc.querySelectorAll("#toasts .toast")].map((t: any) => t.textContent).join(" | ");
+  const bad = (doc: any) => /\bnull\b|\bundefined\b|NaN|\[object Object\]/.test(doc.body.textContent);
+  async function waitFor(ok: () => boolean, ms = 8000) { for (let i = 0; i < ms / 50 && !ok(); i++) await Bun.sleep(50); }
+  const press = (doc: any, text: string, within = "body") => [...doc.querySelector(within).querySelectorAll("button")].find((b: any) => b.textContent === text)?.click();
+  beforeEach(async () => { await reset({ ticked: ALL_TICKED }); });
+  const goPlan = async (doc: any) => {
+    doc.querySelector('.tabs button[data-tab="plan"]').click();
+    await waitFor(() => !!doc.querySelector("#tab-plan textarea"));
+  };
+
+  test("before any plan, it says how it works; an empty task asks for one", async () => {
+    const doc = await openApp();
+    await goPlan(doc);
+    expect(doc.querySelector("#tab-plan").textContent).toContain("How it works");
+    doc.querySelector("#planGo").click();
+    await waitFor(() => toasts(doc).includes("Write the task first."));
+    expect(toasts(doc)).toContain("Write the task first.");
+  }, 20000);
+
+  test("a task in, a table out: each part, where it runs and its model; Run runs Leanfare's parts and shows their answers", async () => {
+    await keys("openai", "google", "deepseek");
+    const doc = await openApp();
+    await goPlan(doc);
+    doc.querySelector("#tab-plan textarea[aria-label='What do you want to do?']").value = "Fix the failing tests in the parser";
+    doc.querySelector("#tab-plan input[aria-label='Split by rules']").checked = true;
+    doc.querySelector("#planGo").click();
+    await waitFor(() => !!doc.querySelector("#planResult"));
+    expect(doc.querySelectorAll("#planResult tbody tr").length).toBe(5);
+    let t = doc.querySelector("#planResult").textContent;
+    expect(t).toContain("you (Claude Code)");
+    expect(t).toContain("go to Leanfare, keeping about");
+    expect(t).toContain("Split by rules.");
+    expect(doc.querySelector("#planResult tbody tr.yours")).toBeTruthy(); // the parts that stay with you are marked
+    expect(doc.querySelector("#planResult td[data-label='Model']")).toBeTruthy(); // the phone shows each cell with its name
+    expect(bad(doc)).toBe(false);
+    press(doc, "Run Leanfare's parts", "#planResult");
+    await waitFor(() => toasts(doc).includes("Leanfare's parts are done."), 20000);
+    t = doc.querySelector("#planResult").textContent;
+    expect(t).toContain("done");
+    expect(t).toContain("yours to do");
+    expect(doc.querySelectorAll("#planResult .plan-answer").length).toBeGreaterThan(0);
+    expect(doc.querySelector("#planResult .plan-answer .md")).toBeTruthy();
+    expect(bad(doc)).toBe(false);
+  }, 40000);
+});
+
 describe("The plan meter", () => {
   const { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require("node:fs") as typeof import("node:fs");
   const { join } = require("node:path") as typeof import("node:path");
