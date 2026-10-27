@@ -25,6 +25,9 @@ const HELP = `Leanfare ${VERSION}: every top AI model in one app on your own com
   leanfare status     is it running, where, and how old are its prices
   leanfare mcp        Leanfare as an MCP server (stdio), for Claude Desktop and other MCP clients
   leanfare statusline the line for Claude Code's status line: your plan's 5 hour and weekly use (Settings adds it)
+  leanfare apps       the AI apps on this computer, and whether Leanfare's tools are in each
+  leanfare apps add claude-desktop   add Leanfare's tools to one (claude-desktop, claude-code, cursor, codex,
+                      gemini-cli, windsurf, vscode, lm-studio); "leanfare apps remove <app>" takes them out
 
   --port 4748         use another port
   --no-open           do not open the browser
@@ -207,6 +210,24 @@ async function status() {
   process.exit(0);
 }
 
+// leanfare apps [add|remove <app>]: Leanfare's tools in the AI apps on this computer (see apps.ts).
+async function apps() {
+  const { APPS, appsView, setApp } = await import("./apps");
+  const [verb, id] = args.slice(args.indexOf("apps") + 1);
+  if (verb === "add" || verb === "remove") {
+    if (!id || !APPS.some((a) => a.id === id)) { console.error(`Name the app: ${APPS.map((a) => a.id).join(", ")}.`); process.exit(2); }
+    try {
+      const v = await setApp(id, verb === "add");
+      console.log(verb === "add" ? `Added Leanfare's tools to ${v.name}. ${v.after}` : `Took Leanfare's tools out of ${v.name}.`);
+      process.exit(0);
+    } catch (e: any) { console.error(String(e?.message ?? e)); process.exit(1); }
+  }
+  const SAY: Record<string, string> = { added: "added", old: "added, from another copy (run: leanfare apps add <app> to update)", "not added": "not added", broken: "settings file is not valid; left alone", "not installed": "not on this computer" };
+  for (const v of appsView()) console.log(`${v.id.padEnd(15)} ${v.name.padEnd(28)} ${SAY[v.status]}`);
+  console.log(`\nAdd Leanfare's tools to one: leanfare apps add <app>`);
+  process.exit(0);
+}
+
 if (flag("version") || command === "version" || args.includes("-v")) { console.log(VERSION); process.exit(0); }
 if (flag("help") || command === "help" || args.includes("-h")) { console.log(HELP); process.exit(0); }
 if (!Number.isInteger(port) || port < 1 || port > 65535) { console.error("The port must be a number from 1 to 65535."); process.exit(2); }
@@ -215,4 +236,5 @@ else if (command === "stop") await stop();
 else if (command === "status") await status();
 else if (command === "mcp") { const { runMcp } = await import("./mcp"); await runMcp(); }
 else if (command === "statusline") { const { runStatusline } = await import("./statusline"); await runStatusline(args); }
+else if (command === "apps") await apps();
 else { console.error(`Unknown command "${command}".\n\n${HELP}`); process.exit(2); }

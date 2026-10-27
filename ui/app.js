@@ -332,6 +332,8 @@
     local: null, // what Ollama has (Settings, Local models), from /api/local
     confirmRemove: null, // the local model whose Remove is waiting for a yes
     found: null, // Find my keys: { keys, picked } while its list is open
+    apps: null, // Use Leanfare in your apps: each AI app on this computer and whether Leanfare's tools are in it
+    showAllApps: false,
     registry: null, // Add a provider: models.dev's list of providers that speak OpenAI's format
   };
   const ready = () => S.st && S.st.usableCount > 0;
@@ -1777,7 +1779,8 @@
     if (!key) { toast("Paste a key first.", "error"); return; }
     const r = await api("/api/keys/recognize", { body: { key }, signal });
     S.st = r.state;
-    if (r.ok) input.value = "";
+    // The box may have been drawn again while Leanfare tested the key: clear whichever one is on screen.
+    if (r.ok) { input.value = ""; const now = $("input[aria-label='Any API key']"); if (now) now.value = ""; }
     if (r.unknown) { S.open.__add = true; store.set("open", S.open); loadRegistry(); }
     renderShell(); renderSettings(); renderComposerBar();
     toast(r.message, r.ok ? "done" : "error");
@@ -1865,6 +1868,47 @@
     } catch (e) { failed(e); }
   }
 
+  // ---- Use Leanfare in your apps (Settings) -----------------------------------------------------------
+  // Leanfare's MCP tools in the apps you already use: one press per app, undone the same way.
+  const APP_STATUS = { added: "added", old: "added from another copy of Leanfare", "not added": "not added yet", broken: "its settings file is not valid, so Leanfare leaves it alone", "not installed": "not on this computer" };
+  async function loadApps() {
+    if (S.apps) return;
+    S.apps = { loading: true, list: [] };
+    try { const r = await api("/api/apps"); S.apps = { list: r.apps }; } catch { S.apps = { list: [] }; }
+    renderSettings();
+  }
+  function appsSettingEl() {
+    if (!S.apps) loadApps();
+    const list = S.apps?.list ?? [];
+    const here = list.filter((a) => a.status !== "not installed");
+    const away = list.filter((a) => a.status === "not installed");
+    const row = (a) => h("div", { class: "app-row" },
+      h("div", { class: "row" },
+        h("span", { class: "grow" }, h("b", { text: a.name }), h("span", { class: "note", text: ` · ${APP_STATUS[a.status]}` })),
+        a.status === "broken" ? null : runButton(a.status === "added" ? "Remove" : a.status === "old" ? "Update" : "Add", (signal) => toggleApp(a, a.status !== "added", signal), a.status === "added" ? "btn small" : "btn small primary")),
+      a.note ? h("div", { class: "note", text: a.note }) : null,
+      a.manual && a.status !== "added" ? h("div", { class: "note manual" }, "Or in Terminal: ", h("code", { text: a.manual }), " ", copyBtn(a.manual)) : null);
+    return h("div", { class: "setting apps" }, h("h3", { text: "Use Leanfare in your apps" }),
+      h("p", { text: "Adds Leanfare's tools (delegate, ask, spend, models, estimate) to the AI apps you already use, so they work as usual with Leanfare on top. Leanfare changes only its own entry in each app's settings, and keeps a copy of the file as it was." }),
+      S.apps?.loading ? h("p", { class: "note", text: "Looking for the AI apps on this computer…" }) : null,
+      ...here.map(row),
+      !S.apps?.loading && !here.length ? h("p", { class: "note", text: "None of the apps Leanfare knows are on this computer yet." }) : null,
+      away.length ? h("button", { class: "more-toggle", type: "button", text: S.showAllApps ? "▾ Hide the apps not on this computer" : `▸ ${away.length} more not found on this computer (${away.map((a) => a.name).join(", ")})`, onclick: () => { S.showAllApps = !S.showAllApps; renderSettings(); } }) : null,
+      S.showAllApps ? h("div", { class: "away" }, ...away.map(row)) : null);
+  }
+  async function toggleApp(a, on, signal) {
+    try {
+      const r = await api("/api/apps", { body: { id: a.id, on }, signal });
+      S.apps = { list: r.apps };
+      renderSettings();
+      toast(on ? `Added Leanfare's tools to ${a.name}. ${a.after}` : `Took Leanfare's tools out of ${a.name}.`, "done");
+    } catch (e) {
+      S.apps = null;
+      loadApps();
+      throw e;
+    }
+  }
+
   // The model apps Leanfare looks for on this computer, besides Ollama (they show as providers when found).
   function localAppsEl() {
     const x = S.st.extra?.local;
@@ -1912,6 +1956,8 @@
     const d = st.data;
     const theme = store.get("theme", "auto");
     const right = h("div", { class: "colR" },
+      h("div", { class: "section-title", text: "In your apps" }),
+      appsSettingEl(),
       h("div", { class: "section-title", text: "Choices" }),
       h("div", { class: "setting" }, h("h3", { text: "How Auto picks" }), modeSeg,
         h("p", { text: `${st.modes[s.mode].label}: ${st.modes[s.mode].blurb}, for the task Leanfare guesses from your message (coding, math, writing, long prompts and more). Ratings come from the Arena leaderboard.` })),
