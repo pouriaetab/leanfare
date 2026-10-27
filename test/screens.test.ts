@@ -618,9 +618,9 @@ describe("Your plans", () => {
     const doc = await openApp();
     await goSavings(doc);
     const t = doc.querySelector("#plansCard").textContent;
-    expect(t).toContain("Your plans");
-    expect(t).toContain("Enter your Claude or ChatGPT plan");
-    expect(t).toContain("an estimate");
+    expect(t).toContain("Your subscriptions");
+    expect(t).toContain("a fixed price, with limits");
+    expect(t).toContain("Enter your Claude, ChatGPT or other plan");
     expect(bad(doc)).toBe(false);
   }, 20000);
 
@@ -941,6 +941,56 @@ describe("Use Leanfare in your apps (Settings)", () => {
     await waitFor(() => row().textContent.includes("added") && !row().textContent.includes("not added"));
     expect([...row().querySelectorAll("button")].map((b: any) => b.textContent)).toContain("Remove");
     expect(doc.querySelector(".apps").textContent).toContain("more not found on this computer");
+    expect(bad(doc)).toBe(false);
+  }, 20000);
+});
+
+describe("Subscriptions on Savings and in Settings", () => {
+  const { mkdirSync, rmSync, writeFileSync } = require("node:fs") as typeof import("node:fs");
+  const { join } = require("node:path") as typeof import("node:path");
+  const { forgetLogs } = require("../src/plans") as typeof import("../src/plans");
+  const toasts = (doc: any) => [...doc.querySelectorAll("#toasts .toast")].map((t: any) => t.textContent).join(" | ");
+  const bad = (doc: any) => /\bnull\b|\bundefined\b|NaN|\[object Object\]/.test(doc.body.textContent);
+  async function waitFor(ok: () => boolean, ms = 8000) { for (let i = 0; i < ms / 50 && !ok(); i++) await Bun.sleep(50); }
+  beforeEach(async () => {
+    rmSync(process.env.CODEX_HOME!, { recursive: true, force: true });
+    forgetLogs();
+    await reset({ ticked: ALL_TICKED });
+  });
+
+  test("the plan Codex names is offered with Use this plan; pressing it saves the plan", async () => {
+    const d = join(process.env.CODEX_HOME!, "sessions", "2026", "10", "20");
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, "rollout-x.jsonl"), [
+      JSON.stringify({ timestamp: "2026-10-20T13:05:15Z", type: "turn_context", payload: { model: "gpt-5-mini" } }),
+      JSON.stringify({ timestamp: "2026-10-21T11:00:00Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 100, cached_input_tokens: 0, output_tokens: 10 } }, rate_limits: { primary: { used_percent: 12, window_minutes: 300, resets_at: 1792600000 }, plan_type: "plus" } } }),
+    ].join("\n") + "\n");
+    forgetLogs();
+    const doc = await openApp();
+    doc.querySelector('.tabs button[data-tab="savings"]').click();
+    await waitFor(() => !!doc.querySelector("#plansCard") && doc.querySelector("#plansCard").textContent.includes("Codex says you are on this plan"));
+    const card = doc.querySelector("#plansCard");
+    expect(card.textContent).toContain("ChatGPT Plus");
+    expect(doc.querySelector("#tab-savings").textContent).toContain("Pay per use: what your keys and credits spent through Leanfare");
+    [...card.querySelectorAll("button")].find((b: any) => b.textContent === "Use this plan").click();
+    await waitFor(() => toasts(doc).includes("ChatGPT plan saved."));
+    expect((await ui(url, "/api/state")).json.settings.plans.chatgpt).toEqual({ name: "ChatGPT Plus", price: 20 });
+    expect(bad(doc)).toBe(false);
+  }, 20000);
+
+  test("Settings: picking a plan fills its name and price; more subscriptions are one press away", async () => {
+    const doc = await openApp();
+    doc.querySelector('.tabs button[data-tab="settings"]').click();
+    await waitFor(() => !!doc.querySelector("select[aria-label='Pick your Claude plan']"));
+    const pick = doc.querySelector("select[aria-label='Pick your Claude plan']");
+    pick.value = "2";
+    pick.dispatchEvent(new win.Event("change", { bubbles: true }));
+    expect(doc.querySelector("input[aria-label='Claude plan name']").value).toBe("Claude Max 20x");
+    expect(doc.querySelector("input[aria-label='Claude plan price a month']").value).toBe("200");
+    expect(doc.querySelector("select[aria-label='Pick your Perplexity plan']")).toBeNull();
+    [...doc.querySelectorAll("button")].find((b: any) => b.textContent.startsWith("▸ More subscriptions")).click();
+    await waitFor(() => !!doc.querySelector("select[aria-label='Pick your Perplexity plan']"));
+    expect(doc.querySelector("select[aria-label='Pick your Perplexity plan']").textContent).toContain("Perplexity Pro · $20.00");
     expect(bad(doc)).toBe(false);
   }, 20000);
 });

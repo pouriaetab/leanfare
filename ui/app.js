@@ -1275,15 +1275,24 @@
   }
 
   function planBlock(v) {
-    const mb = meterBlock(S.meter?.[v.provider]);
+    const mb = v.logs ? meterBlock(S.meter?.[v.provider]) : null;
+    const rec = !v.plan && v.recognized ? v.recognized : null; // the plan Codex says you are on
     const head = v.plan
       ? h("div", { class: "pl-head" }, h("b", { text: v.plan.name }), h("span", { class: "grow" }), h("small", { text: `${money(v.plan.price)} a month` }))
-      : h("div", { class: "pl-head" }, h("b", { text: v.logs }), h("span", { class: "grow" }), h("button", { class: "btn small", type: "button", text: "Enter your plan", onclick: () => setTab("settings") }));
-    if (!v.found) return h("div", { class: "pl" }, head, mb, h("p", { class: "pl-note", text: `No ${v.logs} log files found on this computer.` }));
-    if (!v.tokens) return h("div", { class: "pl" }, head, mb, h("p", { class: "pl-note", text: `No ${v.logs} use in this month's log files.` }));
+      : rec
+        ? h("div", { class: "pl-head" }, h("b", { text: rec.name }), h("small", { text: ` · ${v.logs} says you are on this plan` }), h("span", { class: "grow" }),
+            rec.price !== null
+              ? h("button", { class: "btn small", type: "button", text: "Use this plan", onclick: () => patchSettings({ plans: { [v.provider]: { name: rec.name, price: rec.price } } }, `${v.label} plan saved.`) })
+              : h("button", { class: "btn small", type: "button", text: "Enter its price", onclick: () => setTab("settings") }))
+        : h("div", { class: "pl-head" }, h("b", { text: v.logs ?? v.label }), h("span", { class: "grow" }), h("button", { class: "btn small", type: "button", text: "Enter your plan", onclick: () => setTab("settings") }));
+    const limits = v.limitsText ? h("div", { class: "sub", text: `Its limits: ${v.limitsText}.` }) : null;
+    if (!v.logs) return h("div", { class: "pl" }, head, limits, h("p", { class: "pl-note" }, `${v.label} keeps no usage numbers on this computer, so Leanfare cannot count your use. `,
+      v.usageUrl ? h("a", { href: v.usageUrl, target: "_blank", rel: "noopener noreferrer", text: `See it on ${v.label}'s own page ↗` }) : null));
+    if (!v.found) return h("div", { class: "pl" }, head, limits, mb, h("p", { class: "pl-note", text: `No ${v.logs} log files found on this computer.` }));
+    if (!v.tokens) return h("div", { class: "pl" }, head, limits, mb, h("p", { class: "pl-note", text: `No ${v.logs} use in this month's log files.` }));
     const maxV = Math.max(...v.models.map((m) => m.value ?? 0), 0);
-    return h("div", { class: "pl" }, head, mb,
-      h("div", { class: "pl-val" }, h("span", { class: "big", text: money(v.value) }), h("span", { class: "sub", text: "at API prices" }),
+    return h("div", { class: "pl" }, head, limits, mb,
+      h("div", { class: "pl-val" }, h("span", { class: "big", text: money(v.value) }), h("span", { class: "sub", text: "if this use were paid per use (at API prices)" }),
         v.ratio !== null ? h("span", { class: "chip " + (v.ratio >= 1 ? "good" : ""), text: `${v.ratio < 0.05 ? "under 0.1" : v.ratio.toFixed(v.ratio >= 10 ? 0 : 1)}× what you pay` }) : null),
       h("div", { class: "sub", text: `${bigTok(v.tokens)} tokens in ${v.logs}: ${bigTok(v.input)} in, ${bigTok(v.cached)} from the cache, ${bigTok(v.output)} out` }),
       v.limits ? h("div", { class: "sub", text: `${v.logs} limits at its last message (${ago(v.limits.at)}): ${v.limits.windows.map((w) => `${Number(w.used.toFixed(1))}% of the ${w.label} used${w.resets ? `, resets ${new Date(w.resets).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}` : ""}`).join("; ")}` }) : null,
@@ -1297,12 +1306,12 @@
   function plansCardEl() {
     const P = S.plans;
     const card = h("div", { class: "card plans", id: "plansCard" });
-    card.append(h("h3", {}, "Your plans", h("small", { text: "an estimate" }), h("span", { class: "grow" }),
+    card.append(h("h3", {}, "Your subscriptions", h("small", { text: "a fixed price, with limits" }), h("span", { class: "grow" }),
       P ? runButton("Look again", async (signal) => { await loadPlans(true, signal); toast("Log files read again.", "done"); }, "btn small") : null));
     if (!P) { card.append(h("div", { class: "empty", text: "Reading the Claude Code and Codex log files on this computer…" })); return card; }
     const shown = P.providers.filter((v) => v.plan || v.found);
     if (!shown.length) {
-      card.append(h("p", { class: "pl-note", text: "Enter your Claude or ChatGPT plan to see what your Claude Code and Codex use would cost at API prices, next to what you pay." }),
+      card.append(h("p", { class: "pl-note", text: "Enter your Claude, ChatGPT or other plan to see its limits, and what your Claude Code and Codex use would cost per use, next to what you pay." }),
         h("div", { class: "row" }, h("button", { class: "btn small", type: "button", text: "Enter a plan", onclick: () => setTab("settings") })));
     } else card.append(h("div", { class: "pl-grid" }, ...shown.map(planBlock)));
     if (S.meter?.statusline) card.append(statuslineRow(S.meter.statusline));
@@ -1390,8 +1399,9 @@
     const src = v.bySource.map((s) => `${SOURCES[s.source] ?? s.source}: ${num(s.answers)}`).join(" · ");
     el.replaceChildren(
       h("div", { class: "sv-head" }, h("h2", { text: title }), h("span", { class: "grow" }), pickMonth, runButton("Refresh", async (signal) => { await loadSavings(); await loadPlans(true, signal); toast("Up to date.", "done"); })),
-      cards,
       plansCardEl(),
+      h("div", { class: "section-title", text: "Pay per use: what your keys and credits spent through Leanfare" }),
+      cards,
       delegateCardEl(v.delegate),
       h("div", { class: "sv-grid" },
         h("div", { class: "card" }, h("h3", {}, "By model", h("span", { class: "grow" }), h("small", { text: src })), h("div", { class: "scroll" }, byModel)),
@@ -1749,18 +1759,26 @@
     return h("button", { class: "btn small", type: "button", text: "Copy", onclick: () => navigator.clipboard?.writeText(text).then(() => toast("Copied.", "done"), () => failed("Could not copy.")) });
   }
 
-  // Your plans: the name and the monthly price of what you pay for Claude and ChatGPT, to set against the use in their log files.
+  // Your subscriptions: each plan's name and monthly price (picked from the usual ones or typed), so Savings
+  // shows its limits and sets its price against what the same use would cost per use.
   function plansSetting(s) {
-    const rows = [["claude", "Claude", "Claude Max"], ["chatgpt", "ChatGPT", "ChatGPT Plus"]].map(([k, label, example]) => {
-      const cur = s.plans?.[k];
-      const name = h("input", { type: "text", placeholder: example, value: cur?.name ?? "", maxlength: "60", autocomplete: "off", "aria-label": `${label} plan name`, "data-keep": `plan-${k}-name` });
+    const subs = S.st.subscriptions ?? {};
+    const keys = Object.keys(subs);
+    const shown = keys.filter((k) => k === "claude" || k === "chatgpt" || s.plans?.[k] || S.showAllPlans);
+    const rows = shown.map((k) => {
+      const info = subs[k], label = info.label, cur = s.plans?.[k];
+      const name = h("input", { type: "text", placeholder: info.presets.at(-1)?.name ?? label, value: cur?.name ?? "", maxlength: "60", autocomplete: "off", "aria-label": `${label} plan name`, "data-keep": `plan-${k}-name` });
       const price = moneyInput(cur?.price ?? null, `${label} plan price a month`);
-      return h("div", { class: "row plan-row" }, h("span", { class: "plan-l", text: label }), name, price,
+      const pick = h("select", { "aria-label": `Pick your ${label} plan`, onchange: (e) => { const p = info.presets[Number(e.target.value)]; if (p) { name.value = p.name; price.querySelector("input").value = p.price ?? ""; } } },
+        h("option", { value: "", text: "Pick a plan…" }), ...info.presets.map((p, i) => h("option", { value: String(i), text: `${p.name}${p.price !== null ? ` · ${money(p.price)}` : ""}` })));
+      return h("div", { class: "row plan-row" }, h("span", { class: "plan-l", text: label }), pick, name, price,
         h("button", { class: "btn", type: "button", text: "Save", onclick: () => patchSettings({ plans: { [k]: { name: name.value, price: price.querySelector("input").value } } }, `${label} plan saved.`) }),
         cur ? h("button", { class: "btn", type: "button", text: "Remove", onclick: () => patchSettings({ plans: { [k]: null } }, `${label} plan removed.`) }) : null);
     });
-    return h("div", { class: "setting" }, h("h3", { text: "Your Claude and ChatGPT plans" }), ...rows,
-      h("p", { text: "The Savings page then shows what your Claude Code and Codex use this month would cost at API prices, next to the price you pay. Leanfare reads only the token counts in those programs' log files on this computer, never the words." }),
+    const hidden = keys.filter((k) => !shown.includes(k));
+    return h("div", { class: "setting" }, h("h3", { text: "Your subscriptions" }), ...rows,
+      hidden.length ? h("button", { class: "more-toggle", type: "button", text: `▸ More subscriptions (${hidden.map((k) => subs[k].label).join(", ")})`, onclick: () => { S.showAllPlans = true; renderSettings(); } }) : null,
+      h("p", { text: "Savings then shows each plan's limits (the 5 hours and the week, where Leanfare can read them) and what your Claude Code and Codex use this month would cost per use, next to the price you pay. Leanfare reads only the token counts in those programs' log files on this computer, never the words." }),
       h("p", { text: "Leanfare only counts here. Anthropic does not let other apps use a Claude subscription login, so Auto never uses one." }));
   }
 
