@@ -723,7 +723,7 @@ describe("Your plans", () => {
     expect((await ui(url, "/api/state")).json.settings.plans).toEqual({ claude: { name: "Claude Max", price: 100 } });
     expect(doc.querySelector("input[aria-label='Claude plan name']").value).toBe("Claude Max");
     await goSavings(doc);
-    expect(doc.querySelector("#plansCard").textContent).toContain("0.0× what you pay");
+    expect(doc.querySelector("#plansCard").textContent).toContain("under 0.1× what you pay"); // never "0.0×"
     await goSettings(doc);
     const remove = [...doc.querySelectorAll(".plan-row button")].find((b: any) => b.textContent === "Remove");
     remove.click();
@@ -808,6 +808,8 @@ describe("The plan meter", () => {
     expect(t).toContain("a starting estimate");
     expect(t).toContain("What still fits");
     expect(t).toContain("llmledger: about");
+    expect(t).toMatch(/a session is (about [\d.]+%|under 0\.1%) of the week/);
+    expect(t).not.toContain("0.0%"); // a small session reads "under 0.1%", never nothing
     expect(doc.querySelector("#plansCard .meter .track.hot i")).toBeTruthy(); // the week at 90% is coloured
     expect(bad(doc)).toBe(false);
   }, 20000);

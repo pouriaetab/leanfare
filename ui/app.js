@@ -1234,6 +1234,11 @@
     if (old) old.replaceWith(plansCardEl());
   }
 
+  // "about 234 sessions", "more than 1,000 sessions", "under 1 session"; and a share of the week that
+  // never reads 0.0% (a small session is "under 0.1%", not nothing).
+  const sessionsText = (n) => n < 1 ? "under 1 session" : n >= 1000 ? "more than 1,000 sessions" : `about ${Math.floor(n).toLocaleString("en-US")} session${Math.floor(n) === 1 ? "" : "s"}`;
+  const weekShare = (p) => p < 0.1 ? "under 0.1%" : p < 1 ? `about ${p.toFixed(1)}%` : `about ${Math.round(p)}%`;
+
   // The plan meter: the plan's two windows, what is left of each in work, and what still fits.
   function meterBlock(m) {
     if (!m || (!m.windows.length && !m.projects.length)) return null;
@@ -1243,7 +1248,7 @@
       h("span", { class: "track" + (w.used >= 90 ? " hot" : "") }, h("i", { style: { width: Math.min(100, w.used) + "%" } })),
       h("span", { class: "v", text: `${Math.round(w.used)}% used${w.resets ? ` · resets ${when(w.resets)}` : ""}` }),
       w.left !== null ? h("span", { class: "sub", text: `about ${money(w.left)} of work left${w.leftLo !== null && w.leftHi !== null ? ` (${money(w.leftLo)} to ${money(w.leftHi)})` : ""}${w.tokensLeft ? `, about ${bigTok(w.tokensLeft)} tokens at your recent mix` : ""} · ${w.from === "starting estimate" ? "a starting estimate" : `measured from ${w.windows} windows`}` }) : null));
-    const fits = m.projects.filter((p) => p.sessionsLeft !== null).slice(0, 5).map((p) => h("li", { text: `${p.name}: ${p.sessionsLeft >= 1 ? `about ${Math.floor(p.sessionsLeft)} session${Math.floor(p.sessionsLeft) === 1 ? "" : "s"}` : "under 1 session"}${p.pctOfWeek !== null ? ` (a session is about ${p.pctOfWeek < 1 ? p.pctOfWeek.toFixed(1) : Math.round(p.pctOfWeek)}% of the week)` : ""}` }));
+    const fits = m.projects.filter((p) => p.sessionsLeft !== null).slice(0, 5).map((p) => h("li", { text: `${p.name}: ${sessionsText(p.sessionsLeft)}${p.pctOfWeek !== null ? ` (a session is ${weekShare(p.pctOfWeek)} of the week)` : ""}` }));
     return h("div", { class: "meter" },
       h("div", { class: "mt-head", text: `Right now${m.at ? `, as of ${ago(m.at)}` : ""}` }),
       ...rows,
@@ -1275,7 +1280,7 @@
     const maxV = Math.max(...v.models.map((m) => m.value ?? 0), 0);
     return h("div", { class: "pl" }, head, mb,
       h("div", { class: "pl-val" }, h("span", { class: "big", text: money(v.value) }), h("span", { class: "sub", text: "at API prices" }),
-        v.ratio !== null ? h("span", { class: "chip " + (v.ratio >= 1 ? "good" : ""), text: `${v.ratio.toFixed(v.ratio >= 10 ? 0 : 1)}× what you pay` }) : null),
+        v.ratio !== null ? h("span", { class: "chip " + (v.ratio >= 1 ? "good" : ""), text: `${v.ratio < 0.05 ? "under 0.1" : v.ratio.toFixed(v.ratio >= 10 ? 0 : 1)}× what you pay` }) : null),
       h("div", { class: "sub", text: `${bigTok(v.tokens)} tokens in ${v.logs}: ${bigTok(v.input)} in, ${bigTok(v.cached)} from the cache, ${bigTok(v.output)} out` }),
       v.limits ? h("div", { class: "sub", text: `${v.logs} limits at its last message (${ago(v.limits.at)}): ${v.limits.windows.map((w) => `${Number(w.used.toFixed(1))}% of the ${w.label} used${w.resets ? `, resets ${new Date(w.resets).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}` : ""}`).join("; ")}` }) : null,
       h("div", { class: "bars" }, ...v.models.slice(0, 5).map((m) => h("div", { class: "barrow", title: m.id ? `${m.model}\npriced as ${m.id}` : `${m.model}\nno listed price` },
