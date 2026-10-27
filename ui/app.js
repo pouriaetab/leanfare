@@ -1321,6 +1321,33 @@
       }, "btn small"));
   }
 
+  // Months: "2026-07" reads "Jul 2026"; a plan's months read "since Jul 2026", "Jul to Sep 2026".
+  const monthLabel = (m) => new Date(Number(m.slice(0, 4)), Number(m.slice(5)) - 1, 1).toLocaleDateString(undefined, { month: "short", year: "numeric" });
+  const rangeText = (p) => (p.since && p.until ? `${monthLabel(p.since)} to ${monthLabel(p.until)}` : p.since ? `since ${monthLabel(p.since)}` : p.until ? `until ${monthLabel(p.until)}` : "");
+  const lastMonths = (n = 36) => { const out = [], d = new Date(); for (let i = 0; i < n; i++) { const x = new Date(d.getFullYear(), d.getMonth() - i, 1); out.push(`${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}`); } return out; };
+  function monthSelect(value, label, none) {
+    const ms = lastMonths();
+    if (value && !ms.includes(value)) ms.push(value); // a month from before the list still shows as it is
+    const sel = h("select", { "aria-label": label, "data-keep": label }, h("option", { value: "", text: none }), ...ms.map((m) => h("option", { value: m, text: monthLabel(m) })));
+    sel.value = value ?? "";
+    return sel;
+  }
+  // The plan of an app Leanfare found: picked in place, with the month it started (the month the app came, at first).
+  function planPicker(v) {
+    const info = S.st.subscriptions?.[v.provider];
+    if (!info) return null;
+    const first = v.apps.map((a) => a.first).filter(Boolean).sort()[0] ?? null;
+    const name = h("input", { type: "text", placeholder: info.presets.at(-1)?.name ?? info.label, maxlength: "60", autocomplete: "off", "aria-label": `${info.label} plan name, here` });
+    const price = moneyInput(null, `${info.label} plan price a month, here`);
+    const since = monthSelect(first, `${info.label} plan since, here`, "since always");
+    const pick = h("select", { "aria-label": `Pick your ${info.label} plan, here`, onchange: (e) => { const p = info.presets[Number(e.target.value)]; if (p) { name.value = p.name; price.querySelector("input").value = p.price ?? ""; } } },
+      h("option", { value: "", text: "Pick a plan…" }), ...info.presets.map((p, i) => h("option", { value: String(i), text: `${p.name}${p.price !== null ? ` · ${money(p.price)}` : ""}` })));
+    return h("details", { class: "pl-add" }, h("summary", { text: "Add your plan" }),
+      h("div", { class: "row plan-row" }, pick, name, price, since,
+        h("button", { class: "btn small", type: "button", text: "Save", onclick: () => patchSettings({ plans: { [v.provider]: { name: name.value, price: price.querySelector("input").value, since: since.value } } }, `${info.label} plan saved.`) })));
+  }
+  const appsText = (v) => v.apps.map((a) => `${a.name} on this computer${a.first ? `, in use since ${monthLabel(a.first)}` : ""}${a.last && a.last < (S.savings?.month ?? a.last) ? `, last used ${monthLabel(a.last)}` : ""}`).join("; ");
+
   // One subscription, small: its limits and its tokens first (what a plan is measured in), the rest
   // folded away. Its value at API prices only when Settings says to show it.
   const ratioText = (r) => `${r < 0.05 ? "under 0.1" : r.toFixed(r >= 10 ? 0 : 1)}× what you pay`;
@@ -1330,18 +1357,22 @@
     const rec = !v.plan && v.recognized ? v.recognized : null; // the plan Codex says you are on
     const named = v.plan?.name ?? rec?.name ?? null;
     const action = v.plan
-      ? h("small", { text: `${money(v.plan.price)} a month` })
+      ? h("small", { text: `${money(v.plan.price)} a month${rangeText(v.plan) ? ` · ${rangeText(v.plan)}` : ""}` })
+      : v.outside
+        ? h("small", { text: `${v.outside.name}: ${rangeText(v.outside)}` }) // a plan you entered, for other months
       : rec
         ? rec.price !== null
           ? h("button", { class: "btn small", type: "button", text: "Use this plan", onclick: () => patchSettings({ plans: { [v.provider]: { name: rec.name, price: rec.price } } }, `${v.label} plan saved.`) })
           : h("button", { class: "btn small", type: "button", text: "Enter its price", onclick: () => setTab("settings") })
-        : h("button", { class: "btn small", type: "button", text: "Enter your plan", onclick: () => setTab("settings") });
+        : v.logs ? h("button", { class: "btn small", type: "button", text: "Enter your plan", onclick: () => setTab("settings") }) : null;
     const head = h("div", { class: "pl-head" }, h("b", { text: v.label }), named ? h("span", { class: "pl-name", text: named }) : null,
       rec ? h("small", { text: `· ${v.logs} says you are on this plan` }) : null, h("span", { class: "grow" }), action);
     const limits = v.limitsText ? h("div", { class: "sub", text: `Its limits: ${v.limitsText}.` }) : null;
     const tile = (...kids) => h("div", { class: "pl" }, head, ...kids.filter(Boolean));
-    if (!v.logs) return tile(limits, h("p", { class: "pl-note" }, `${v.label} keeps no usage numbers on this computer, so Leanfare cannot count your use. `,
-      v.usageUrl ? h("a", { href: v.usageUrl, target: "_blank", rel: "noopener noreferrer", text: `See it on ${v.label}'s own page ↗` }) : null));
+    if (!v.logs) return tile(v.apps.length ? h("div", { class: "sub", text: appsText(v) + "." }) : null, limits,
+      !v.plan && !v.outside ? planPicker(v) : null,
+      h("p", { class: "pl-note" }, `${v.label} keeps no usage numbers on this computer, so Leanfare cannot count your use. `,
+        v.usageUrl ? h("a", { href: v.usageUrl, target: "_blank", rel: "noopener noreferrer", text: `See it on ${v.label}'s own page ↗` }) : null));
     const bars = meterBlock(m);
     const codexLine = v.limits ? h("div", { class: "sub", text: `${v.logs} limits at its last message (${ago(v.limits.at)}): ${v.limits.windows.map((w) => `${Number(w.used.toFixed(1))}% of the ${w.label} used${w.resets ? `, resets ${whenShort(w.resets)}` : ""}`).join("; ")}` }) : null;
     const codex = bars ? null : codexLine; // the bars say it already: the last message's numbers go in the fold
@@ -1370,7 +1401,7 @@
     card.append(h("h3", {}, "Your subscriptions", h("small", { text: "a fixed price, with limits" }), h("span", { class: "grow" }),
       P ? runButton("Look again", async (signal) => { await loadPlans(true, signal); toast("Log files read again.", "done"); }, "btn small") : null));
     if (!P) { card.append(h("div", { class: "empty", text: "Reading the Claude Code and Codex log files on this computer…" })); return card; }
-    const shown = P.providers.filter((v) => v.plan || v.found);
+    const shown = P.providers.filter((v) => v.plan || v.found || v.apps?.some((a) => a.used));
     if (!shown.length) {
       card.append(h("p", { class: "pl-note", text: "Enter your Claude, ChatGPT or other plan to see its limits, and the tokens your Claude Code and Codex use." }),
         h("div", { class: "row" }, h("button", { class: "btn small", type: "button", text: "Enter a plan", onclick: () => setTab("settings") })));
@@ -1905,21 +1936,24 @@
   function plansSetting(s) {
     const subs = S.st.subscriptions ?? {};
     const keys = Object.keys(subs);
-    const shown = keys.filter((k) => k === "claude" || k === "chatgpt" || s.plans?.[k] || S.showAllPlans);
+    const found = (k) => !!S.plans?.providers?.some((v) => v.provider === k && v.apps?.length); // one of its apps is on this computer
+    const shown = keys.filter((k) => k === "claude" || k === "chatgpt" || s.plans?.[k] || found(k) || S.showAllPlans);
     const rows = shown.map((k) => {
       const info = subs[k], label = info.label, cur = s.plans?.[k];
       const name = h("input", { type: "text", placeholder: info.presets.at(-1)?.name ?? label, value: cur?.name ?? "", maxlength: "60", autocomplete: "off", "aria-label": `${label} plan name`, "data-keep": `plan-${k}-name` });
       const price = moneyInput(cur?.price ?? null, `${label} plan price a month`);
       const pick = h("select", { "aria-label": `Pick your ${label} plan`, onchange: (e) => { const p = info.presets[Number(e.target.value)]; if (p) { name.value = p.name; price.querySelector("input").value = p.price ?? ""; } } },
         h("option", { value: "", text: "Pick a plan…" }), ...info.presets.map((p, i) => h("option", { value: String(i), text: `${p.name}${p.price !== null ? ` · ${money(p.price)}` : ""}` })));
-      return h("div", { class: "row plan-row" }, h("span", { class: "plan-l", text: label }), pick, name, price,
-        h("button", { class: "btn", type: "button", text: "Save", onclick: () => patchSettings({ plans: { [k]: { name: name.value, price: price.querySelector("input").value } } }, `${label} plan saved.`) }),
+      const since = monthSelect(cur?.since ?? null, `${label} plan since`, "since always");
+      const until = monthSelect(cur?.until ?? null, `${label} plan until`, "until now");
+      return h("div", { class: "row plan-row" }, h("span", { class: "plan-l", text: label }), pick, name, price, since, until,
+        h("button", { class: "btn", type: "button", text: "Save", onclick: () => patchSettings({ plans: { [k]: { name: name.value, price: price.querySelector("input").value, since: since.value, until: until.value } } }, `${label} plan saved.`) }),
         cur ? h("button", { class: "btn", type: "button", text: "Remove", onclick: () => patchSettings({ plans: { [k]: null } }, `${label} plan removed.`) }) : null);
     });
     const hidden = keys.filter((k) => !shown.includes(k));
     return h("div", { class: "setting" }, h("h3", { text: "Your subscriptions" }), ...rows,
       hidden.length ? h("button", { class: "more-toggle", type: "button", text: `▸ More subscriptions (${hidden.map((k) => subs[k].label).join(", ")})`, onclick: () => { S.showAllPlans = true; renderSettings(); } }) : null,
-      h("p", { text: "Savings then shows each plan's limits (the 5 hours and the week, where Leanfare can read them) and the tokens your Claude Code and Codex use. Leanfare reads only the token counts in those programs' log files on this computer, never the words." }),
+      h("p", { text: "Savings then shows each plan's limits (the 5 hours and the week, where Leanfare can read them) and the tokens your Claude Code and Codex use, in the months the plan covers. Leanfare reads only the token counts in those programs' log files on this computer, never the words; of other AI apps it reads only that they are here and when they were last opened." }),
       h("label", { class: "check" }, h("input", { type: "checkbox", checked: !!s.showValue, onchange: (e) => patchSettings({ showValue: e.target.checked }, e.target.checked ? "Savings also shows what your plan use would cost per use." : "Savings shows your plans in tokens and limits only.") }), "Also show what that use would cost per use, at API prices"),
       h("p", { text: "Leanfare only counts here. Anthropic does not let other apps use a Claude subscription login, so Auto never uses one." }));
   }

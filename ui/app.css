@@ -270,7 +270,12 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
 .pl-name { color: var(--muted); font-size: 12.5px; }
 .pl-tok { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
 .pl-tok .big { font-size: 18px; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.pl-more summary { font-size: 12px; color: var(--muted); cursor: pointer; }
+.pl-more summary, .pl-add summary { font-size: 12px; color: var(--muted); cursor: pointer; }
+.pl-add summary { color: var(--accent); font-weight: 600; }
+.pl-add .plan-row { margin-top: 6px; }
+.pl-add .plan-row input[type="text"] { min-width: 100px; }
+.pl-add select, .pl-add input { padding: 4px 8px; font-size: 12.5px; min-height: 30px; }
+.pl-head { flex-wrap: wrap; row-gap: 2px; }
 .pl-more[open] { display: grid; gap: 6px; }
 .pl-head { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
 .pl-head .grow { flex: 1; }

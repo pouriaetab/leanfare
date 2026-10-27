@@ -771,6 +771,59 @@ describe("Your plans", () => {
     expect(doc.querySelector("#plansCard").textContent).toContain("1.0Mtokens this month");
   }, 20000);
 
+  test("an app found on this computer shows beside Claude in its months, and its plan is added in place", async () => {
+    const { hooks, forgetFound } = require("../src/found") as typeof import("../src/found");
+    mkdirSync(join(process.env.HOME!, "Applications", "Perplexity.app"), { recursive: true });
+    const was = hooks.spotlight;
+    hooks.spotlight = () => ({ added: Date.parse("2026-03-02T10:00:00Z"), used: Date.parse("2026-10-20T09:00:00Z") });
+    forgetFound();
+    try {
+      const doc = await openApp();
+      await goSavings(doc);
+      const t = doc.querySelector("#plansCard").textContent;
+      expect(t).toContain("Perplexity app on this computer, in use since Mar 2026");
+      expect(t).toContain("Add your plan");
+      expect(t).not.toContain("Enter your plan"); // no log files here: its plan is picked in place
+      const tile = [...doc.querySelectorAll("#plansCard .pl")].find((x: any) => x.textContent.includes("Perplexity app"));
+      const pick = tile.querySelector("select[aria-label='Pick your Perplexity plan, here']");
+      pick.value = "0";
+      pick.dispatchEvent(new win.Event("change", { bubbles: true }));
+      expect(tile.querySelector("input[aria-label='Perplexity plan name, here']").value).toBe("Perplexity Pro");
+      expect(tile.querySelector("select[aria-label='Perplexity plan since, here']").value).toBe("2026-03"); // the month the app came
+      press(doc, "Save", ".pl-add");
+      await waitFor(() => toasts(doc).includes("Perplexity plan saved."));
+      expect((await ui(url, "/api/state")).json.settings.plans.perplexity).toEqual({ name: "Perplexity Pro", price: 20, since: "2026-03" });
+      await waitFor(() => !!doc.querySelector("#plansCard")?.textContent.includes("$20.00 a month"));
+      expect(doc.querySelector("#plansCard").textContent).toContain("since Mar 2026");
+      // a month before the plan and the app: no Perplexity tile at all
+      const m = doc.querySelector("#tab-savings select[aria-label='Month']");
+      m.value = "2026-02";
+      m.dispatchEvent(new win.Event("change", { bubbles: true }));
+      await waitFor(() => !!doc.querySelector("#plansCard .pl, #plansCard .pl-note") && !doc.querySelector("#plansCard").textContent.includes("Perplexity"));
+      expect(doc.querySelector("#plansCard").textContent).not.toContain("Perplexity");
+      expect(bad(doc)).toBe(false);
+    } finally {
+      hooks.spotlight = was;
+      rmSync(join(process.env.HOME!, "Applications"), { recursive: true, force: true });
+      forgetFound();
+    }
+  }, 30000);
+
+  test("Settings: a plan's months, kept and shown on Savings", async () => {
+    logs(line("1", "claude-sonnet-4-6", { input_tokens: 1_000_000, output_tokens: 0 }));
+    const doc = await openApp();
+    await goSettings(doc);
+    set(doc.querySelector("input[aria-label='Claude plan name']"), "Claude Max 20x");
+    set(doc.querySelector("input[aria-label='Claude plan price a month']"), "200");
+    doc.querySelector("select[aria-label='Claude plan since']").value = "2026-07";
+    press(doc, "Save", ".plan-row");
+    await waitFor(() => toasts(doc).includes("Claude plan saved."));
+    expect((await ui(url, "/api/state")).json.settings.plans.claude).toEqual({ name: "Claude Max 20x", price: 200, since: "2026-07" });
+    expect(doc.querySelector("select[aria-label='Claude plan since']").value).toBe("2026-07");
+    await goSavings(doc);
+    expect(doc.querySelector("#plansCard").textContent).toContain("$200.00 a month · since Jul 2026");
+  }, 20000);
+
   test("Settings: a plan with a name and no price is refused with the reason, and nothing is saved", async () => {
     const doc = await openApp();
     await goSettings(doc);
