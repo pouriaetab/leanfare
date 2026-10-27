@@ -23,11 +23,11 @@
 // No words are kept: the ledger has the split's model, tokens and cost, as for any answer.
 import { homedir } from "node:os";
 import { DEFAULT_MAX_OUT, TIER, runDelegate, taskFor, type Effort, type Kind } from "./delegate";
-import type { Model } from "./data";
+import { allModels, type Model } from "./data";
 import { chargeOf, plan as route, runChat, usableModels } from "./engine";
 import { planView, windowsNow } from "./plans";
 import { DELEGATE_LIMITS, readForDelegate, sizesForPlan, PLAN_FILES } from "./readfiles";
-import { guessTask, type Msg } from "./router";
+import { guessTask, pickModel, type Msg } from "./router";
 import { settings } from "./settings";
 import { UserError } from "./upstream";
 import { now, randomId, secondsText } from "./util";
@@ -59,12 +59,13 @@ export interface Part {
   size: Size;
   where: Where; // you: the app you work in; local, free, paid: Leanfare, on that kind of model
   model: { id: string; label: string } | null; // Leanfare's pick; null when it stays with you
+  use: { id: string; label: string; alias: string | null } | null; // for a part that stays with you: the model to pick for it in your app (alias: Claude Code's name for it)
   seconds: number | null; // about how long Leanfare's model takes; null when it stays with you
   tokens: number; // about how many it reads and writes
   cost: number | null; // on pay per use; 0 on a local or free model; null when it stays with you, or not known
   why: string;
 }
-type Split = Omit<Part, "where" | "model" | "seconds" | "tokens" | "cost" | "why">;
+type Split = Omit<Part, "where" | "model" | "use" | "seconds" | "tokens" | "cost" | "why">;
 export interface PlanResult {
   id: string; // kept here (the last 20), so it can run
   task: string;
@@ -115,6 +116,8 @@ export const SPLIT_SYSTEM = [
   "- size: how much it must read: none, small (a page), medium (a few files), large (a whole folder or a long document).",
   "- files: which of the given files or folders it reads, named exactly as given; none if none were given.",
   "- task: what to hand over for that part, written for a model that has not seen this conversation: the goal, what to look at, and the form of the answer.",
+  "- To understand code or documents, read them: search is for facts on the web (news, prices, documentation), not for reading a codebase. When what must be read is not among the files given and not in the person's own project (another project's code, say), the first part gets it (kind act: clone or download it), and the reading parts come after it.",
+  "- A task that changes code ends with a part that reviews the change (kind reason).",
 ].join("\n");
 
 const plainText = (s: unknown, max: number) => (typeof s === "string" ? s.replace(/[\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, max) : "");
@@ -239,9 +242,32 @@ function reading(part: { size: Size; files: string[]; task: string }, files: Pla
 
 // Where one part runs. Leanfare's estimate runs as a dry plan: the same pick Auto would make now,
 // among the models whose context holds the part, nothing sent and nothing reserved.
+// ---- the model for a part that stays with you ------------------------------------------------------
+// The app you work in offers its maker's models (Claude Code: Anthropic's; Codex: OpenAI's), all on your
+// plan, where a dearer model uses more of it. So the plan names one, by the rule Auto follows: the
+// cheapest of them rated well enough for the part's kind at its effort (high: within 15 points of the
+// best, medium: 40, low: 80). For Claude Code that is Opus for the hardest judgement, Sonnet for most
+// code, Haiku for light work, as the ratings and prices stand.
+const MAKERS: [RegExp, string[]][] = [[/claude/i, ["anthropic"]], [/codex|chatgpt|openai/i, ["openai"]], [/gemini/i, ["google"]], [/grok/i, ["xai"]],
+  [/cursor|windsurf|vs ?code|copilot/i, ["anthropic", "openai", "google"]]];
+export const makersOf = (manager: string): string[] => MAKERS.find(([re]) => re.test(manager))?.[1] ?? [];
+const CLAUDE_ALIAS = /^Claude (Opus|Sonnet|Haiku|Fable)\b/; // Claude Code's names for its models: opus, sonnet, haiku, fable
+export function modelInYourApp(part: { kind: PartKind; effort: Effort; task: string }, manager: string): Part["use"] {
+  const makers = makersOf(manager);
+  if (!makers.length) return null;
+  const pool = allModels().filter((m) => makers.includes(m.provider) && !m.local && !m.free);
+  const messages: Msg[] = [{ role: "user", content: part.task.slice(0, 4000) }];
+  const guess = part.kind === "code" ? { task: "coding", why: "it changes code", alt: "overall" }
+    : part.kind === "search" || part.kind === "act" ? { task: "overall", why: `a ${part.kind} part`, alt: null } : taskFor(DELEGATE_KIND[part.kind] ?? null, messages);
+  const p = pickModel(messages, pool, TIER[part.effort], () => null, undefined, guess);
+  if (!p) return null;
+  const alias = CLAUDE_ALIAS.exec(p.model.label)?.[1]?.toLowerCase() ?? null;
+  return { id: p.model.id, label: p.model.label, alias };
+}
+
 async function place(part: Split, files: PlanFile[], near: string | null, manager: string, signal: AbortSignal): Promise<Part> {
   const r = reading(part, files);
-  const stay = (why: string): Part => ({ ...part, where: "you", model: null, seconds: null, tokens: r.tokens + OUT_YOU, cost: null, why });
+  const stay = (why: string): Part => ({ ...part, where: "you", model: null, use: modelInYourApp(part, manager), seconds: null, tokens: r.tokens + OUT_YOU, cost: null, why });
   if (part.kind === "code") return stay(`it changes the project, which only ${manager} can do`);
   if (part.kind === "act") return stay(`it needs ${manager}'s own tools`);
   const big = (part.effort === "high" && (part.kind === "reason" || part.kind === "write"));
@@ -249,17 +275,18 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
   const need = Math.ceil((r.tokens * 4) / 3) + DEFAULT_MAX_OUT; // as delegate counts it: three characters a token, and the answer
   const fits = (m: Model) => m.context === null || m.context >= need;
   const only = part.kind === "search" ? (m: Model) => m.provider === "perplexity" && fits(m) : fits; // a search goes to a model that searches the web
-  if (part.kind === "search" && !usableModels((m) => m.provider === "perplexity").length) return stay("it searches the web, and no model you ticked in Leanfare does");
+  if (part.kind === "search" && !usableModels((m) => m.provider === "perplexity").length) return stay(`it searches the web, which ${manager === "you" ? "your app" : manager} can do; no model you ticked in Leanfare does (tick Perplexity Sonar to send searches out)`);
   const messages: Msg[] = [{ role: "user", content: part.task }];
   const kind = DELEGATE_KIND[part.kind] ?? null;
   try {
     const p = await route({ source: "chat", asked: `auto-${TIER[part.effort]}`, messages, tokens: r.tokens, maxOut: null, signal, dry: true, effort: part.effort,
       guess: part.kind === "search" ? { task: "overall", why: "a web search", alt: null } : taskFor(kind, messages), only, onlyWhy: `none of the models you ticked can take this much text (about ${tokText(need)} tokens with the answer)`, ledgerSource: "delegate" });
     const where = whereOf(p.model, p.estimate);
-    const some = r.taken < r.named ? `; Leanfare hands over ${r.taken} of its ${r.named} files (one hand off takes at most ${DELEGATE_LIMITS.count} files, ${DELEGATE_LIMITS.total / 1048576} MB)` : "";
+    const some = r.taken < r.named ? `; Leanfare hands over ${r.taken} of its ${r.named} files (one hand off takes at most ${DELEGATE_LIMITS.count} files, ${DELEGATE_LIMITS.total / 1048576} MB)`
+      : part.kind === "read" && !r.named ? "; no files named, so it works from what the model knows: name the files or folder it reads" : "";
     const why = (near && big ? `your plan is near its limit (${near}), so this goes out too` : where === "local" ? "reading and drafting go out: on this computer, $0"
       : where === "free" ? "reading and drafting go out: a free model" : `the cheapest model rated well enough at ${part.effort} effort`) + some;
-    return { ...part, where, model: { id: p.model.id, label: p.model.label }, seconds: p.seconds, tokens: r.tokens + OUT_LEANFARE, cost: p.estimate, why };
+    return { ...part, where, model: { id: p.model.id, label: p.model.label }, use: null, seconds: p.seconds, tokens: r.tokens + OUT_LEANFARE, cost: p.estimate, why };
   } catch (e: any) {
     if (e?.status === 499) throw e;
     return stay(e instanceof UserError ? `Leanfare has no model for it now (${e.message.replace(/\.$/, "").slice(0, 160)})` : "Leanfare has no model for it now");
@@ -314,7 +341,7 @@ export function timeLine(t: { seconds: number | null; after: number | null }): s
 export function tableOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
   const rows = r.parts.map((p) => [
     String(p.n), p.title, `${LABEL_KIND[p.kind]}, ${p.effort}`, p.where === "you" ? r.manager === "you" ? "you" : `you (${r.manager})` : RUNS[p.where],
-    p.model?.label ?? "your model", p.seconds === null ? "" : secondsText(p.seconds).replace(/^about /, "~"),
+    p.model?.label ?? p.use?.label ?? "your model", p.seconds === null ? "" : secondsText(p.seconds).replace(/^about /, "~"),
     p.where === "you" ? `~${tokText(p.tokens)} of your plan` : `~${tokText(p.tokens)} kept`, p.where === "you" ? "in your plan" : usd(p.cost),
     p.needs.length ? `after ${p.needs.join(", ")}` : "now",
   ].map(cell).join(" | "));
@@ -324,8 +351,17 @@ export function tableOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
     "|---|---|---|---|---|---|---|---|---|",
     ...rows.map((x) => `| ${x} |`),
     "",
-    `${t.out} of ${t.parts} parts go to Leanfare, keeping about ${tokText(t.kept)} tokens out of your plan${t.used ? `; about ${tokText(t.used)} stay in it` : ""}. ${timeLine(t)}Pay per use: ${usd(t.cost)}.`,
+    `${t.out} of ${t.parts} parts go to Leanfare, keeping about ${tokText(t.kept)} tokens out of your plan${t.used ? `; about ${tokText(t.used)} stay in it` : ""}. ${timeLine(t)}Pay per use: ${usd(t.cost)}.${t.out ? "" : ` ${nothingOut(r.parts)}`}`,
   ].join("\n");
+}
+
+// When every part stays with the person: what would send some out.
+export function nothingOut(parts: Pick<Part, "kind" | "where" | "files">[]): string {
+  const hints = [
+    parts.some((p) => p.kind === "search" && p.where === "you") ? "tick Perplexity Sonar in Leanfare and the searches go out" : "",
+    parts.every((p) => !p.files.length) ? "name the files or folder it is about and the reading goes out" : "",
+  ].filter(Boolean);
+  return `Nothing goes to Leanfare: ${hints.length ? hints.join("; ") : "every part changes the project or needs the hardest judgement"}.`;
 }
 
 function nextOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
@@ -339,7 +375,12 @@ function nextOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
   const later = out.filter((p) => p.needs.length && !yoursFirst.has(p.n));
   if (later.length) s.push(`Then ${list(later.map((p) => p.n))}, each once the parts it needs are back, with their answers in its task.`);
   if (out.some((p) => p.kind === "search")) s.push("A search part goes to ask with the model in the table.");
-  if (mine.length) s.push(`Do ${list(mine.map((p) => p.n))} yourself.`);
+  if (mine.length) {
+    const on = mine.map((p) => `part ${p.n} on ${p.use?.label ?? "your strongest model"}`);
+    // Claude Code runs a part on another model with a subagent (its Agent tool takes model: opus, sonnet, haiku or fable).
+    const how = mine.some((p) => p.use?.alias) && /claude/i.test(r.manager) ? " For a part on another model than the one you run on, use a subagent with that model (model: opus, sonnet or haiku)." : "";
+    s.push(`Do these yourself: ${on.join(", ")}.${how}`);
+  }
   if (yoursFirst.size) s.push(`${list([...yoursFirst]).replace(/^p/, "P")} wait${yoursFirst.size === 1 ? "s" : ""} for yours: once yours are done, run ${yoursFirst.size === 1 ? "it" : "them"} with delegate, with the answers ${yoursFirst.size === 1 ? "it needs" : "they need"} in the task (plan_run does not run ${yoursFirst.size === 1 ? "it" : "them"}).`);
   return s.join(" ");
 }

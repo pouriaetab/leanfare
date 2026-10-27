@@ -62,6 +62,12 @@ export const PLAN_APP_HTML = `<!doctype html>
   const RUNS = { you: "you", local: "Leanfare, this computer", free: "Leanfare, free", paid: "Leanfare, pay per use" };
   const NOW = { waiting: "waiting", running: "running…", done: "done", failed: "failed", stopped: "stopped", yours: "yours", after_yours: "after yours", blocked: "waits", asks: "waits for a yes" };
   let plan = null, run = null, timer = null;
+  // When every part stays with you: what would send some out (as the planner says it).
+  const nothingOut = (parts) => {
+    const hints = [parts.some((p) => p.kind === "search" && p.runs_on === "you") ? "tick Perplexity Sonar in Leanfare and the searches go out" : "",
+      parts.every((p) => !(p.files || []).length) ? "name the files or folder it is about and the reading goes out" : ""].filter(Boolean);
+    return "Nothing goes to Leanfare: " + (hints.length ? hints.join("; ") : "every part changes the project or needs the hardest judgement") + ".";
+  };
 
   function draw() {
     const app = $("#app");
@@ -73,7 +79,7 @@ export const PLAN_APP_HTML = `<!doctype html>
       el("td", { class: "n", text: p.n }),
       el("td", {}, el("b", { text: p.title }), el("div", { class: "why", text: p.kind + ", " + p.effort + (p.needs.length ? " · after " + p.needs.join(", ") : "") })),
       el("td", { "data-l": "Runs on", text: RUNS[p.runs_on] || p.runs_on }),
-      el("td", { "data-l": "Model", text: p.model_label || (p.runs_on === "you" ? "your model" : p.model || "") }),
+      el("td", { "data-l": "Model", text: p.model_label || (p.runs_on === "you" ? (p.your_model && p.your_model.label) || "your model" : p.model || "") }),
       el("td", { class: "t", "data-l": "Time", text: secs(p.seconds) }),
       el("td", { "data-l": "Tokens", text: "~" + tok(p.tokens) + (p.runs_on === "you" ? " of your plan" : " kept") }),
       el("td", { class: "c", "data-l": "Cost", text: p.runs_on === "you" ? "in your plan" : usd(p.cost_usd) }),
@@ -91,7 +97,7 @@ export const PLAN_APP_HTML = `<!doctype html>
     const kids = [
       el("h1", {}, "Leanfare's plan", el("small", { text: mine + " of " + plan.parts.length + " parts to Leanfare" })),
       el("table", {}, el("thead", {}, el("tr", {}, ...["#", "Part", "Runs on", "Model", "Time", "Tokens", "Cost", ...(run ? ["Now"] : [])].map((x) => el("th", { text: x })))), el("tbody", {}, ...rows)),
-      el("p", { class: "sum", text: "About " + tok(t.kept) + " tokens kept out of your plan" + (t.used ? ", about " + tok(t.used) + " stay in it" : "") + ". Pay per use: " + usd(t.cost) + "." }),
+      el("p", { class: "sum", text: "About " + tok(t.kept) + " tokens kept out of your plan" + (t.used ? ", about " + tok(t.used) + " stay in it" : "") + ". Pay per use: " + usd(t.cost) + "." + (mine ? "" : " " + nothingOut(plan.parts)) }),
       el("div", { class: "row" },
         now && (left || going) ? el("button", { class: "go", id: "run", disabled: going ? "" : null, onclick: start, text: going ? "Running…" : (run ? "Run the rest" : "Run Leanfare's parts") + (paidParts.length ? (unknown ? " (paid parts, cost not known)" : " (about " + usd(paid) + " paid)") : "") }) : null,
         going ? el("button", { id: "stop", onclick: stop, text: "Stop" }) : null,
