@@ -21,6 +21,7 @@ import * as local from "./local";
 import { plansBrief, plansView } from "./plans";
 import { meterViews, setStatusline } from "./meter";
 import { checkDelegate, runDelegate } from "./delegate";
+import { checkPlan, makePlan } from "./planner";
 import { retirementNotices } from "./retire";
 import { savings } from "./savings";
 import { checkKey, effortLevels, UserError } from "./upstream";
@@ -531,6 +532,12 @@ async function api(req: Request, url: URL): Promise<Response> {
     if (typeof v === "string") return fail(400, v);
     return json(await runDelegate(v, req.signal));
   }
+  // The plan (planner.ts): a task split into parts, each with where it runs and on which model.
+  if (p === "/api/plan" && m === "POST") {
+    const v = checkPlan(await readBody(req));
+    if (typeof v === "string") return fail(400, v);
+    return json(await makePlan({ ...v, signal: req.signal }));
+  }
   // The delegate trial (trial.ts): its estimate and last report, start, stop.
   if (p === "/api/trial" && m === "GET") return json(await trialView(req.signal));
   if (p === "/api/trial/start" && m === "POST") { startTrial(); return json(await trialView(req.signal, false)); }
@@ -724,7 +731,7 @@ export async function handle(req: Request, server: { timeout(r: Request, s: numb
     if (url.pathname !== "/api/control/stop" && req.headers.get("x-leanfare") !== "1") return fail(403, "Missing the x-leanfare header.");
     if (url.pathname !== "/api/unlock" && !url.pathname.startsWith("/api/control/") && !pageAllowed(req, controlToken)) return json({ error: "Leanfare is locked. Paste its access key to open it.", locked: true }, 401);
     // Requests that can wait a long time on providers or other programs: no idle cut-off.
-    if (["/api/chat", "/api/delegate", "/api/keys", "/api/refresh", "/api/import", "/api/keys/import", "/api/keys/recognize", "/api/keys/found", "/api/providers/custom", "/api/providers/registry", "/api/apps", "/api/trial/stop"].includes(url.pathname)) server?.timeout(req, 0);
+    if (["/api/chat", "/api/delegate", "/api/plan", "/api/keys", "/api/refresh", "/api/import", "/api/keys/import", "/api/keys/recognize", "/api/keys/found", "/api/providers/custom", "/api/providers/registry", "/api/apps", "/api/trial/stop"].includes(url.pathname)) server?.timeout(req, 0);
     try { return await api(req, url); }
     catch (e: any) { return fail(e instanceof UserError ? e.status : 500, e instanceof UserError ? e.message : `Leanfare hit an unexpected problem: ${String(e?.message ?? e)}`); }
   }

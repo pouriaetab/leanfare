@@ -12,15 +12,32 @@ import { VERSION } from "./config";
 import { call } from "./client";
 import { secondsText } from "./util";
 import { reportText } from "./trialtext";
-import { readForDelegate } from "./readfiles";
+import { readForDelegate, sizesForPlan } from "./readfiles";
 
 const MODERN = ["2026-07-28"];
 const LEGACY = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const SERVER = { name: "leanfare", title: "Leanfare", version: VERSION };
 const META = { "io.modelcontextprotocol/serverInfo": SERVER };
-const INSTRUCTIONS = "Leanfare runs every top AI model on this computer with the user's own keys, shows what each answer costs, and keeps a monthly budget. Use delegate to hand work that reads a lot (big files, logs, many documents) to a cheaper model: Leanfare reads the files itself, so their text stays out of your context, and returns a short answer with a receipt. Use ask to hand a question to another model (Auto picks the cheapest one that rates well for the task); spend to see what was spent and saved; models to see which models and prices are available; estimate to price a prompt before sending it; trial to measure how well delegate answers on the user's models before relying on it.";
+const INSTRUCTIONS = "Leanfare runs every top AI model on this computer with the user's own keys, shows what each answer costs, and keeps a monthly budget. At the start of a task with several parts, call plan: it splits the task and says, in a short table, which parts to hand to Leanfare and on which model, and which to do yourself. Use delegate to hand work that reads a lot (big files, logs, many documents) to a cheaper model: Leanfare reads the files itself, so their text stays out of your context, and returns a short answer with a receipt. Use ask to hand a question to another model (Auto picks the cheapest one that rates well for the task); spend to see what was spent and saved; models to see which models and prices are available; estimate to price a prompt before sending it; trial to measure how well delegate answers on the user's models before relying on it.";
 
 const TOOLS = [
+  {
+    name: "plan",
+    title: "Split a task across models",
+    description: "Before a task with several parts (a feature, a fix across files, a refactor, research across many files, reverse engineering a project), ask Leanfare how to split it. It answers with a short table: each part, its kind, where it runs (you, or Leanfare on a local, free or pay per use model), the model, about how long, the tokens it keeps out of the user's plan, and the cost; then what to do next. Run the parts it gives to Leanfare with delegate, several in the same turn when they do not wait for each other, and do the parts it leaves to you yourself. Name the files or folders the task is about in files: here Leanfare only measures them, it reads them when delegate runs a part. A model the user ticked does the split (a few cents or less, $0 on free models); split rules makes it by rules, with no model.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task: { type: "string", description: "The whole task, as the user gave it, with what you already know about it." },
+        files: { type: "array", items: { type: "string" }, maxItems: 200, description: "The files or folders the task is about: full paths, ~/ paths, or paths relative to folder. Only their names and sizes are used here." },
+        folder: { type: "string", description: "The folder relative paths start from. By default, the folder the MCP client started Leanfare in (in Claude Code, the project)." },
+        split: { type: "string", enum: ["auto", "rules"], description: "auto (the default): a model the user ticked splits it. rules: Leanfare splits it by rules, with no model call." },
+      },
+      required: ["task"],
+      additionalProperties: false,
+    },
+    annotations: { title: "Split a task across models", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
   {
     name: "ask",
     title: "Ask a model",
@@ -104,7 +121,29 @@ const usd = (v: number | null | undefined) => (v === null || v === undefined ? "
 const text = (t: string, structured?: unknown) => ({ content: [{ type: "text", text: t }], ...(structured !== undefined ? { structuredContent: structured } : {}) });
 const failure = (t: string) => ({ content: [{ type: "text", text: t }], isError: true });
 
+// The app on the other side, by the name it gives (initialize's clientInfo), for the plan's table.
+let client: string | null = null;
+const CLIENTS: [RegExp, string][] = [[/claude[- _]?code/i, "Claude Code"], [/^claude/i, "Claude"], [/codex/i, "Codex"], [/cursor/i, "Cursor"], [/gemini/i, "Gemini CLI"],
+  [/windsurf|codeium/i, "Windsurf"], [/grok/i, "Grok"], [/perplexity/i, "Perplexity"], [/visual studio code|vs ?code|copilot/i, "VS Code"], [/lm ?studio/i, "LM Studio"]];
+export function clientLabel(name: unknown): string | null {
+  if (typeof name !== "string" || !name.trim()) return null;
+  const hit = CLIENTS.find(([re]) => re.test(name));
+  return hit ? hit[1] : name.replace(/[^\w .-]/g, "").trim().slice(0, 40) || null;
+}
+export const setClient = (name: unknown) => { client = clientLabel(name); };
+
 async function runTool(name: string, args: any, signal: AbortSignal): Promise<any> {
+  if (name === "plan") {
+    if (typeof args?.task !== "string" || !args.task.trim()) return failure("plan needs a task.");
+    const files = sizesForPlan(args.files, args.folder);
+    if (typeof files === "string") return failure(files);
+    const { j } = await call("/api/plan", { method: "POST", json: { task: args.task, files, manager: client, split: args.split === "rules" ? "rules" : "auto" } }, signal);
+    const note = j.split?.note ? `\n\n(${j.split.note})` : j.split?.model ? `\n\n(Split by ${j.split.model.label}${typeof j.split.cost === "number" ? `, ${usd(j.split.cost)}` : ""}.)` : "";
+    return text(`${j.table}\n\n${j.next}${note}`, {
+      parts: j.parts.map((p: any) => ({ n: p.n, title: p.title, kind: p.kind, effort: p.effort, needs: p.needs, runs_on: p.where, model: p.model?.id ?? null, seconds: p.seconds, tokens: p.tokens, cost_usd: p.cost, files: p.files, task: p.task })),
+      totals: j.totals, split: j.split, limits: j.limits,
+    });
+  }
   if (name === "ask") {
     if (typeof args?.prompt !== "string" || !args.prompt.trim()) return failure("ask needs a prompt.");
     const messages = [...(typeof args.system === "string" && args.system.trim() ? [{ role: "system", content: args.system }] : []), { role: "user", content: args.prompt }];
@@ -221,7 +260,9 @@ export async function handleMessage(msg: any, send = { reply, error }): Promise<
   }
   const done = (result: any) => send.reply(id, modern ? { resultType: "complete", ...result, _meta: META } : result);
 
+  if (modern && meta["io.modelcontextprotocol/clientInfo"]) setClient(meta["io.modelcontextprotocol/clientInfo"]?.name);
   if (method === "initialize") {
+    setClient(params?.clientInfo?.name);
     const asked = params?.protocolVersion;
     return send.reply(id, { protocolVersion: LEGACY.includes(asked) ? asked : LEGACY[0], capabilities: { tools: { listChanged: false } }, serverInfo: SERVER, instructions: INSTRUCTIONS });
   }
