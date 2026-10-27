@@ -98,7 +98,7 @@ const TOOLS = [
       required: ["verdict"],
       additionalProperties: false,
     },
-    annotations: { title: "Grade an answer", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: { title: "Grade an answer", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
     name: "ask",
