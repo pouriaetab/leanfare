@@ -19,22 +19,27 @@
 //    Lines with type "assistant" carry message.model and message.usage.
 //    The same answer can appear on several lines and in several files (a resumed
 //    session copies it), so it is counted once per message id plus request id.
-//  - Codex: $CODEX_HOME/sessions (default ~/.codex/sessions), rollout-*.jsonl.
+//  - Codex: $CODEX_HOME/sessions (default ~/.codex/sessions) and archived_sessions,
+//    rollout-*.jsonl, and rollout-*.jsonl.zst (Codex compresses sessions older than a week).
 //    "token_count" events carry running totals for the session; what one event adds is
 //    the difference from the one before. The model comes from the last "turn_context".
+//
+// The other subscriptions (Perplexity, Google AI, GitHub Copilot, Cursor) keep no usage on the
+// computer: Leanfare shows their limits as their companies publish them (subscriptions.ts).
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { costOf, fromAnthropicUsage, type Usage } from "./cost";
 import { getModel } from "./data";
 import { PLAN_KEYS, settings, type PlanProvider } from "./settings";
+import { SUBSCRIPTIONS, chatgptPlan, presetLimits } from "./subscriptions";
 import { localMonth, now } from "./util";
 
-export const PLAN_PROVIDERS: Record<PlanProvider, { label: string; logs: string; example: string }> = {
-  claude: { label: "Claude", logs: "Claude Code", example: "Claude Max" },
-  chatgpt: { label: "ChatGPT", logs: "Codex", example: "ChatGPT Plus" },
-};
+export const PLAN_PROVIDERS: Record<PlanProvider, { label: string; logs: string | null; example: string }> = Object.fromEntries(
+  PLAN_KEYS.map((k) => [k, { label: SUBSCRIPTIONS[k].label, logs: SUBSCRIPTIONS[k].logs, example: SUBSCRIPTIONS[k].presets.at(-1)?.name ?? SUBSCRIPTIONS[k].label }]),
+) as Record<PlanProvider, { label: string; logs: string | null; example: string }>;
 export const planProviders = PLAN_KEYS;
+const LOGGED: PlanProvider[] = ["claude", "chatgpt"]; // the plans whose use is in log files on this computer
 
 // ---- where the logs are ----------------------------------------------------------------------------
 
@@ -45,9 +50,11 @@ export function claudeDirs(): string[] {
 }
 export function codexDirs(): string[] {
   const root = process.env.CODEX_HOME?.trim() || join(homedir(), ".codex");
-  const d = join(root, "sessions");
-  return existsSync(d) ? [d] : [];
+  return [join(root, "sessions"), join(root, "archived_sessions")].filter((d) => existsSync(d));
 }
+// Codex's session files: plain, or compressed once they are a week old.
+export const isCodexLog = (n: string) => /(^|[\\/])rollout-[^\\/]*\.jsonl(\.zst)?$/.test(n);
+const logMatch = (provider: PlanProvider) => (provider === "claude" ? (n: string) => n.endsWith(".jsonl") : isCodexLog);
 
 interface LogFile { path: string; mtime: number; size: number }
 function listFiles(dirs: string[], match: (name: string) => boolean, notBefore: number): { files: LogFile[]; folders: number } {
@@ -76,6 +83,11 @@ const TS = 1, MODEL = 2;
 async function* linesOf(path: string): AsyncGenerator<string> {
   const dec = new TextDecoder();
   let buf = "";
+  if (path.endsWith(".zst")) { // a compressed session: small enough to open whole
+    const text = dec.decode(Bun.zstdDecompressSync(new Uint8Array(await Bun.file(path).arrayBuffer())));
+    for (const line of text.split("\n")) if (line) yield line;
+    return;
+  }
   for await (const chunk of Bun.file(path).stream()) {
     buf += dec.decode(chunk, { stream: true });
     let i: number;
@@ -111,10 +123,13 @@ const totalsOf = (t: any): Totals | null => (t && typeof t === "object" ? { inpu
 // nothing like it to other apps, so only the ChatGPT side shows limits, as of the last message in the logs.
 export interface Win { used: number; minutes: number | null; resets: number | null } // used: percent; resets: epoch seconds
 export interface Limits { at: number; plan: string | null; windows: Win[] }
-const winOf = (w: any): Win | null => (w && typeof w === "object" && typeof w.used_percent === "number" && Number.isFinite(w.used_percent) ? { used: Math.max(0, w.used_percent), minutes: num(w.window_minutes) || null, resets: num(w.resets_at) || null } : null);
+// resets_at (epoch seconds) since Codex 0.50; before that, resets_in_seconds from the event's time.
+const winOf = (w: any, at: number): Win | null => (w && typeof w === "object" && typeof w.used_percent === "number" && Number.isFinite(w.used_percent)
+  ? { used: Math.max(0, w.used_percent), minutes: num(w.window_minutes) || null, resets: num(w.resets_at) || (num(w.resets_in_seconds) ? Math.round(at / 1000 + num(w.resets_in_seconds)) : null) }
+  : null);
 export function limitsOf(rl: any, at: number): Limits | null {
   if (!rl || typeof rl !== "object") return null;
-  const windows = [winOf(rl.primary), winOf(rl.secondary)].filter((w): w is Win => !!w);
+  const windows = [winOf(rl.primary, at), winOf(rl.secondary, at)].filter((w): w is Win => !!w);
   return windows.length ? { at, plan: typeof rl.plan_type === "string" && rl.plan_type ? rl.plan_type : null, windows } : null;
 }
 
@@ -192,7 +207,7 @@ async function entriesOf(f: LogFile, provider: PlanProvider): Promise<Read> {
 export interface MeterEntry { ts: number; model: string; u: Usage; file: string; project: string | null }
 export async function recentEntries(provider: PlanProvider, since: number): Promise<{ entries: MeterEntry[]; snaps: Limits[]; found: boolean }> {
   const dirs = provider === "claude" ? claudeDirs() : codexDirs();
-  const { files } = listFiles(dirs, provider === "claude" ? (n) => n.endsWith(".jsonl") : (n) => /(^|\/)rollout-[^/]*\.jsonl$/.test(n), since - 36 * 3600_000);
+  const { files } = listFiles(dirs, logMatch(provider), since - 36 * 3600_000);
   const merged = new Map<string, MeterEntry>();
   const loose: MeterEntry[] = [];
   const snaps: Limits[] = [];
@@ -219,7 +234,10 @@ export interface ModelRow {
   input: number; cached: number; output: number; tokens: number; value: number | null;
 }
 export interface PlanView {
-  provider: PlanProvider; label: string; logs: string;
+  provider: PlanProvider; label: string; logs: string | null; // logs: the program whose log files hold its use; null: none on this computer
+  usageUrl: string | null; // the company's own page for the plan's use
+  limitsText: string | null; // the kinds of limits the plan has (subscriptions.ts), for the plan you entered
+  recognized: { name: string; price: number | null; from: string } | null; // ChatGPT: the plan Codex says you are on
   found: boolean; files: number; // log folders found, and files read for this month
   plan: { name: string; price: number } | null;
   input: number; cached: number; output: number; tokens: number;
@@ -257,7 +275,7 @@ const viewCache = new Map<string, { at: number; view: PlanView }>();
 // a plan saved a second ago shows at once, without reading the files again.
 function withPlan(view: PlanView): PlanView {
   const plan = settings().plans?.[view.provider] ?? null;
-  return { ...view, plan, ratio: plan && plan.price > 0 ? view.value / plan.price : null };
+  return { ...view, plan, ratio: plan && plan.price > 0 ? view.value / plan.price : null, limitsText: plan ? presetLimits(view.provider, plan.name) : null };
 }
 const FRESH_MS = 30_000;
 
@@ -274,12 +292,22 @@ export function planView(provider: PlanProvider, month = localMonth(), force = f
   return p;
 }
 
+// A plan with no log files on this computer: its price and its kinds of limits only.
+function unlogged(provider: PlanProvider): PlanView {
+  const plan = settings().plans?.[provider] ?? null;
+  return {
+    provider, label: PLAN_PROVIDERS[provider].label, logs: null, usageUrl: SUBSCRIPTIONS[provider].usageUrl, limitsText: null, recognized: null,
+    found: false, files: 0, plan, input: 0, cached: 0, output: 0, tokens: 0, value: 0, unpricedTokens: 0, ratio: null, models: [], limits: null, at: new Date().toISOString(),
+  };
+}
+
 async function readMonth(provider: PlanProvider, month: string): Promise<PlanView> {
+  if (!LOGGED.includes(provider)) return unlogged(provider);
   const [y, mo] = month.split("-").map(Number);
   const monthStart = new Date(y, mo - 1, 1).getTime();
   const notBefore = monthStart - 36 * 3600_000; // a file not touched since before the month began holds nothing from it
   const dirs = provider === "claude" ? claudeDirs() : codexDirs();
-  const { files } = listFiles(dirs, provider === "claude" ? (n) => n.endsWith(".jsonl") : (n) => /(^|\/)rollout-[^/]*\.jsonl$/.test(n), notBefore);
+  const { files } = listFiles(dirs, logMatch(provider), notBefore);
 
   // One answer once: the same message in two files (a resumed session) or on two lines (one per block) counts one time, at its largest counts.
   const merged = new Map<string, Entry>();
@@ -319,6 +347,8 @@ async function readMonth(provider: PlanProvider, month: string): Promise<PlanVie
   const sum = (k: "input" | "cached" | "output") => models.reduce((n, m) => n + m[k], 0);
   const view: PlanView = {
     provider, label: PLAN_PROVIDERS[provider].label, logs: PLAN_PROVIDERS[provider].logs,
+    usageUrl: SUBSCRIPTIONS[provider].usageUrl, limitsText: null,
+    recognized: provider === "chatgpt" ? chatgptPlan(newest?.plan ?? null) : null,
     found: dirs.length > 0, files: files.length, plan,
     input: sum("input"), cached: sum("cached"), output: sum("output"), tokens: models.reduce((n, m) => n + m.tokens, 0),
     value, unpricedTokens: unpriced,
@@ -329,12 +359,14 @@ async function readMonth(provider: PlanProvider, month: string): Promise<PlanVie
   return view;
 }
 
+// Claude and ChatGPT always (their logs may be here); the others when you entered a plan for them.
 export async function plansView(month = localMonth(), force = false) {
-  const views = await Promise.all(planProviders.map((p) => planView(p, month, force)));
+  const wanted = planProviders.filter((p) => LOGGED.includes(p) || settings().plans?.[p]);
+  const views = await Promise.all(wanted.map((p) => planView(p, month, force)));
   return { month, providers: views, note: NOTE };
 }
 
-export const NOTE = "An estimate from the usage numbers in the log files on this computer, at the providers' list prices for the same tokens. Your plan has a flat price and its own limits. Codex writes how much of its limits each message had used, so ChatGPT shows that, as of its last message; Claude's limits show once Leanfare is in Claude Code's status line (the button above), which hands it the two percentages. Work done on other computers or in the apps' own chat windows is not in these logs.";
+export const NOTE = "Subscriptions have a fixed price and limits; Leanfare shows the limits it can read, and what the same use would cost on pay per use: an estimate at the providers' list prices, from the usage numbers in the log files on this computer. Codex writes how much of its limits each message had used, so ChatGPT shows that, as of its last message; Claude's limits show once Leanfare is in Claude Code's status line (the button above), which hands it the two percentages. Work done on other computers or in the apps' own chat windows is not in these logs.";
 
 // What the Mac menu shows, from what was last worked out. Asking never waits for the log files:
 // when the numbers are older than ten minutes (or missing) a new reading starts in the background.
