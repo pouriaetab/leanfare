@@ -96,6 +96,9 @@ CREATE TABLE IF NOT EXISTS delegations(
 CREATE INDEX IF NOT EXISTS delegations_month ON delegations(month);
 -- The delegate trial's runs (trial.ts): grades, models, times and costs of questions about Leanfare's own made-up files.
 CREATE TABLE IF NOT EXISTS trials(id INTEGER PRIMARY KEY, started TEXT NOT NULL, finished TEXT, status TEXT NOT NULL, corpus TEXT NOT NULL, version TEXT NOT NULL, total INTEGER NOT NULL, rows TEXT NOT NULL, note TEXT);
+-- The manager's grades (grades.ts): which model, the kind of part, how good its answer was. No words.
+CREATE TABLE IF NOT EXISTS grades(id INTEGER PRIMARY KEY, ts TEXT NOT NULL, model TEXT NOT NULL, kind TEXT NOT NULL, effort TEXT, verdict TEXT NOT NULL, source TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS grades_model_kind ON grades(model, kind);
 `;
 
 // Columns added after 0.1: an older file gets them on its first start.
