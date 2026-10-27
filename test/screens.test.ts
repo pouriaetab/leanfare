@@ -1077,6 +1077,28 @@ describe("Use Leanfare in your apps (Settings)", () => {
     expect(doc.querySelector(".apps").textContent).toContain("more not found on this computer");
     expect(bad(doc)).toBe(false);
   }, 20000);
+
+  test("once Leanfare's tools are in Codex, Plan by itself is one press: a line in AGENTS.md, and the press undoes it", async () => {
+    const codex = process.env.CODEX_HOME!;
+    const { rmSync } = require("node:fs") as typeof import("node:fs");
+    rmSync(codex, { recursive: true, force: true });
+    mkdirSync(codex, { recursive: true });
+    expect((await ui(url, "/api/apps", { id: "codex", on: true })).status).toBe(200);
+    const doc = await openApp();
+    doc.querySelector('.tabs button[data-tab="settings"]').click();
+    await waitFor(() => !!doc.querySelector(".apps .auto-row"));
+    const row = () => [...doc.querySelectorAll(".apps .app-row")].find((r: any) => r.textContent.includes("Codex CLI")) as any;
+    expect(row().querySelector(".auto-row").textContent).toContain("Plan by itself: a line in AGENTS.md");
+    [...row().querySelectorAll(".auto-row button")].find((b: any) => b.textContent === "Turn on").click();
+    await waitFor(() => toasts(doc).includes("Codex CLI now plans by itself with Leanfare."));
+    expect(readFileSync(join(codex, "AGENTS.md"), "utf8")).toContain("call Leanfare's plan tool first");
+    await waitFor(() => !!row()?.querySelector(".auto-row button") && row().querySelector(".auto-row button").textContent === "Turn off");
+    row().querySelector(".auto-row button").click();
+    await waitFor(() => toasts(doc).includes("no longer plans with Leanfare by itself"));
+    expect(readFileSync(join(codex, "AGENTS.md"), "utf8")).toBe("");
+    await ui(url, "/api/apps", { id: "codex", on: false });
+    expect(bad(doc)).toBe(false);
+  }, 30000);
 });
 
 describe("Subscriptions on Savings and in Settings", () => {
