@@ -5,12 +5,13 @@ Every top AI model in one app on your own computer, and on top of the AI apps yo
 - **Inside the apps you already use.** One press adds Leanfare's tools to Claude Desktop, Claude Code, Cursor, Codex, Gemini CLI, Windsurf, VS Code and LM Studio. You keep using them as usual; Leanfare works underneath.
 - **Set up without typing.** Paste any API key and Leanfare knows whose it is. Keys in your environment (`OPENAI_API_KEY` and the like) are used as they are, and Find my keys offers the ones in other AI tools' files (llm, aider, Gemini CLI, Codex CLI, OpenCode, Continue), each used only after you tick it. Model apps running on your computer (Ollama, LM Studio, Jan, llama.cpp, vLLM, LocalAI, KoboldCpp, GPT4All, Lemonade) are found on their own.
 - **Every top model, your own keys.** OpenAI, Anthropic, Google Gemini, DeepSeek, xAI, Mistral, Perplexity, Groq, Cerebras, Together AI, Fireworks, OpenRouter (one key, many makers), local models, and any other provider that speaks OpenAI's format. No account, no markup, no middleman: requests go from your computer to the provider.
-- **Subscriptions apart from pay per use.** Your Claude, ChatGPT, Perplexity, Google AI, Copilot and Cursor plans with their 5 hour, weekly or monthly limits, and what is left of them where your computer keeps the numbers; what your keys and credits spent, on its own.
+- **Subscriptions apart from pay per use.** Your Claude, ChatGPT, Perplexity, Google AI, Grok, Copilot and Cursor plans in tokens and limits: what you used, and what is left of the 5 hour, weekly or monthly limits where your computer keeps the numbers. The AI apps on this computer are found, and each plan counts only in its own months. What your keys and credits spent is shown on its own.
 - **The cost and the time of every answer.** An estimate before you send, with its time, and the exact cost after. At the same quality, choose the cheapest, the cheapest within a time, or the fastest.
 - **Automatic model choice.** Leanfare guesses the task (coding, math, writing, long documents and more) and picks the cheapest model you ticked that rates well for it. Every answer says which model wrote it and why.
 - **Claude hands work to cheaper models.** Through the `delegate` tool, Claude passes reading heavy work to the cheapest model that is good enough, and a stronger model checks a sample of the answers. **The trial** measures how well that goes on your own models before you rely on it.
+- **Plan a task across models.** Write what you want done, and Leanfare splits it into parts with the model for each: what changes your project or needs the hardest judgement stays with the app you work in, on your plan; reading and drafting go to local, free or cheap models, at once where they can. Claude Desktop and Cowork show the plan as a table in the chat, and Claude Code, Codex and Gemini CLI can plan on their own.
 - **A budget that holds.** Each request reserves the most it can cost before it goes out. A warning at 80%; at 100%, keep going on the cheapest model or stop.
-- **A chat that does the everyday things.** Attach images, PDFs and text files. Edit a question, ask again, or ask another model and see both costs. Per chat instructions, readable thinking, search, export, and import from ChatGPT or Claude.
+- **A chat that does the everyday things.** Short answers by default. Attach images, PDFs and text files. Edit a question, ask again, or ask another model and see both costs. Per chat instructions, readable thinking, search, export, and import from ChatGPT or Claude.
 - **Light and private.** One program, one SQLite file, no telemetry, no runtime dependencies. Keys stay in your system's keychain, or a file only you can read. Leanfare reads usage numbers, never your words (see [Privacy](#privacy)).
 
 ## Install
@@ -68,6 +69,8 @@ The tools (an MCP server, `leanfare mcp`, which starts Leanfare when it is not r
 - **models** lists the models you ticked, with prices and ratings.
 - **estimate** prices a prompt before sending it: the model Auto would pick, its time, and at the same quality the cheapest and the fastest choice.
 - **trial** runs the trial (below) and reports on it.
+- **plan** splits a task into parts, each with where it runs and its model, as a table (see [Plan a task](#plan-a-task)).
+- **plan_run**, **plan_status** and **plan_stop** run Leanfare's parts of a plan in the background, give their answers, and stop them.
 
 To add it by hand, the command is the `leanfare` program with the argument `mcp`, for example in Claude Desktop's settings file (Settings, Developer, Edit Config):
 
@@ -101,6 +104,27 @@ To read large files or logs, use the leanfare delegate tool with effort medium, 
 
 Run it from the Savings page (**Run the trial**), in Terminal (`leanfare trial`), or ask Claude to use the trial tool. It costs what its answers and checks cost on your models ($0 on free plans) and shows the estimate first. The files are the same on every computer, so results compare across people: **Share on GitHub** opens an issue with the numbers filled in, for you to read and send yourself. Nothing is sent on its own.
 
+## Plan a task
+
+Write what you want done in the **Plan** tab, or let Claude call the `plan` tool. Leanfare splits it into parts (reading, drafting, working something out, changing code, searching) and puts each where it costs least without losing quality:
+
+| # | Part | Kind | Runs on | Model | Time | Tokens | Cost | When |
+|---|---|---|---|---|---|---|---|---|
+| 1 | Map the code: its parts and how they fit | read, low | Leanfare, free model | Gemini 3.8 Flash | ~8 s | ~41k kept | $0 | now |
+| 2 | Read the parts that matter closely | read, medium | Leanfare, pay per use | DeepSeek V4 Flash | ~12 s | ~43k kept | $0.01 | after 1 |
+| 3 | Decide the design and the steps | reason, high | you (Claude Code) | Claude Opus 5.5 | | ~9k of your plan | in your plan | after 2 |
+| 4 | Make the changes and run the tests | code, high | you (Claude Code) | Claude Opus 5.5 | | ~12k of your plan | in your plan | after 3 |
+| 5 | Review the changes | reason, medium | Leanfare, pay per use | DeepSeek V4 Flash | ~10 s | ~14k kept | under $0.01 | after 4 |
+
+- **What stays with you.** Changes to your project, anything that needs your app's own tools, and high effort judgement stay with the app you work in. Reading, drafting and working things out go to the cheapest model you ticked that rates well enough, local and free ones first. When your plan is near a limit (85% of the 5 hours or the week), the hard parts go out too.
+- **The model for each part.** A part Leanfare runs names Leanfare's pick. A part that stays with you names the model to pick in your app, by the same rule: the cheapest of your app's models rated well enough for it, since a dearer model uses more of your plan. In Claude Code, as the ratings stand: Opus 5.5 for the hardest judgement and code, Sonnet 5.5 for most work, Haiku 5.5 for light work; Claude Code runs a part on another model with a subagent. The Plan tab asks which app you work in (Claude Code, Claude Desktop or Cowork, Codex, Gemini CLI, Cursor).
+- **Who splits it.** A model you ticked (a few cents or less, $0 on free models), or rules: tick **Split by rules**.
+- **Running it.** Parts that do not wait for each other run at once, and each part gets the answers of the parts it needs. In the Plan tab, press **Run Leanfare's parts**. In your app, Claude runs them with `delegate`, with Claude Code's `leanfare-worker` subagent (one per part, at once), or in the background with `plan_run`, then `plan_status` for the answers. The answers are also saved in the project, in `.leanfare/plans/<id>/`, a folder git ignores, where you and every app can read them. A part that waits for one of yours is yours to hand over once yours is done.
+- **Files.** Name files or folders and Leanfare measures them. Files that hold secrets are never read, and a folder's dotfiles and links are left out. One hand off takes at most 50 files and 4 MB; past that, the files whose names hold the task's words go first, and the table says how many go.
+- **Paid parts.** Parts on local and free models run on their own, and so do their checks. Paid parts run only with your yes: **Run** in the Plan tab or on the plan's page in the chat, or a question in apps that can ask (Claude Code). Settings can let a plan's paid parts run without asking up to an amount. Your monthly budget holds either way.
+- **In the chat.** Claude Desktop and Cowork show the plan as a page in the chat (an MCP App): the table, Run and Stop, the answers as they come, and a button that hands them back to Claude.
+- **Plan by itself.** In Settings, In your apps, **Plan by itself** adds a few lines to Claude Code's `CLAUDE.md`, Codex's `AGENTS.md` or Gemini CLI's `GEMINI.md`, so the app calls the plan for a task with several parts. In Claude Code it also adds the `leanfare-worker` subagent (on Haiku) and a prompt hook that says how much of your plan is left. Leanfare changes only its own lines, and **Turn off** takes them out.
+
 ## Set up without typing
 
 - **Paste any key.** One box in Settings takes a key from any provider: Leanfare tells by its shape whose it is (patterns from gitleaks), tests it with that provider and saves it. A key it cannot place offers to add its provider.
@@ -113,13 +137,13 @@ Run it from the Savings page (**Run the trial**), in Terminal (`leanfare trial`)
 
 Savings shows two things apart:
 
-- **Your subscriptions.** Pick your plans in Settings (Claude Pro or Max, ChatGPT Go, Plus, Pro or Business, Perplexity Pro or Max, Google AI Plus, Pro or Ultra, Copilot Pro or Pro+, Cursor Pro or Ultra; the price can be edited). Each shows its limits: a 5 hour window and a week for Claude and Codex, weekly or monthly allowances for the others.
-  - **Claude:** what this month's Claude Code use would cost at API prices, and what is left of the 5 hours and the week, from Claude Code's status line (**Add to the status line** on the Savings page).
+- **Your subscriptions.** Pick your plans in Settings (Claude Pro or Max, ChatGPT Go, Plus, Pro or Business, Perplexity Pro or Max, Google AI Plus, Pro or Ultra, Grok, Copilot Pro or Pro+, Cursor Pro or Ultra; the price can be edited), with the month each started and, for one you ended, the month it ended. Each shows its limits: a 5 hour window and a week for Claude and Codex, weekly or monthly allowances for the others. Savings shows a plan only in its months, and names the AI apps it found on this computer (from when each came and when it was last used).
+  - **Claude:** this month's Claude Code tokens, and what is left of the 5 hours and the week, from Claude Code's status line (**Add to the status line** on the Savings page). Settings can also show what that use would cost at API prices.
   - **ChatGPT:** the same from Codex's own log files, which also name your plan, so Leanfare offers it.
   - **Perplexity, Google AI, Copilot and Cursor** keep no usage numbers on your computer: Leanfare shows their limits, and a link to their own usage page where they have one.
 - **Pay per use: what your keys and credits spent through Leanfare.** The spend, what Auto saved, the budget, and each answer's cost.
 
-**What is left** is shown in dollars of work and tokens at your recent mix, with a 90% range, and **what still fits** says how many typical sessions of each project fit before the limit. Anthropic's terms do not let other apps use a Claude Pro or Max login, so Leanfare only counts: it never sends a request on your plan.
+**What is left** is shown in tokens at your recent mix (and in dollars of work at API prices, when Settings shows them), with a 90% range, and **what still fits** says how many typical sessions of each project fit before the limit. Anthropic's terms do not let other apps use a Claude Pro or Max login, so Leanfare only counts: it never sends a request on your plan.
 
 ## Speed
 
@@ -167,6 +191,8 @@ Leanfare reads usage numbers, never your words.
 - **Your plans** takes the model, the time and the token counts from each line of Claude Code's and Codex's log files, and drops the rest of the line. **The status line** reads only the two percentages Claude Code hands it.
 - **Find my keys** reads only the files named above, only when you press it; a key goes only to its own provider, to test it. **Your login shell's settings** are asked for key variables only (names ending in `_KEY`), and only by a Leanfare that did not start from a terminal.
 - **Your chats in Leanfare** stay on your computer and go only to the AI company you pick. The cost ledger, the delegate's and the trial's records keep models, token counts, times and costs, never what you wrote.
+- **A plan** goes to the model that splits it (or to none, by rules), and each part goes only to the model the table names for it. The answers are saved in your project's `.leanfare` folder, nowhere else.
+- **The apps on this computer** are found by dates only: Spotlight's, and the times of their own folders and files (when each came and when it was last used). No file of theirs is opened.
 - **No telemetry.** Leanfare talks to the AI companies you use; to llmledger's price list once a day; to models.dev's list of providers when you add a provider or look for keys (kept for a day); to OpenRouter when you use it; and to GitHub's list of releases once a day to see whether a new version is out (Settings can turn this off). Nothing else, and nothing about you or your use.
 
 ## Commands
@@ -180,6 +206,7 @@ Leanfare reads usage numbers, never your words.
 | `leanfare trial` | Runs the trial and prints its report; `--report` the last one again, `--share` opens it as a GitHub issue to read and send | 0 done, 1 no model ready, a failed run or Leanfare not answering, 130 stopped with Ctrl+C |
 | `leanfare mcp` | The MCP server, over stdio | 0 when the client closes it |
 | `leanfare statusline` | The line Claude Code shows at its bottom (`--then '<command>'` puts your own line first) | 0 |
+| `leanfare hook prompt` | The prompt hook Plan by itself adds to Claude Code: a line on how much of your plan is left | 0, always |
 | `leanfare --version` | Prints the version | 0 |
 
 Everything lives in `~/.leanfare`: the database (settings, cost ledger, chats and their files), a daily backup kept for three days, and the last downloaded price list. Set `LEANFARE_DATA_DIR` to move it.
@@ -213,6 +240,7 @@ Leanfare is not affiliated with any AI provider.
 - Subscriptions without usage numbers on your computer (Perplexity, Google AI, Copilot, Cursor) show their limits, not your use.
 - Your plans and what is left are estimates from the log files on this computer: work done elsewhere is not in them.
 - The delegate reads text files only (no PDFs or images yet).
+- A plan's parts run on models you have keys or local apps for. Your ChatGPT, Gemini or Claude subscription is not used for Leanfare's parts; the parts that stay with you use your own app's plan.
 - Tools with Claude models work through `/v1/messages`, not through the OpenAI address. There is no `/v1/responses` address yet.
 - The Windows build is new and less tested. The Mac app is built on your Mac from the code; a signed download comes later.
 
