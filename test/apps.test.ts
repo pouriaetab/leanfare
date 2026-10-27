@@ -45,7 +45,7 @@ describe("apps that keep their MCP servers in a JSON file", () => {
     const f = app("cursor").file();
     put(f, "{ this is not json");
     expect(appStatus(app("cursor"))).toBe("broken");
-    await expect(setApp("cursor", true)).rejects.toThrow("is not valid JSON, so Leanfare left it alone");
+    await expect(setApp("cursor", true)).rejects.toThrow("is not valid JSON in the shape Cursor uses, so Leanfare left it alone");
     expect(readFileSync(f, "utf8")).toBe("{ this is not json");
     expect(appsView().find((v) => v.id === "cursor")!.note).toContain("is not valid JSON");
   });
@@ -79,6 +79,44 @@ describe("apps that keep their MCP servers in a JSON file", () => {
   });
 });
 
+describe("files Leanfare should leave as they are", () => {
+  test("removing from an app that is not there, or from a file without Leanfare, writes nothing", async () => {
+    await setApp("cursor", false);
+    expect(existsSync(app("cursor").file())).toBe(false);
+    await setApp("codex", false);
+    expect(existsSync(join(home, ".codex", "config.toml"))).toBe(false);
+    const f = app("windsurf").file();
+    put(f, '{"mcpServers":{"other":{"command":"x","args":[]}},  "keep":   "my spacing"}');
+    await setApp("windsurf", false);
+    expect(readFileSync(f, "utf8")).toBe('{"mcpServers":{"other":{"command":"x","args":[]}},  "keep":   "my spacing"}');
+    expect(existsSync(`${f}.leanfare-backup`)).toBe(false);
+  });
+  test("servers kept as a list, not an object, is a shape Leanfare leaves alone", async () => {
+    const f = app("gemini-cli").file();
+    put(f, '{"mcpServers": []}');
+    expect(appStatus(app("gemini-cli"))).toBe("broken");
+    await expect(setApp("gemini-cli", true)).rejects.toThrow("in the shape Gemini CLI uses");
+    expect(readFileSync(f, "utf8")).toBe('{"mcpServers": []}');
+  });
+  test("a link to a file not made yet stays a link, and the file is made where it points", async () => {
+    const real = join(home, "dotfiles", "cursor-mcp.json");
+    mkdirSync(join(home, ".cursor"), { recursive: true });
+    mkdirSync(join(home, "dotfiles"), { recursive: true });
+    symlinkSync(real, app("cursor").file());
+    await setApp("cursor", true);
+    expect(lstatSync(app("cursor").file()).isSymbolicLink()).toBe(true);
+    expect(readJ(real).mcpServers.leanfare).toEqual(entry());
+  });
+  test("the backup is the file as it was before Leanfare first changed it", async () => {
+    const f = app("lm-studio").file();
+    put(f, '{"mcpServers": {"mine": {"command": "a", "args": []}}}');
+    await setApp("lm-studio", true);
+    await setApp("lm-studio", false);
+    await setApp("lm-studio", true);
+    expect(readFileSync(`${f}.leanfare-backup`, "utf8")).toBe('{"mcpServers": {"mine": {"command": "a", "args": []}}}');
+  });
+});
+
 describe("Codex CLI's TOML file", () => {
   const toml = () => join(home, ".codex", "config.toml");
   test("Leanfare's table is added at the end, not twice, and removed with nothing else touched", async () => {
@@ -93,6 +131,35 @@ describe("Codex CLI's TOML file", () => {
     expect(appStatus(app("codex"))).toBe("added");
     await setApp("codex", false);
     expect(readFileSync(toml(), "utf8")).toBe(`model = "gpt-6"\n\n[mcp_servers.other]\ncommand = "x"\nargs = ["y"]\n\n[profiles.fast]\nmodel = "gpt-6-mini"\n`);
+  });
+  test("a file that is not valid TOML is left alone, and the screen says so", async () => {
+    put(toml(), `model = "gpt-6"\n[profiles\nbroken = `);
+    expect(appStatus(app("codex"))).toBe("broken");
+    await expect(setApp("codex", true)).rejects.toThrow("is not valid TOML, so Leanfare left it alone");
+    expect(readFileSync(toml(), "utf8")).toBe(`model = "gpt-6"\n[profiles\nbroken = `);
+  });
+  test("its header written another way is still found: never a second table", async () => {
+    put(toml(), `[ mcp_servers . "leanfare" ] # added by hand\ncommand = "/old/bun"\nargs = ["mcp"]\n`);
+    expect(appStatus(app("codex"))).toBe("old");
+    await setApp("codex", true);
+    const text = readFileSync(toml(), "utf8");
+    expect(Bun.TOML.parse(text)).toEqual({ mcp_servers: { leanfare: entry() } });
+  });
+  test("its own tables under it go too; a multi line value and the next table's comment stay as they were", async () => {
+    const top = `notes = """\nline one\n\n\n\nline five\n"""\n\n`;
+    const next = `# my fast profile\n[profiles.fast]\nmodel = "m"\n`;
+    put(toml(), `${top}[mcp_servers.leanfare]\ncommand = "/old/bun"\nargs = ["mcp"]\n\n[mcp_servers.leanfare.env]\nX = "1"\n\n${next}`);
+    await setApp("codex", false);
+    const text = readFileSync(toml(), "utf8");
+    expect(text).toBe(`${top}\n${next}`);
+    expect((Bun.TOML.parse(text) as any).notes).toBe("line one\n\n\n\nline five\n");
+    expect((Bun.TOML.parse(text) as any).mcp_servers).toBeUndefined();
+  });
+  test("an entry written inline is not rewritten by guesswork: the screen says what to change", async () => {
+    put(toml(), `mcp_servers = { leanfare = { command = "/old/bun", args = ["mcp"] } }\n`);
+    expect(appStatus(app("codex"))).toBe("old");
+    await expect(setApp("codex", true)).rejects.toThrow("is written in a way Leanfare does not change by itself");
+    expect(readFileSync(toml(), "utf8")).toBe(`mcp_servers = { leanfare = { command = "/old/bun", args = ["mcp"] } }\n`);
   });
   test("a table in the middle of the file is replaced where it is", async () => {
     put(toml(), `[mcp_servers.leanfare]\ncommand = "/old/bun"\nargs = ["mcp"]\n\n[profiles.fast]\nmodel = "m"\n`);

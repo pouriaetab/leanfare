@@ -1,22 +1,26 @@
 // Use Leanfare in your apps: adds Leanfare's MCP server (its tools: delegate, ask, spend, models,
-// estimate) to the AI apps you already use, so they work as usual with Leanfare on top. One press
-// per app, undone the same way.
+// estimate, trial) to the AI apps you already use, so they work as usual with Leanfare on top. One
+// press per app, undone the same way.
 //
 // Each app keeps its MCP servers in its own settings file. Leanfare adds or removes only its own
 // entry, named "leanfare", and leaves everything else as it was:
-//   - a file that is not valid JSON (or TOML) is left alone, and the screen says so;
-//   - the file as it was is copied next to it first (<file>.leanfare-backup);
+//   - a file that is not valid JSON (or TOML), or not in the shape the app uses, is left alone,
+//     and the screen says so; a TOML change that would not read back the same is not written;
+//   - the file as it was before Leanfare first changed it is kept next to it (<file>.leanfare-backup);
 //   - the new file is written whole, then swapped in, so the app never reads half a file;
-//   - a settings file that is a link (kept with your dotfiles) stays a link.
+//   - a settings file that is a link (kept with your dotfiles) stays a link;
+//   - removing Leanfare from a file that does not have it changes nothing.
 // Claude Code is the exception: its `claude mcp add` command does it, because Claude Code keeps
 // rewriting its own file while it runs.
-import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { selfCommand } from "./self";
 import { shellEnv } from "./shellenv";
 
-const home = () => process.env.HOME || homedir();
+// Your home folder as the apps see it: HOME (what your shell and the tests use), but on Windows the
+// user profile, which is where the apps keep their files even when a Unix-style shell sets HOME.
+const home = () => (process.platform === "win32" ? homedir() : process.env.HOME || homedir());
 const appData = () => process.env.APPDATA || join(home(), "AppData", "Roaming");
 const mac = () => process.platform === "darwin";
 const win = () => process.platform === "win32";
@@ -81,17 +85,26 @@ const same = (e: any) => { const x = entry(); return isOurs(e) && e.command === 
 
 // ---- JSON files ---------------------------------------------------------------------------
 
-function readJson(file: string): { ok: true; j: any } | { ok: false } {
+const plain = (v: unknown): v is Record<string, any> => !!v && typeof v === "object" && !Array.isArray(v);
+
+// The file's JSON, when it is a JSON object whose servers (if any) are an object too.
+function readJson(file: string, key: string): { ok: true; j: any } | { ok: false } {
   if (!existsSync(file)) return { ok: true, j: {} };
   const text = readFileSync(file, "utf8");
   if (!text.trim()) return { ok: true, j: {} };
-  try { const j = JSON.parse(text); return j && typeof j === "object" && !Array.isArray(j) ? { ok: true, j } : { ok: false }; } catch { return { ok: false }; }
+  try { const j = JSON.parse(text); return plain(j) && (j[key] === undefined || plain(j[key])) ? { ok: true, j } : { ok: false }; } catch { return { ok: false }; }
+}
+
+// Where a write goes: the file, or the file a link points to (even one not there yet), so a link stays a link.
+function writeTarget(file: string): string {
+  try { if (lstatSync(file).isSymbolicLink()) { try { return realpathSync(file); } catch { return resolve(dirname(file), readlinkSync(file)); } } } catch {}
+  return file;
 }
 
 function writeWhole(file: string, text: string) {
-  if (existsSync(file)) copyFileSync(file, `${file}.leanfare-backup`);
-  let target = file;
-  try { target = realpathSync(file); } catch {}
+  const target = writeTarget(file);
+  const backup = `${file}.leanfare-backup`;
+  if (existsSync(target) && !existsSync(backup)) copyFileSync(target, backup); // the file as it was before Leanfare first changed it
   mkdirSync(dirname(target), { recursive: true });
   const tmp = `${target}.leanfare-${process.pid}`;
   writeFileSync(tmp, text, { mode: 0o600 });
@@ -99,17 +112,18 @@ function writeWhole(file: string, text: string) {
 }
 
 function jsonStatus(a: AppDef): AppStatus {
-  const r = readJson(a.file());
+  const r = readJson(a.file(), a.key!);
   if (!r.ok) return "broken";
   const e = r.j?.[a.key!]?.[NAME];
   return !e ? "not added" : same(e) ? "added" : "old";
 }
 
 function jsonSet(a: AppDef, on: boolean) {
-  const r = readJson(a.file());
-  if (!r.ok) throw new Error(`${a.name}'s settings file (${a.file()}) is not valid JSON, so Leanfare left it alone. Fix it in a text editor, then try again.`);
+  const r = readJson(a.file(), a.key!);
+  if (!r.ok) throw new Error(`${a.name}'s settings file (${a.file()}) is not valid JSON in the shape ${a.name} uses, so Leanfare left it alone. Fix it in a text editor, then try again.`);
   const j = r.j;
-  const servers = j[a.key!] && typeof j[a.key!] === "object" ? j[a.key!] : {};
+  if (!on && !j[a.key!]?.[NAME]) return; // nothing to take out: the file stays as it is
+  const servers = j[a.key!] ?? {};
   if (on) servers[NAME] = a.vscode ? { type: "stdio", ...entry() } : entry();
   else delete servers[NAME];
   j[a.key!] = servers;
@@ -117,50 +131,85 @@ function jsonSet(a: AppDef, on: boolean) {
 }
 
 // ---- Codex's TOML ---------------------------------------------------------------------------
+// Read with Bun's own TOML reader before and after: a file it cannot read is left alone, and a
+// change is written only when the file reads back as before, apart from Leanfare's own entry.
+// Leanfare's entry is the [mcp_servers.leanfare] table and any table under it ([...leanfare.env]).
 
-const TOML_HEAD = /^\[mcp_servers\.leanfare\]\s*$/m;
-// Leanfare's block: its header to the next table header (or the end).
-function tomlBlock(text: string): { start: number; end: number } | null {
-  const m = TOML_HEAD.exec(text);
-  if (!m) return null;
-  const rest = text.slice(m.index + m[0].length);
-  const next = /^\s*\[/m.exec(rest);
-  return { start: m.index, end: next ? m.index + m[0].length + next.index : text.length };
-}
+const parseToml = (text: string): any | null => { try { return Bun.TOML.parse(text); } catch { return null; } };
+// A table header for mcp_servers.leanfare or a table under it, spaced, quoted or with a comment.
+const OUR_HEAD = /^\s*\[\s*("?)mcp_servers\1\s*\.\s*("?)leanfare\2\s*(\.[^\]]*)?\]\s*(#.*)?$/;
+const ANY_HEAD = /^\s*\[/;
 const tomlString = (s: string) => JSON.stringify(s); // a TOML basic string is written like a JSON one
 const tomlEntry = () => { const e = entry(); return `[mcp_servers.leanfare]\ncommand = ${tomlString(e.command)}\nargs = [${e.args.map(tomlString).join(", ")}]\n`; };
+const withoutOurs = (t: any) => { const c = structuredClone(t ?? {}); if (plain(c.mcp_servers)) { delete c.mcp_servers.leanfare; if (!Object.keys(c.mcp_servers).length) delete c.mcp_servers; } return c; };
+
+// The text without Leanfare's tables; the comments just above the next table stay with it.
+function tomlRemove(text: string): { text: string; found: boolean } {
+  const out: string[] = [];
+  let skipped: string[] | null = null, found = false;
+  for (const line of text.split("\n")) {
+    if (ANY_HEAD.test(line)) {
+      const ours = OUR_HEAD.test(line);
+      if (skipped && !ours) {
+        let k = skipped.length;
+        while (k > 0 && /^\s*(#.*)?$/.test(skipped[k - 1])) k--;
+        out.push(...skipped.slice(k));
+        skipped = null;
+      }
+      if (ours) { skipped ??= []; found = true; continue; }
+    }
+    (skipped ?? out).push(line);
+  }
+  while (out.length && !out[0].trim()) out.shift();
+  return { text: out.join("\n"), found };
+}
 
 function tomlStatus(a: AppDef): AppStatus {
   const file = a.file();
   if (!existsSync(file)) return "not added";
-  const text = readFileSync(file, "utf8");
-  const b = tomlBlock(text);
-  if (!b) return "not added";
-  return text.slice(b.start, b.end).trim() === tomlEntry().trim() ? "added" : "old";
+  const t = parseToml(readFileSync(file, "utf8"));
+  if (t === null) return "broken";
+  const e = plain(t.mcp_servers) ? t.mcp_servers.leanfare : undefined;
+  return !e ? "not added" : same(e) && Object.keys(e).every((k) => k === "command" || k === "args") ? "added" : "old";
 }
 
 function tomlSet(a: AppDef, on: boolean) {
   const file = a.file();
-  let text = existsSync(file) ? readFileSync(file, "utf8") : "";
-  const b = tomlBlock(text);
-  if (b) text = text.slice(0, b.start) + text.slice(b.end);
-  if (on) text = (text.trimEnd() ? text.trimEnd() + "\n\n" : "") + tomlEntry();
-  text = text.replace(/\n{3,}/g, "\n\n");
-  writeWhole(file, text.trim() ? text.trimEnd() + "\n" : "");
+  const target = writeTarget(file);
+  const before = existsSync(target) ? readFileSync(target, "utf8") : "";
+  const was = parseToml(before);
+  if (was === null) throw new Error(`${a.name}'s settings file (${file}) is not valid TOML, so Leanfare left it alone. Fix it in a text editor, then try again.`);
+  const had = plain(was.mcp_servers) && was.mcp_servers.leanfare !== undefined;
+  if (!on && !had) return; // nothing to take out: the file stays as it is
+  const removed = tomlRemove(before);
+  if (had && !removed.found) throw new Error(`Leanfare's entry in ${file} is written in a way Leanfare does not change by itself. Edit it there: ${on ? `replace it with these lines:\n${tomlEntry()}` : "delete it."}`);
+  let text = removed.text.trimEnd();
+  if (on) text = (text ? text + "\n\n" : "") + tomlEntry();
+  text = text.trim() ? text.trimEnd() + "\n" : "";
+  // Written only when it reads back as the file did, with Leanfare's entry added or gone.
+  const now = parseToml(text);
+  const want = on ? { command: entry().command, args: entry().args } : undefined;
+  if (now === null || JSON.stringify(withoutOurs(now)) !== JSON.stringify(withoutOurs(was)) || JSON.stringify(now.mcp_servers?.leanfare) !== JSON.stringify(want)) {
+    throw new Error(`Leanfare could not change ${file} safely, so it left it as it was.${on ? ` Add these lines to it yourself:\n${tomlEntry()}` : " Delete the [mcp_servers.leanfare] table yourself."}`);
+  }
+  writeWhole(file, text);
 }
 
 // ---- Claude Code, through its own command -------------------------------------------------
 
+// The claude command. On Windows only claude.exe (the native install) is run; an npm install's
+// claude.cmd needs a shell to run, so the screen gives the line to run in a terminal instead.
 async function claudeBin(): Promise<string | null> {
   if (process.env.LEANFARE_CLAUDE_BIN) return existsSync(process.env.LEANFARE_CLAUDE_BIN) ? process.env.LEANFARE_CLAUDE_BIN : null;
   const sh = await shellEnv();
-  const dirs = [...(process.env.PATH ?? "").split(":"), ...(sh.PATH ?? "").split(":"), join(home(), ".claude", "local"), join(home(), ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin"];
-  for (const d of dirs) if (d && existsSync(join(d, win() ? "claude.exe" : "claude"))) return join(d, win() ? "claude.exe" : "claude");
+  const dirs = [...(process.env.PATH ?? "").split(delimiter), ...(sh.PATH ?? "").split(delimiter), join(home(), ".claude", "local"), join(home(), ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin"];
+  const name = win() ? "claude.exe" : "claude";
+  for (const d of dirs) if (d && existsSync(join(d, name))) return join(d, name);
   return null;
 }
 
 function claudeStatus(): AppStatus {
-  const r = readJson(claudeJson());
+  const r = readJson(claudeJson(), "mcpServers");
   if (!r.ok) return "broken";
   const e = r.j?.mcpServers?.[NAME];
   return !e ? "not added" : same(e) ? "added" : "old";
@@ -206,7 +255,7 @@ export function appsView(): AppView[] {
     return {
       id: a.id, name: a.name, status, file: a.file(), after: a.after,
       manual: a.format === "claude-cli" ? claudeAddLine() : null,
-      note: status === "broken" ? `Its settings file (${a.file()}) is not valid ${a.format === "toml" ? "TOML" : "JSON"}, so Leanfare leaves it alone.` : status === "old" ? "Added before, from another copy of Leanfare: press Update to point it at this one." : null,
+      note: status === "broken" ? `Its settings file (${a.file()}) is not valid ${a.format === "toml" ? "TOML" : "JSON"} in the shape it uses, so Leanfare leaves it alone.` : status === "old" ? "Added before, from another copy of Leanfare: press Update to point it at this one." : null,
     };
   });
 }
