@@ -6,8 +6,10 @@
 // Where Leanfare can read your use of a plan on this computer without signing in anywhere:
 //   - Claude: Claude Code's status line hands it the 5 hour and weekly percentages (statusline.ts).
 //   - ChatGPT: Codex writes them in its own log files, with the plan's name (plans.ts).
-// The others (Perplexity, Google AI, GitHub Copilot, Cursor) keep no usage numbers on the computer
+// The others (Perplexity, Google AI, GitHub Copilot, Cursor, Grok) keep no usage numbers on the computer
 // and have no public way to read them, so Leanfare shows their limits and a link to their own page.
+// Grok's prices are from two summaries of xAI's plans (pricepertoken.com, 25 Jun 2026; MacDailyNews,
+// 29 Aug 2026), as xAI's own plans page would not load as text; they vary by country.
 import type { PlanProvider } from "./settings";
 
 export interface Preset { name: string; price: number | null; limits: string }
@@ -65,6 +67,15 @@ export const SUBSCRIPTIONS: Record<PlanProvider, SubInfo> = {
       { name: "Cursor Ultra", price: 200, limits: "larger monthly pools, reset with your billing" },
     ],
     note: "Cursor shows your usage on its own dashboard.",
+  },
+  grok: {
+    label: "Grok", logs: null, usageUrl: null, limits: "usage limits by plan; numbers not published",
+    presets: [
+      { name: "SuperGrok Lite", price: 10, limits: "the entry plan's limits; numbers not published" },
+      { name: "SuperGrok", price: 30, limits: "higher limits than Lite; numbers not published" },
+      { name: "SuperGrok Heavy", price: 300, limits: "the highest limits; numbers not published" },
+    ],
+    note: "Grok keeps no usage numbers on this computer.",
   },
 };
 

@@ -13,10 +13,14 @@ export interface ProviderSettings { on: boolean; free?: boolean }
 
 // A plan you pay for outside Leanfare (Claude Max, ChatGPT Plus, Perplexity Pro...): its limits, and its price next to
 // what your sessions would cost at API prices (subscriptions.ts).
-export type PlanProvider = "claude" | "chatgpt" | "perplexity" | "google" | "copilot" | "cursor";
-export interface Plan { name: string; price: number } // price: US dollars a month
+export type PlanProvider = "claude" | "chatgpt" | "perplexity" | "google" | "copilot" | "cursor" | "grok";
+// price: US dollars a month. since and until: the months the plan covers ("2026-07"); none: from always, to now.
+export interface Plan { name: string; price: number; since?: string; until?: string }
 export type Plans = Partial<Record<PlanProvider, Plan>>;
-export const PLAN_KEYS: PlanProvider[] = ["claude", "chatgpt", "perplexity", "google", "copilot", "cursor"];
+export const PLAN_KEYS: PlanProvider[] = ["claude", "chatgpt", "perplexity", "google", "copilot", "cursor", "grok"];
+export const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+// Whether a plan covers a month.
+export const covers = (p: Plan, month: string) => (!p.since || p.since <= month) && (!p.until || p.until >= month);
 
 export interface Settings {
   mode: Mode;
@@ -108,7 +112,15 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
       const price = Number(w?.price);
       if (!name) return { error: `the ${k} plan needs a name` };
       if (w.price === "" || w.price === null || !Number.isFinite(price) || price < 0 || price > 100_000) return { error: `the ${k} plan's price must be a dollar amount a month from 0 to 100,000` };
-      plans[k as PlanProvider] = { name, price: Math.round(price * 100) / 100 };
+      const plan: Plan = { name, price: Math.round(price * 100) / 100 };
+      for (const end of ["since", "until"] as const) {
+        const m = w[end];
+        if (m === undefined || m === null || m === "") continue; // none: from always, or to now
+        if (typeof m !== "string" || !MONTH_RE.test(m)) return { error: `the ${k} plan's ${end} must be a month like 2026-07` };
+        plan[end] = m;
+      }
+      if (plan.since && plan.until && plan.since > plan.until) return { error: `the ${k} plan ends (${plan.until}) before it starts (${plan.since})` };
+      plans[k as PlanProvider] = plan;
     }
     out.plans = plans;
   }
