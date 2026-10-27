@@ -20,6 +20,7 @@
 import { parseSpeed, secondsText, type SpeedChoice } from "./speed";
 import { TASKS, getModel, isRetired, type Model } from "./data";
 import { db } from "./db";
+import { movedDown } from "./grades";
 import { plan, runChat, usableModels, type ChatOptions } from "./engine";
 import { DELEGATE_LIMITS, type DelegateFile } from "./readfiles";
 import { guessTask, rating, type Guess, type Msg } from "./router";
@@ -273,7 +274,14 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
 
   const doFit = fit(prompt.length + system.length, input.maxOut);
   const limit = input.only;
-  const within = (ok: (m: Model) => boolean) => (limit ? (m: Model) => ok(m) && limit(m) : ok);
+  const kept = (ok: (m: Model) => boolean) => (limit ? (m: Model) => ok(m) && limit(m) : ok);
+  // A model the manager's grades moved down for this kind is skipped, while another can take it (grades.ts).
+  const within = (ok: (m: Model) => boolean) => {
+    const base = kept(ok);
+    if (!input.kind) return base;
+    const graded = (m: Model) => base(m) && !movedDown(m.id, input.kind);
+    return usableModels(graded).length ? graded : base;
+  };
   const first = await run(messages, `auto-${TIER[input.effort]}`, "Delegate", { system, source, guess, only: within(doFit.ok), onlyWhy: tooMuch(doFit.need), effort: input.effort, maxOut: input.maxOut, speed: input.speed });
   if (first.status !== "ok") {
     write({ ...row, ...none, model: first.meta?.model?.id ?? null, cost: first.cost, answerTokens: 0, status: first.status, chance: 0 });

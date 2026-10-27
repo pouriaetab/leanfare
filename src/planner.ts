@@ -27,6 +27,7 @@ import { CODEX_ID, CODEX_LABEL, codexFor, runCodex } from "./codex";
 import { DEFAULT_MAX_OUT, TIER, runDelegate, taskFor, type Effort, type Kind } from "./delegate";
 import { allModels, type Model } from "./data";
 import { chargeOf, plan as route, runChat, usableModels } from "./engine";
+import { addGrade, movedDown, standing, standingText, type GradedKind, type Verdict } from "./grades";
 import { gb, suggestLocal } from "./local";
 import { planView, windowsNow } from "./plans";
 import { DELEGATE_LIMITS, readForDelegate, sizesForPlan, PLAN_FILES } from "./readfiles";
@@ -276,15 +277,19 @@ const onCodex = (part: Split, r: { tokens: number }, why: string): Part => ({ ..
 async function place(part: Split, files: PlanFile[], near: string | null, manager: string, signal: AbortSignal, codex = false): Promise<Part> {
   const r = reading(part, files);
   const stay = (why: string): Part => ({ ...part, where: "you", model: null, use: modelInYourApp(part, manager), seconds: null, tokens: r.tokens + OUT_YOU, cost: null, why });
-  // Reading, drafting and working out can run on your ChatGPT plan through Codex, before anything paid.
-  const viaCodex = codex && !!DELEGATE_KIND[part.kind];
+  // Reading, drafting and working out can run on your ChatGPT plan through Codex, before anything paid
+  // (unless the manager's grades moved Codex down for this kind).
+  const viaCodex = codex && !!DELEGATE_KIND[part.kind] && !movedDown(CODEX_ID, part.kind);
   if (part.kind === "code") return stay(`it changes the project, which only ${manager} can do`);
   if (part.kind === "act") return stay(`it needs ${manager}'s own tools`);
   const big = (part.effort === "high" && (part.kind === "reason" || part.kind === "write"));
   if (big && !near) return stay(`high effort judgement: your strongest model, in your plan`);
   const need = Math.ceil((r.tokens * 4) / 3) + DEFAULT_MAX_OUT; // as delegate counts it: three characters a token, and the answer
   const fits = (m: Model) => m.context === null || m.context >= need;
-  const only = part.kind === "search" ? (m: Model) => m.provider === "perplexity" && fits(m) : fits; // a search goes to a model that searches the web
+  const kindOk = part.kind === "search" ? (m: Model) => m.provider === "perplexity" && fits(m) : fits; // a search goes to a model that searches the web
+  // A model the manager's grades moved down for this kind is skipped, while another can take the part.
+  const graded = (m: Model) => kindOk(m) && !movedDown(m.id, part.kind);
+  const only = usableModels(graded).length ? graded : kindOk;
   if (part.kind === "search" && !usableModels((m) => m.provider === "perplexity").length) return stay(`it searches the web, which ${manager === "you" ? "your app" : manager} can do; no model you ticked in Leanfare does (tick Perplexity Sonar to send searches out)`);
   const messages: Msg[] = [{ role: "user", content: part.task }];
   const kind = DELEGATE_KIND[part.kind] ?? null;
@@ -500,7 +505,7 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
 
 // after_yours: it waits for one of the person's parts (directly or through others), so it is theirs to hand over once theirs is done.
 export type RunStatus = "waiting" | "running" | "done" | "failed" | "stopped" | "yours" | "after_yours" | "blocked" | "asks";
-export interface RunPart { n: number; title: string; status: RunStatus; answer: string | null; receipt: string | null; model: string | null; cost: number | null; seconds: number | null; error: string | null }
+export interface RunPart { n: number; title: string; status: RunStatus; answer: string | null; receipt: string | null; model: string | null; modelId?: string | null; cost: number | null; seconds: number | null; error: string | null; verdict?: Verdict | null; gradedBy?: "you" | "manager" | null }
 export interface RunView { id: string; started: string; running: boolean; parts: RunPart[]; cost: number | null; asks: { parts: number[]; estimate: number | null; cap: number } | null }
 
 // What a plan's paid parts would cost.
@@ -513,7 +518,8 @@ export function paidOf(plan: PlanResult): { parts: number[]; estimate: number | 
 const KEEP = 20;
 const kept = new Map<string, PlanResult>();
 const wherePaths = new Map<string, Map<string, { path: string; size: number }>>(); // a plan's files, by name, when Leanfare knows where they are
-const runs = new Map<string, { view: RunView; ac: AbortController; tick: () => void; yes: { on: boolean } }>();
+// grades: part n -> its grade's row, so grading a part again replaces its grade
+const runs = new Map<string, { view: RunView; ac: AbortController; tick: () => void; yes: { on: boolean }; grades: Map<number, number> }>();
 export const keptPlan = (id: string) => kept.get(id) ?? null;
 export const forgetPlans = () => { for (const r of runs.values()) r.ac.abort(); kept.clear(); runs.clear(); wherePaths.clear(); };
 const HANDED = 20_000; // characters of an earlier part's answer handed on
@@ -602,7 +608,9 @@ export function startRun(id: string, opts: { paid?: boolean } = {}): RunView {
     asking();
     if (!going.size) finish();
   };
-  runs.set(id, { view, ac, tick, yes });
+  // A part kept from the earlier run keeps its grade (grading it again replaces it); a part that runs again
+  // gives a new answer, graded anew.
+  runs.set(id, { view, ac, tick, yes, grades: new Map([...(had?.grades ?? [])].filter(([n]) => before.has(n))) });
   tick();
   return view;
 }
@@ -625,12 +633,12 @@ async function runPart(p: Part, plan: PlanResult, at: (n: number) => RunPart, si
     const paths = p.files.map((n) => known.get(n)?.path).filter((x): x is string => !!x);
     const folder = commonFolder(paths);
     const r = await runCodex({ n: p.n, title: p.title, task, folder, files: folder ? paths.map((x) => relative(folder, x)) : paths, effort: p.effort }, signal);
-    return { status: "done", answer: r.answer, receipt: `${CODEX_LABEL}, read only, ${secondsText(r.seconds)}. It counts in your ChatGPT plan's Codex use; nothing to pay here.`, model: CODEX_LABEL, cost: 0, seconds: r.seconds };
+    return { status: "done", answer: r.answer, receipt: `${CODEX_LABEL}, read only, ${secondsText(r.seconds)}. It counts in your ChatGPT plan's Codex use; nothing to pay here.`, model: CODEX_LABEL, modelId: CODEX_ID, cost: 0, seconds: r.seconds };
   }
   if (p.kind === "search" && p.model) {
     const r = await runChat([{ role: "user", content: task }], p.model.id, signal, () => {}, `Plan part ${p.n}`, { source: "plan", maxOut: 4096 });
     if (r.status !== "ok") return { status: r.status === "stopped" ? "stopped" : "failed", error: String(r.meta?.error ?? "It failed."), cost: r.meta?.spent ?? r.meta?.cost ?? null, model: r.meta?.model?.label ?? null };
-    return { status: "done", answer: r.text, receipt: `${r.meta.model.label}, ${usd(r.meta.cost ?? null)}.`, model: r.meta.model.label, cost: r.meta.spent ?? r.meta.cost ?? null, seconds: (r.meta.ms ?? 0) / 1000 };
+    return { status: "done", answer: r.text, receipt: `${r.meta.model.label}, ${usd(r.meta.cost ?? null)}.`, model: r.meta.model.label, modelId: r.meta.model.id, cost: r.meta.spent ?? r.meta.cost ?? null, seconds: (r.meta.ms ?? 0) / 1000 };
   }
   // Its files, as many as one hand off takes, in the plan's order; one that cannot be read is left out and named.
   const known = wherePaths.get(plan.id) ?? new Map();
@@ -649,5 +657,25 @@ async function runPart(p: Part, plan: PlanResult, at: (n: number) => RunPart, si
     mine.length > files.length + skipped.length ? `Handed over ${files.length} of its ${mine.length} files (the most one hand off takes is ${DELEGATE_LIMITS.count} files, ${DELEGATE_LIMITS.total / 1048576} MB).` : "",
     skipped.length ? `Left out: ${skipped.slice(0, 3).join("; ")}${skipped.length > 3 ? `, and ${skipped.length - 3} more` : ""}.` : "",
   ].filter(Boolean).join(" ");
-  return { status: "done", answer: d.answer, receipt: `${d.receipt}${notes ? ` ${notes}` : ""}`, model: d.model.label, cost: d.total, seconds: d.seconds };
+  return { status: "done", answer: d.answer, receipt: `${d.receipt}${notes ? ` ${notes}` : ""}`, model: d.model.label, modelId: d.model.id, cost: d.total, seconds: d.seconds };
+}
+
+// ---- grading a part's answer ---------------------------------------------------------------------
+// The manager (or you, in the Plan tab) grades the answer of a part Leanfare ran: the grade goes with the
+// model that answered and the part's kind (grades.ts). Grading a part again replaces its grade.
+const NOT_GRADABLE: Record<RunStatus, string> = { waiting: "it has not run yet", running: "it is still running", done: "no model of Leanfare's answered it", failed: "it failed", stopped: "it was stopped", yours: "it is yours", after_yours: "it runs after yours", blocked: "it waits for a part that is not done", asks: "it waits for your yes" };
+export function gradePart(id: string, n: number, verdict: Verdict, source: string): { text: string; standing: ReturnType<typeof standing> } {
+  const plan = kept.get(id);
+  if (!plan) throw new UserError(404, "This plan is no longer in Leanfare (it was restarted, or 20 newer plans were made).", "plan_gone");
+  const part = plan.parts.find((p) => p.n === n);
+  const held = runs.get(id);
+  const run = held?.view.parts.find((r) => r.n === n);
+  if (!part || !run) throw new UserError(404, `Part ${n} of this plan has not run in Leanfare.`, "no_part");
+  if (run.status !== "done" || !run.modelId) throw new UserError(400, `Part ${n} has no answer to grade (${NOT_GRADABLE[run.status]}).`, "nothing_to_grade");
+  if (!(["read", "write", "reason", "search"] as string[]).includes(part.kind)) throw new UserError(400, `Part ${n} is a ${part.kind} part: only reading, drafting, working out and searching are graded.`, "not_graded");
+  held!.grades.set(n, addGrade({ model: run.modelId, kind: part.kind as GradedKind, effort: part.effort, verdict, source }, held!.grades.get(n) ?? null));
+  run.verdict = verdict;
+  run.gradedBy = source === "you" ? "you" : "manager";
+  const st = standing(run.modelId, part.kind as GradedKind);
+  return { text: standingText(st), standing: st };
 }
