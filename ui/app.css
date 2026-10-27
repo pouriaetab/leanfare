@@ -459,3 +459,36 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
 .trial details ul { margin: 6px 0 0 18px; padding: 0; }
 .trial-share { gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 @media (max-width: 720px) { .trial-table { display: block; overflow-x: auto; } }
+
+/* The plan */
+.tab.plan { flex-direction: column; padding: 18px 22px; overflow-y: auto; }
+.plan-col { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; width: 100%; max-width: 1180px; margin: 0 auto; }
+.plan-col > .card { min-width: 0; }
+.plan-form textarea { width: 100%; resize: vertical; min-height: 64px; font: inherit; }
+.plan-form textarea + textarea { min-height: 40px; margin-top: 6px; font-size: 13px; }
+.plan-form .row { margin-top: 8px; align-items: center; gap: 10px; flex-wrap: wrap; }
+.plan-help { margin: 0; padding-left: 1.2rem; display: grid; gap: 6px; font-size: 13.5px; }
+.plan-table-wrap { overflow-x: auto; }
+.plan-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.plan-table th, .plan-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.plan-table th { font-size: 12px; color: var(--muted); font-weight: 600; white-space: nowrap; }
+.plan-table td:nth-child(1), .plan-table td:nth-child(6), .plan-table td:nth-child(8), .plan-table td:nth-child(9) { white-space: nowrap; }
+.plan-table tr.yours td { background: var(--panel-2); }
+.plan-table td .fine { margin-top: 2px; }
+.plan-table td.st.done { color: var(--good); }
+.plan-table td.st.failed, .plan-table td.st.blocked { color: var(--warn); }
+.plan-sum { margin: 8px 0 4px; font-size: 13.5px; }
+.plan-result .row { gap: 8px; flex-wrap: wrap; margin: 6px 0; }
+.plan-answer { border-top: 1px solid var(--line); padding-top: 6px; margin-top: 6px; }
+.plan-answer summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+/* On a phone each part is a small card: the column names go before each cell. */
+@media (max-width: 760px) {
+  .tab.plan { padding: 12px; }
+  .plan-table thead { display: none; }
+  .plan-table, .plan-table tbody, .plan-table tr, .plan-table td { display: block; width: 100%; }
+  .plan-table tr { border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; margin-bottom: 8px; }
+  .plan-table td { border: none; padding: 2px 0; white-space: normal !important; display: flex; gap: 8px; }
+  .plan-table td::before { content: attr(data-label); color: var(--muted); font-size: 11.5px; min-width: 64px; flex: none; }
+  .plan-table td.part { display: block; }
+  .plan-table td.part::before, .plan-table td:first-child { display: none; }
+}

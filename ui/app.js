@@ -433,6 +433,102 @@
     if (t === "chat") renderChat();
     if (t === "savings") loadSavings();
     if (t === "settings") { renderSettings(); loadLocal(); }
+    if (t === "plan") renderPlan();
+  }
+
+  // ---- plan (planner.ts) ------------------------------------------------------------------------
+  // A task in, a table out: each part, where it runs and on which model, with the time, the tokens
+  // kept out of your plan and the cost. Leanfare's parts can run here at once; the rest is for the
+  // app you work in (Copy for Claude Code hands it the plan).
+  const planBox = { ta: null, rules: null };
+  let planTimer = null;
+  const RUNS_ON = { you: "you", local: "Leanfare, on this computer", free: "Leanfare, free model", paid: "Leanfare, pay per use" };
+  const STATUS = { waiting: "waiting", running: "running…", done: "done", failed: "failed", stopped: "stopped", yours: "yours to do", blocked: "waits for a part that is not done" };
+  function renderPlan() {
+    const el = $("#tab-plan");
+    if (!planBox.ta) {
+      planBox.ta = h("textarea", { rows: "3", "aria-label": "What do you want to do?", placeholder: "What do you want to do? For example: reverse engineer LiteLLM's router and build a smaller one", maxlength: "20000" });
+      planBox.ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); $("#planGo")?.click(); } });
+      planBox.rules = h("input", { type: "checkbox", "aria-label": "Split by rules" });
+      planBox.paths = h("textarea", { rows: "2", "aria-label": "Files or folders", placeholder: "Files or folders it is about (optional), one per line, like ~/code/litellm", maxlength: "20000" });
+    }
+    const go = runButton("Make the plan", async (signal) => {
+      const task = planBox.ta.value.trim();
+      if (!task) { toast("Write the task first.", "error"); return; }
+      clearTimeout(planTimer);
+      S.planRun = null;
+      const paths = planBox.paths.value.split("\n").map((x) => x.trim()).filter(Boolean);
+      S.plan = await api("/api/plan", { body: { task, paths, manager: "Claude Code", split: planBox.rules.checked ? "rules" : "auto" }, signal });
+      renderPlan();
+    }, "btn primary");
+    go.id = "planGo";
+    const form = h("div", { class: "card plan-form" },
+      h("h3", {}, "Plan a task", h("span", { class: "grow" }), h("small", { text: "a table of the parts and their models, before anything starts" })),
+      planBox.ta, planBox.paths,
+      h("div", { class: "row" }, go, h("label", { class: "check" }, planBox.rules, "Split by rules (no model asked)"), h("span", { class: "grow" }),
+        h("small", { class: "fine", text: "A model you ticked splits it: a few cents or less, $0 on free models." })));
+    el.replaceChildren(h("div", { class: "plan-col" }, form, S.plan ? planResultEl(S.plan) : planHelpEl()));
+  }
+  function planHelpEl() {
+    return h("div", { class: "card" }, h("h3", { text: "How it works" }), h("ol", { class: "plan-help" },
+      h("li", { text: "Leanfare splits the task into parts: reading, drafting, working something out, changing code, searching." }),
+      h("li", { text: "For each part it picks where it runs: changes to your project and the hardest judgement stay with the app you work in (your plan); reading and drafting go to the cheapest model that rates well enough, local and free ones first." }),
+      h("li", { text: "Run Leanfare's parts here, at once, or copy the plan into Claude Code, which runs them with Leanfare's delegate tool." }),
+      h("li", { text: "In Claude Code and the other apps, the plan tool gives the same table (Settings, Use Leanfare in your apps)." })));
+  }
+  const tokShort = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(Math.round(n)));
+  function planResultEl(P) {
+    const run = S.planRun?.id === P.id ? S.planRun : null;
+    const st = (n) => run?.parts.find((x) => x.n === n) ?? null;
+    const rows = P.parts.map((p) => {
+      const r = st(p.n);
+      const td = (label, props) => h("td", { "data-label": label, ...props });
+      return h("tr", { class: p.where === "you" ? "yours" : "" },
+        td("#", { text: String(p.n) }),
+        h("td", { "data-label": "Part", class: "part" }, h("b", { text: p.title }), h("div", { class: "fine", text: p.why })),
+        td("Kind", { text: `${p.kind}, ${p.effort}` }),
+        td("Runs on", { text: p.where === "you" ? (P.manager === "you" ? "you" : `you (${P.manager})`) : RUNS_ON[p.where] }),
+        td("Model", { text: p.model?.label ?? "your model" }),
+        td("Time", { text: p.seconds === null ? "—" : secsShort(p.seconds) }),
+        td("Tokens", { text: p.where === "you" ? `~${tokShort(p.tokens)} of your plan` : `~${tokShort(p.tokens)} kept` }),
+        td("Cost", { text: p.where === "you" ? "in your plan" : p.cost === null ? "not known" : money(p.cost) }),
+        td("When", { text: p.needs.length ? `after ${p.needs.join(", ")}` : "now" }),
+        run ? td("Now", { class: "st " + (r?.status ?? ""), text: STATUS[r?.status] ?? "" }) : null);
+    });
+    const t = P.totals;
+    const head = ["#", "Part", "Kind", "Runs on", "Model", "Time", "Tokens", "Cost", "When", ...(run ? ["Now"] : [])];
+    const table = h("div", { class: "plan-table-wrap" }, h("table", { class: "plan-table" }, h("thead", {}, h("tr", {}, ...head.map((x) => h("th", { text: x })))), h("tbody", {}, ...rows)));
+    const sum = h("p", { class: "plan-sum", text: `${t.out} of ${t.parts} parts go to Leanfare, keeping about ${tokShort(t.kept)} tokens out of your plan${t.used ? `; about ${tokShort(t.used)} stay in it` : ""}.${t.seconds !== null ? ` Leanfare's parts take ${secsShort(t.seconds)} done at once.` : ""} Pay per use: ${t.cost === null ? "not known" : money(t.cost)}.` });
+    const lim = P.limits ? h("p", { class: "fine", text: `Your Claude plan now: ${[P.limits.five !== null ? `5 hours ${Math.round(P.limits.five)}% used` : "", P.limits.week !== null ? `week ${Math.round(P.limits.week)}% used` : ""].filter(Boolean).join(", ")}. Near a limit, more parts go to Leanfare.` }) : null;
+    const how = h("p", { class: "fine", text: P.split.note ?? (P.split.model ? `Split by ${P.split.model.label}${typeof P.split.cost === "number" ? `, ${money(P.split.cost)}` : ""}.` : "Split by rules.") });
+    const canRun = t.out > 0 && !run?.running;
+    const buttons = h("div", { class: "row" },
+      canRun ? runButton(run ? "Run again" : "Run Leanfare's parts", async (signal) => { S.planRun = await api("/api/plan/run", { body: { id: P.id }, signal }); renderPlan(); pollPlan(); }, "btn primary small") : null,
+      run?.running ? runButton("Stop", async () => { S.planRun = await api("/api/plan/stop", { body: { id: P.id } }); renderPlan(); toast("Stopped.", "done"); }, "btn small") : null,
+      h("button", { class: "btn small", type: "button", text: "Copy for Claude Code", onclick: () => copyText(forClaudeCode(P)) }),
+      h("button", { class: "btn small", type: "button", text: "Copy the table", onclick: () => copyText(P.table) }));
+    const answers = run ? run.parts.filter((r) => r.answer || r.error).map((r) => h("details", { class: "plan-answer", open: r.n === run.parts.filter((x) => x.answer).at(-1)?.n },
+      h("summary", { text: `Part ${r.n} · ${r.title} · ${STATUS[r.status]}${r.model ? ` · ${r.model}` : ""}${r.cost !== null && r.cost !== undefined ? ` · ${money(r.cost)}` : ""}${r.seconds ? ` · ${secsShort(r.seconds)}` : ""}` }),
+      r.answer ? (() => { const md = h("div", { class: "md" }); md.innerHTML = markdown(r.answer); return md; })() : null,
+      r.error ? h("p", { class: "pl-note", text: r.error }) : null,
+      r.receipt ? h("p", { class: "fine", text: r.receipt }) : null)) : [];
+    return h("div", { class: "card plan-result", id: "planResult" }, h("h3", {}, "The plan", h("span", { class: "grow" }), h("small", { text: P.task.length > 80 ? P.task.slice(0, 80) + "…" : P.task })),
+      table, sum, lim, buttons, how, ...answers);
+  }
+  function pollPlan() {
+    clearTimeout(planTimer);
+    if (!S.planRun?.running) return;
+    planTimer = setTimeout(async () => {
+      try { S.planRun = await api(`/api/plan/run?id=${encodeURIComponent(S.planRun.id)}`); } catch { return; }
+      if (S.tab === "plan") renderPlan();
+      if (S.planRun.running) pollPlan(); else toast("Leanfare's parts are done.", "done");
+    }, 1500);
+  }
+  // What Claude Code needs to run the plan with Leanfare's tools: the task, the table, and how.
+  function forClaudeCode(P) {
+    return [`Task: ${P.task}`, "", "Leanfare made this plan for it (its plan tool gives the same):", "", P.table, "",
+      P.next,
+      "For each part on Leanfare, call Leanfare's delegate tool with that part's task, kind and effort, and the files it needs; run the parts that do not wait for each other in the same turn. Do the parts marked you yourself, then put it all together."].join("\n");
   }
 
   // ---- chat ----------------------------------------------------------------------------------

@@ -137,7 +137,7 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
     if (typeof args?.task !== "string" || !args.task.trim()) return failure("plan needs a task.");
     const files = sizesForPlan(args.files, args.folder);
     if (typeof files === "string") return failure(files);
-    const { j } = await call("/api/plan", { method: "POST", json: { task: args.task, files, manager: client, split: args.split === "rules" ? "rules" : "auto" } }, signal);
+    const { j } = await call("/api/plan", { method: "POST", json: { task: args.task, files: files.map((f) => ({ name: f.name, size: f.size })), manager: client, split: args.split === "rules" ? "rules" : "auto" } }, signal);
     const note = j.split?.note ? `\n\n(${j.split.note})` : j.split?.model ? `\n\n(Split by ${j.split.model.label}${typeof j.split.cost === "number" ? `, ${usd(j.split.cost)}` : ""}.)` : "";
     return text(`${j.table}\n\n${j.next}${note}`, {
       parts: j.parts.map((p: any) => ({ n: p.n, title: p.title, kind: p.kind, effort: p.effort, needs: p.needs, runs_on: p.where, model: p.model?.id ?? null, seconds: p.seconds, tokens: p.tokens, cost_usd: p.cost, files: p.files, task: p.task })),

@@ -161,7 +161,7 @@ export function readForDelegate(list: unknown, folderGiven?: unknown): DelegateF
 export const PLAN_FILES = { list: 200, walk: 5000, depth: 6 };
 const SKIP_DIRS = new Set(["node_modules", "dist", "build", "target", "vendor", "out", "coverage", "__pycache__", "venv", "env"]);
 const BINARY = /\.(png|jpe?g|gif|webp|bmp|ico|icns|tiff?|psd|pdf|zip|gz|tgz|bz2|xz|zst|7z|rar|jar|war|so|dylib|dll|exe|bin|o|a|class|pyc|wasm|woff2?|ttf|otf|eot|mp3|mp4|mov|avi|mkv|wav|flac|ogg|sqlite|db|lock)$/i;
-export function sizesForPlan(list: unknown, folderGiven?: unknown): { name: string; size: number }[] | string {
+export function sizesForPlan(list: unknown, folderGiven?: unknown): { name: string; size: number; path?: string }[] | string {
   if (list === undefined || list === null) return [];
   if (!Array.isArray(list) || list.some((p) => typeof p !== "string" || !p.trim())) return "files must be a list of file or folder paths.";
   if (list.length > PLAN_FILES.list) return `At most ${PLAN_FILES.list} paths go with one plan; name folders instead.`;
@@ -172,9 +172,9 @@ export function sizesForPlan(list: unknown, folderGiven?: unknown): { name: stri
     try { if (!statSync(f).isDirectory()) return `${folderGiven} is not a folder.`; } catch { return `The folder ${folderGiven} does not exist.`; }
     folder = realpathSync(f);
   }
-  const out = new Map<string, { name: string; size: number }>();
+  const out = new Map<string, { name: string; size: number; path?: string }>();
   let walked = 0;
-  const add = (path: string, size: number) => { if (!out.has(path)) out.set(path, { name: shownName(path, folder), size }); };
+  const add = (path: string, size: number) => { if (!out.has(path)) out.set(path, { name: shownName(path, folder), size, path }); };
   const walk = (dir: string, depth: number) => {
     let names: string[] = [];
     try { names = readdirSync(dir).sort(); } catch { return; }
