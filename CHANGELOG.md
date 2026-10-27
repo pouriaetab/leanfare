@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.0
+
+- Install with one line: Leanfare is now one file for macOS, Linux and Windows, with an installer that checks the download against the release's checksums. Leanfare says when a new version is out (Settings can turn that off).
+- Use it in your apps: one press adds Leanfare's tools to Claude Desktop, Claude Code, Cursor, Codex, Gemini CLI, Windsurf, VS Code and LM Studio, changing only Leanfare's own entry. In Terminal: `leanfare apps`.
+- Set up without typing: paste any key and Leanfare knows whose it is; keys your login shell exports reach the Mac app too; Find my keys offers the keys in other AI tools' files on your computer, each used only after you tick it; model apps running on your computer (LM Studio, Jan, llama.cpp, vLLM, LocalAI, KoboldCpp, GPT4All, Lemonade) are found on their own; and any provider that speaks OpenAI's format can be added, from the list of known providers or by its address.
+- New providers: Perplexity (its own cost, search fee included), Groq, Cerebras, Together AI and Fireworks.
+- Your subscriptions, apart from pay per use: Claude, ChatGPT, Perplexity, Google AI, Copilot and Cursor plans with their limits. ChatGPT's plan is read from Codex's logs, including its compressed and archived sessions.
+- Speed: every estimate shows its time, measured from each model's own answers. At the same quality, choose the cheapest, the cheapest within a time, or the fastest, in Settings, beside the message box, per request (`x-leanfare-speed`) or per hand off.
+- The trial: ten questions with known answers at three efforts say how well the delegate does on your models, and which effort Claude can rely on. In the app, in Terminal (`leanfare trial`) and as an MCP tool, with results you can share.
+- The estimate tool names the cheapest and the fastest choice at the same quality; the delegate's receipt says how long it took.
+
+Fixed from 0.3.0:
+
+- The delegate answers in the form the task asks for (names, numbers or text), not where to find them; the trial on low effort found this.
+- On the Savings page, a session's share of the week reads "under 0.1%" when it is that small, not 0.0%.
+- `leanfare stop` and `leanfare status` act only on the Leanfare of their own data folder. With another copy running (the Mac app, for example), stop could end it.
+
 ## 0.3.0
 
 - Connect OpenRouter: sign in on OpenRouter's page and Leanfare gets a key, with nothing to copy. Settings shows the credit left.
