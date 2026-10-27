@@ -9,7 +9,7 @@ import { closeApp, openApp as open } from "./dom";
 let url = "";
 beforeAll(async () => { url = (await boot()).url; });
 beforeEach(async () => { forgetPlans(); await reset({ ticked: ALL_TICKED }); await keys("openai", "google", "deepseek"); outgoing.length = 0; });
-afterEach(() => { fake.hooks.answer = null; closeApp(); });
+afterEach(async () => { fake.hooks.answer = null; await closeApp(); });
 async function waitFor(ok: () => boolean, ms = 8000) { for (let i = 0; i < ms / 50 && !ok(); i++) await Bun.sleep(50); }
 const buttons = (doc: any, within: string) => (doc.querySelector(within) ? [...doc.querySelector(within).querySelectorAll("button")] : []) as any[];
 const press = (doc: any, text: string, within: string) => buttons(doc, within).find((b) => b.textContent === text)?.click();
