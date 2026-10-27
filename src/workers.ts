@@ -12,6 +12,7 @@
 import { accessSync, chmodSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { keepingFolderTimes } from "./foldertime";
 import { claudeSettingsFile, readClaudeSettings, writeClaudeSettings } from "./meter";
 import { selfCommand } from "./self";
 import { quote } from "./statusline";
@@ -89,15 +90,17 @@ function target(file: string): string {
 }
 function writeAtomic(file: string, text: string) {
   const to = target(file);
-  mkdirSync(dirname(to), { recursive: true });
-  let mode: number | undefined;
-  try { mode = statSync(to).mode & 0o777; } catch {}
-  const tmp = `${to}.leanfare-${process.pid}`;
-  try {
-    writeFileSync(tmp, text, mode !== undefined ? { mode } : undefined);
-    if (mode !== undefined) chmodSync(tmp, mode);
-    renameSync(tmp, to);
-  } catch (e) { try { unlinkSync(tmp); } catch {} throw e; }
+  keepingFolderTimes([file, to], () => { // Leanfare's write is not use of the app (found.ts)
+    mkdirSync(dirname(to), { recursive: true });
+    let mode: number | undefined;
+    try { mode = statSync(to).mode & 0o777; } catch {}
+    const tmp = `${to}.leanfare-${process.pid}`;
+    try {
+      writeFileSync(tmp, text, mode !== undefined ? { mode } : undefined);
+      if (mode !== undefined) chmodSync(tmp, mode);
+      renameSync(tmp, to);
+    } catch (e) { try { unlinkSync(tmp); } catch {} throw e; }
+  });
 }
 // Whether Leanfare can write a file there, asked before anything changes.
 function writable(file: string): string | null {
@@ -182,7 +185,7 @@ export function setAuto(id: string, on: boolean): AutoView {
     undo.push(() => { if (before !== null) writeAtomic(f.rule, before); });
     if (f.agent) {
       if (on) writeAtomic(f.agent, WORKER);
-      else if (ourWorker(f.agent)) unlinkSync(f.agent);
+      else if (ourWorker(f.agent)) { const agent = f.agent; keepingFolderTimes([agent], () => unlinkSync(agent)); }
     }
   } catch (e) {
     for (const u of undo.reverse()) { try { u(); } catch {} }

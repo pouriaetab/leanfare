@@ -869,6 +869,8 @@ describe("The Plan tab", () => {
     expect(t).toContain("you (Claude Code)");
     expect(t).toContain("go to Leanfare, keeping about");
     expect(t).toContain("Split by rules.");
+    expect(t).toContain("One of Leanfare's parts waits for yours (see When)."); // part 5 reviews your changes
+    expect(t).toContain("the ones after yours take");
     expect(doc.querySelector("#planResult tbody tr.yours")).toBeTruthy(); // the parts that stay with you are marked
     expect(doc.querySelector("#planResult td[data-label='Model']")).toBeTruthy(); // the phone shows each cell with its name
     expect(bad(doc)).toBe(false);
@@ -877,6 +879,9 @@ describe("The Plan tab", () => {
     t = doc.querySelector("#planResult").textContent;
     expect(t).toContain("done");
     expect(t).toContain("yours to do");
+    expect(t).toContain("after yours");
+    const labels = [...doc.querySelectorAll("#planResult button")].map((b: any) => b.textContent);
+    expect(labels.some((x: string) => x.startsWith("Run"))).toBe(false); // what is left waits for yours: nothing more to run here
     expect(doc.querySelectorAll("#planResult .plan-answer").length).toBeGreaterThan(0);
     expect(doc.querySelector("#planResult .plan-answer .md")).toBeTruthy();
     expect(bad(doc)).toBe(false);

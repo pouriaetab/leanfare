@@ -9,7 +9,6 @@
 //  - a command line tool or an editor's add-on (a folder in your home folder): when the folder was
 //    made, and the newest time of what is directly in it.
 // Claude Code and Codex are not here: their log files say more (plans.ts).
-import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -36,18 +35,19 @@ interface AppDef {
   support?: () => string[]; // its own folders in ~/Library (Mac): their newest time says when it was last used
   dirs?: () => string[]; // folders that mean it is here (any computer)
   prefix?: () => { dir: string; starts: string[] }; // an editor's add-on: a folder whose name starts so
+  ours?: string[]; // files in its folders that Leanfare itself writes (In your apps): they say nothing of your use
 }
 
 export const FOUND_APPS: AppDef[] = [
   { id: "claude-app", name: "Claude app", provider: "claude", bundles: ["Claude.app"], support: () => [lib("Application Support", "Claude")],
-    dirs: () => (process.platform === "win32" ? [join(localAppData(), "AnthropicClaude")] : []) },
+    dirs: () => (process.platform === "win32" ? [join(localAppData(), "AnthropicClaude")] : []), ours: ["claude_desktop_config.json"] },
   { id: "chatgpt-app", name: "ChatGPT app", provider: "chatgpt", bundles: ["ChatGPT.app"], support: () => [lib("Application Support", "com.openai.chat")] },
   // Two Mac builds: the App Store's (ai.perplexity.mac, kept in a container) and the download (ai.perplexity.macv3).
   { id: "perplexity-app", name: "Perplexity app", provider: "perplexity", bundles: ["Perplexity.app"],
     support: () => [lib("Containers", "ai.perplexity.mac"), lib("Application Support", "ai.perplexity.macv3"), lib("Application Support", "Perplexity")] },
   { id: "cursor", name: "Cursor", provider: "cursor", bundles: ["Cursor.app"], support: () => [lib("Application Support", "Cursor")],
-    dirs: () => [join(home(), ".cursor"), ...(process.platform === "win32" ? [join(localAppData(), "Programs", "cursor")] : [])] },
-  { id: "gemini-cli", name: "Gemini CLI", provider: "google", dirs: () => [join(home(), ".gemini")] },
+    dirs: () => [join(home(), ".cursor"), ...(process.platform === "win32" ? [join(localAppData(), "Programs", "cursor")] : [])], ours: ["mcp.json"] },
+  { id: "gemini-cli", name: "Gemini CLI", provider: "google", dirs: () => [join(home(), ".gemini")], ours: ["settings.json", "GEMINI.md"] },
   { id: "copilot", name: "GitHub Copilot in VS Code", provider: "copilot", prefix: () => ({ dir: join(home(), ".vscode", "extensions"), starts: ["github.copilot-"] }) },
   { id: "grok-build", name: "Grok Build", provider: "grok", dirs: () => [join(home(), ".grok")] },
 ];
@@ -62,13 +62,22 @@ const times = (p: string): { born: number | null; changed: number } | null => {
     return { born, changed: s.mtimeMs };
   } catch { return null; }
 };
-// A folder's newest time: its own, or of what is directly in it.
-function newest(dir: string): number | null {
+// A folder's newest time: of what is directly in it, leaving out what Leanfare itself writes there (its
+// entry in the app's settings, its backups) and the folder's own time (it changes when one is made).
+// A folder with nothing else in it: its own time.
+const LEANFARE_FILE = /\.leanfare(-backup|-\d+)?$/;
+function newest(dir: string, ours: string[] = []): number | null {
   const t = times(dir);
   if (!t) return null;
-  let n = t.changed;
-  try { for (const name of readdirSync(dir)) { const c = times(join(dir, name)); if (c && c.changed > n) n = c.changed; } } catch {}
-  return n;
+  let n: number | null = null;
+  try {
+    for (const name of readdirSync(dir)) {
+      if (ours.includes(name) || LEANFARE_FILE.test(name) || name.includes(".leanfare-")) continue;
+      const c = times(join(dir, name));
+      if (c && (n === null || c.changed > n)) n = c.changed;
+    }
+  } catch {}
+  return n ?? t.changed;
 }
 const earliest = (xs: (number | null)[]) => { const v = xs.filter((x): x is number => x !== null && x > 0); return v.length ? Math.min(...v) : null; };
 const latest = (xs: (number | null)[]) => { const v = xs.filter((x): x is number => x !== null && x > 0); return v.length ? Math.max(...v) : null; };
@@ -81,21 +90,26 @@ export function mdlsDate(v: string | undefined): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
-// Spotlight's record of a Mac app: when it was added and last opened. Null where there is none.
-export function spotlight(path: string): { added: number | null; used: number | null } {
-  if (!mac()) return { added: null, used: null };
+// Spotlight's record of a Mac app: when it was added and last opened. Null where there is none. It runs
+// beside the server (never holding it up), and gives up after 3 seconds.
+export async function spotlight(path: string): Promise<{ added: number | null; used: number | null }> {
+  const none = { added: null, used: null };
+  if (!mac()) return none;
   try {
-    const r = spawnSync("mdls", ["-raw", "-name", "kMDItemDateAdded", "-name", "kMDItemLastUsedDate", path], { encoding: "utf8", timeout: 3000 });
-    if (r.status !== 0 || typeof r.stdout !== "string") return { added: null, used: null };
-    const [a, u] = r.stdout.split("\0");
+    const p = Bun.spawn(["mdls", "-raw", "-name", "kMDItemDateAdded", "-name", "kMDItemLastUsedDate", path], { stdout: "pipe", stderr: "ignore", stdin: "ignore", env: process.env }); // found on today's PATH
+    const timer = setTimeout(() => p.kill(), 3000);
+    const out = await new Response(p.stdout as ReadableStream).text();
+    clearTimeout(timer);
+    if ((await p.exited) !== 0) return none;
+    const [a, u] = out.split("\0");
     return { added: mdlsDate(a), used: mdlsDate(u) };
-  } catch { return { added: null, used: null }; }
+  } catch { return none; }
 }
 
 // The tests put their own Spotlight here (an app's birth time cannot be set).
-export const hooks = { spotlight };
+export const hooks: { spotlight: (path: string) => Promise<{ added: number | null; used: number | null }> | { added: number | null; used: number | null } } = { spotlight };
 
-function look(a: AppDef): FoundApp | null {
+async function look(a: AppDef): Promise<FoundApp | null> {
   const firsts: (number | null)[] = [], lasts: (number | null)[] = [];
   let here = false;
   for (const folder of a.bundles ? appFolders() : []) for (const b of a.bundles!) {
@@ -103,19 +117,19 @@ function look(a: AppDef): FoundApp | null {
     const t = times(p);
     if (!t) continue;
     here = true;
-    const sp = hooks.spotlight(p);
+    const sp = await hooks.spotlight(p);
     // An app copied from a download keeps the time it was built, so its own time says nothing of its use.
     firsts.push(sp.added ?? t.born ?? t.changed);
     lasts.push(sp.used);
   }
   // Its own folders in ~/Library: made when it first ran, changed whenever it runs.
-  if (here) for (const d of a.support?.() ?? []) { const t = times(d); if (t) { firsts.push(t.born); lasts.push(newest(d)); } }
+  if (here) for (const d of a.support?.() ?? []) { const t = times(d); if (t) { firsts.push(t.born); lasts.push(newest(d, a.ours)); } }
   for (const d of a.dirs?.() ?? []) {
     const t = times(d);
     if (!t) continue;
     here = true;
     firsts.push(t.born ?? t.changed);
-    lasts.push(newest(d));
+    lasts.push(newest(d, a.ours));
   }
   const pre = a.prefix?.();
   if (pre && existsSync(pre.dir)) {
@@ -137,15 +151,25 @@ function look(a: AppDef): FoundApp | null {
   return { id: a.id, name: a.name, provider: a.provider, first: monthOf(first), last: monthOf(last) };
 }
 
-// Looked for at most every ten minutes: mdls takes a moment per app.
+// Looked for at most every ten minutes (mdls takes a moment per app), one look at a time.
 const FRESH_MS = 10 * 60_000;
 let cache: { at: number; apps: FoundApp[] } | null = null;
+let looking: Promise<FoundApp[]> | null = null;
 export const forgetFound = () => { cache = null; };
-export function foundApps(force = false): FoundApp[] {
-  if (!force && cache && Date.now() - cache.at < FRESH_MS) return cache.apps;
-  const apps = FOUND_APPS.map(look).filter((x): x is FoundApp => !!x);
-  cache = { at: Date.now(), apps };
-  return apps;
+export function lookForApps(force = false): Promise<FoundApp[]> {
+  if (!force && cache && Date.now() - cache.at < FRESH_MS) return Promise.resolve(cache.apps);
+  if (looking) return looking;
+  looking = Promise.all(FOUND_APPS.map(look)).then((list) => {
+    const apps = list.filter((x): x is FoundApp => !!x);
+    cache = { at: Date.now(), apps };
+    return apps;
+  }).finally(() => { looking = null; });
+  return looking;
+}
+// What the last look found, at once (Savings looks first; the menu bar takes what is there).
+export function foundApps(): FoundApp[] {
+  if (!cache || Date.now() - cache.at >= FRESH_MS) lookForApps().catch(() => {});
+  return cache?.apps ?? [];
 }
 
 // Whether an app was in use in a month: from the month it came to the month it was last used.

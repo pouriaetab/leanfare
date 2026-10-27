@@ -136,9 +136,13 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
   if ("atLimit" in p) { if (p.atLimit !== "cheapest" && p.atLimit !== "stop") return { error: "atLimit must be cheapest or stop" }; out.atLimit = p.atLimit; }
   if ("history" in p) out.history = !!p.history;
   if ("updateCheck" in p) out.updateCheck = !!p.updateCheck;
-  if ("showValue" in p) out.showValue = !!p.showValue;
-  if ("brief" in p) out.brief = !!p.brief;
+  for (const k of ["showValue", "brief"] as const) {
+    if (!(k in p)) continue;
+    if (typeof p[k] !== "boolean") return { error: `${k} must be true or false` };
+    out[k] = p[k];
+  }
   if ("planAuto" in p) {
+    if (typeof p.planAuto === "boolean") return { error: "planAuto must be a dollar amount from 0 to 1,000" };
     const v = p.planAuto === null || p.planAuto === "" ? 0 : Number(p.planAuto);
     if (!Number.isFinite(v) || v < 0 || v > 1000) return { error: "planAuto must be a dollar amount from 0 to 1,000" };
     out.planAuto = Math.round(v * 100) / 100;
