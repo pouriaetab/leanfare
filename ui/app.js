@@ -374,8 +374,10 @@
   function keepInputs(container, draw) {
     const kept = {};
     let focused = null;
-    const sel = "input[data-keep], textarea[data-keep]";
-    container?.querySelectorAll(sel).forEach((i) => { if (i.value !== i.defaultValue) kept[i.dataset.keep] = i.value; if (document.activeElement === i) focused = i.dataset.keep; });
+    const sel = "input[data-keep], textarea[data-keep], select[data-keep]";
+    // A box changed from what it was drawn with (a select keeps that in data-start).
+    const changed = (i) => (i.tagName === "SELECT" ? i.value !== (i.dataset.start ?? "") : i.value !== i.defaultValue);
+    container?.querySelectorAll(sel).forEach((i) => { if (changed(i)) kept[i.dataset.keep] = i.value; if (document.activeElement === i) focused = i.dataset.keep; });
     draw();
     container?.querySelectorAll(sel).forEach((i) => { if (i.dataset.keep in kept) i.value = kept[i.dataset.keep]; if (focused === i.dataset.keep) i.focus(); });
   }
@@ -443,7 +445,7 @@
   const planBox = { ta: null, rules: null };
   let planTimer = null;
   const RUNS_ON = { you: "you", local: "Leanfare, on this computer", free: "Leanfare, free model", paid: "Leanfare, pay per use" };
-  const STATUS = { waiting: "waiting", running: "running…", done: "done", failed: "failed", stopped: "stopped", yours: "yours to do", blocked: "waits for a part that is not done", asks: "paid: waits for a yes" };
+  const STATUS = { waiting: "waiting", running: "running…", done: "done", failed: "failed", stopped: "stopped", yours: "yours to do", after_yours: "after yours", blocked: "waits for a part that is not done", asks: "paid: waits for a yes" };
   function renderPlan() {
     const el = $("#tab-plan");
     if (!planBox.ta) {
@@ -456,6 +458,7 @@
       const task = planBox.ta.value.trim();
       if (!task) { toast("Write the task first.", "error"); return; }
       clearTimeout(planTimer);
+      if (S.planRun?.running) { try { await api("/api/plan/stop", { body: { id: S.planRun.id } }); toast("Stopped the parts of the last plan.", "done"); } catch {} }
       S.planRun = null;
       const paths = planBox.paths.value.split("\n").map((x) => x.trim()).filter(Boolean);
       S.plan = await api("/api/plan", { body: { task, paths, manager: "Claude Code", split: planBox.rules.checked ? "rules" : "auto" }, signal });
@@ -498,16 +501,18 @@
     const t = P.totals;
     const head = ["#", "Part", "Kind", "Runs on", "Model", "Time", "Tokens", "Cost", "When", ...(run ? ["Now"] : [])];
     const table = h("div", { class: "plan-table-wrap" }, h("table", { class: "plan-table" }, h("thead", {}, h("tr", {}, ...head.map((x) => h("th", { text: x })))), h("tbody", {}, ...rows)));
-    const sum = h("p", { class: "plan-sum", text: `${t.out} of ${t.parts} parts go to Leanfare, keeping about ${tokShort(t.kept)} tokens out of your plan${t.used ? `; about ${tokShort(t.used)} stay in it` : ""}.${t.seconds !== null ? ` Leanfare's parts take ${secsShort(t.seconds)} done at once.` : ""} Pay per use: ${t.cost === null ? "not known" : money(t.cost)}.` });
+    const time = [t.seconds !== null ? `Leanfare's parts take ${secsShort(t.seconds)} done at once` : "", t.after !== null && t.after !== undefined ? `${t.seconds !== null ? "the ones after yours take" : "Leanfare's parts wait for yours, then take"} ${secsShort(t.after)}${t.seconds !== null ? " once yours are done" : ""}` : ""].filter(Boolean).join("; ");
+    const sum = h("p", { class: "plan-sum", text: `${t.out} of ${t.parts} parts go to Leanfare, keeping about ${tokShort(t.kept)} tokens out of your plan${t.used ? `; about ${tokShort(t.used)} stay in it` : ""}.${time ? ` ${time}.` : ""} Pay per use: ${t.cost === null ? "not known" : money(t.cost)}.` });
     const lim = P.limits ? h("p", { class: "fine", text: `Your Claude plan now: ${[P.limits.five !== null ? `5 hours ${Math.round(P.limits.five)}% used` : "", P.limits.week !== null ? `week ${Math.round(P.limits.week)}% used` : ""].filter(Boolean).join(", ")}. Near a limit, more parts go to Leanfare.` }) : null;
     const how = h("p", { class: "fine", text: P.split.note ?? (P.split.model ? `Split by ${P.split.model.label}${typeof P.split.cost === "number" ? `, ${money(P.split.cost)}` : ""}.` : "Split by rules.") });
     // Something of Leanfare's left to run: never run, or ended without an answer.
     const left = !run || P.parts.some((p) => p.where !== "you" && ["waiting", "asks", "failed", "stopped", "blocked"].includes(st(p.n)?.status));
-    const canRun = t.out > 0 && !run?.running && left;
+    const canRun = t.out - (t.later ?? 0) > 0 && !run?.running && left; // the parts after yours run in your app, once yours are done
+    const laterNote = t.later ? h("p", { class: "fine", text: `${t.later === 1 ? "One of Leanfare's parts waits" : `${t.later} of Leanfare's parts wait`} for yours (see When). Your app hands ${t.later === 1 ? "it" : "them"} to Leanfare once yours are done: Copy for Claude Code gives it the plan.` }) : null;
     const buttons = h("div", { class: "row" },
       // Pressing Run is the yes for the paid parts too (their cost is in the table); the monthly budget still holds.
-      canRun ? runButton(run ? "Run the rest" : "Run Leanfare's parts", async (signal) => { S.planRun = await api("/api/plan/run", { body: { id: P.id, paid: true }, signal }); renderPlan(); pollPlan(); }, "btn primary small") : null,
-      run?.running ? runButton("Stop", async () => { S.planRun = await api("/api/plan/stop", { body: { id: P.id } }); renderPlan(); toast("Stopped.", "done"); }, "btn small") : null,
+      canRun ? runButton(run ? "Run the rest" : "Run Leanfare's parts", async (signal) => { S.planRun = await api("/api/plan/run", { body: { id: P.id, paid: true }, signal }); redrawPlanResult(); pollPlan(); }, "btn primary small") : null,
+      run?.running ? runButton("Stop", async () => { clearTimeout(planTimer); S.planRun = await api("/api/plan/stop", { body: { id: P.id } }); redrawPlanResult(); toast("Stopped.", "done"); if (S.planRun.running) pollPlan(); }, "btn small") : null,
       h("button", { class: "btn small", type: "button", text: "Copy for Claude Code", onclick: () => copyText(forClaudeCode(P)) }),
       h("button", { class: "btn small", type: "button", text: "Copy the table", onclick: () => copyText(P.table) }));
     const answers = run ? run.parts.filter((r) => r.answer || r.error).map((r) => h("details", { class: "plan-answer", open: r.n === run.parts.filter((x) => x.answer).at(-1)?.n },
@@ -516,15 +521,25 @@
       r.error ? h("p", { class: "pl-note", text: r.error }) : null,
       r.receipt ? h("p", { class: "fine", text: r.receipt }) : null)) : [];
     return h("div", { class: "card plan-result", id: "planResult" }, h("h3", {}, "The plan", h("span", { class: "grow" }), h("small", { text: P.task.length > 80 ? P.task.slice(0, 80) + "…" : P.task })),
-      table, sum, lim, buttons, how, ...answers);
+      table, sum, laterNote, lim, buttons, how, ...answers);
+  }
+  // Only the plan's card is drawn again while its parts run: the boxes above keep what is typed and their focus.
+  function redrawPlanResult() {
+    const old = $("#planResult");
+    if (old && S.plan) old.replaceWith(planResultEl(S.plan)); else renderPlan();
   }
   function pollPlan() {
     clearTimeout(planTimer);
     if (!S.planRun?.running) return;
+    const id = S.planRun.id;
     planTimer = setTimeout(async () => {
-      try { S.planRun = await api(`/api/plan/run?id=${encodeURIComponent(S.planRun.id)}`); } catch { return; }
-      if (S.tab === "plan") renderPlan();
-      if (S.planRun.running) pollPlan(); else toast("Leanfare's parts are done.", "done");
+      let v;
+      try { v = await api(`/api/plan/run?id=${encodeURIComponent(id)}`); } catch { return; }
+      if (S.planRun?.id !== id) return; // another plan since, or stopped
+      S.planRun = v;
+      if (S.tab === "plan") redrawPlanResult();
+      if (v.running) pollPlan();
+      else if (!v.parts.some((p) => p.status === "stopped")) toast("Leanfare's parts are done.", "done");
     }, 1500);
   }
   // What Claude Code needs to run the plan with Leanfare's tools: the task, the table, and how.
@@ -1429,6 +1444,7 @@
     if (value && !ms.includes(value)) ms.push(value); // a month from before the list still shows as it is
     const sel = h("select", { "aria-label": label, "data-keep": label }, h("option", { value: "", text: none }), ...ms.map((m) => h("option", { value: m, text: monthLabel(m) })));
     sel.value = value ?? "";
+    sel.dataset.start = value ?? ""; // what it was drawn with: a choice made since survives a redraw (keepInputs)
     return sel;
   }
   // The plan of an app Leanfare found: picked in place, with the month it started (the month the app came, at first).
@@ -1478,7 +1494,7 @@
     if (!v.found) return tile(bars, limits, h("p", { class: "pl-note", text: `No ${v.logs} log files found on this computer.` }));
     if (!v.tokens) return tile(bars, codex, limits, h("p", { class: "pl-note", text: `No ${v.logs} use in this month's log files.` }));
     const tok = h("div", { class: "pl-tok" }, h("span", { class: "big", text: bigTok(v.tokens) }),
-      h("span", { class: "sub", text: `tokens this month in ${v.logs}: ${bigTok(v.cached)} read from the cache, ${bigTok(v.input)} in, ${bigTok(v.output)} out` }));
+      h("span", { class: "sub", text: `tokens ${!S.month || S.month === lastMonths(1)[0] ? "this month" : `in ${monthLabel(v.month)}`} in ${v.logs}: ${bigTok(v.cached)} read from the cache, ${bigTok(v.input)} in, ${bigTok(v.output)} out` }));
     const value = show ? h("div", { class: "pl-val" }, h("span", { class: "sub", text: `If this were pay per use: ${money(v.value)} at API prices` }),
       v.ratio !== null ? h("span", { class: "chip " + (v.ratio >= 1 ? "good" : ""), text: ratioText(v.ratio) }) : null) : null;
     const models = [...v.models].sort((a, b) => b.tokens - a.tokens);
@@ -1911,7 +1927,7 @@
       const before = S.st?.settings.instructions ?? "";
       S.st = await api("/api/settings", { body: patch });
       if ("plans" in patch) S.plans = null; // the Savings card is read again with the new plan
-      if ("showValue" in patch && S.savings) renderSavings();
+      if ("showValue" in patch && S.savings) { S.plans = null; renderSavings(); loadPlans(false).catch(() => {}); }
       followDefault(before);
       renderShell(); renderSettings(); renderComposerBar();
       if (done) toast(done, "done");
@@ -2201,9 +2217,9 @@
       a.note ? h("div", { class: "note", text: a.note }) : null,
       a.manual && a.status !== "added" ? h("div", { class: "note manual" }, "Or in Terminal: ", h("code", { text: a.manual }), " ", copyBtn(a.manual)) : null,
       // Plan by itself (workers.ts): once Leanfare's tools are in the app.
-      a.auto && a.status === "added" ? h("div", { class: "row auto-row" },
-        h("span", { class: "grow note", text: `${a.auto.what}${a.auto.on ? " · on" : ""}.` }),
-        runButton(a.auto.on ? "Turn off" : "Turn on", (signal) => toggleAuto(a, !a.auto.on, signal), a.auto.on ? "btn small" : "btn small primary")) : null);
+      a.auto && (a.status === "added" || a.auto.on || a.auto.partly) ? h("div", { class: "row auto-row" },
+        h("span", { class: "grow note", text: `${a.auto.what}${a.auto.on ? " · on" : a.auto.partly ? " · partly on" : ""}.` }),
+        runButton(a.auto.on || a.auto.partly ? "Turn off" : "Turn on", (signal) => toggleAuto(a, !(a.auto.on || a.auto.partly), signal), a.auto.on || a.auto.partly ? "btn small" : "btn small primary")) : null);
     return h("div", { class: "setting apps" }, h("h3", { text: "Use Leanfare in your apps" }),
       h("p", { text: "Adds Leanfare's tools (plan, delegate, ask, spend, models, estimate, trial) to the AI apps you already use, so they work as usual with Leanfare on top. Leanfare changes only its own entry in each app's settings, and keeps a copy of the file as it was." }),
       S.apps?.loading ? h("p", { class: "note", text: "Looking for the AI apps on this computer…" }) : null,
