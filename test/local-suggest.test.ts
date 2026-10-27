@@ -105,9 +105,23 @@ describe("in a plan", () => {
   });
   test("a part that stays with you only because Leanfare has no model for it: the local model is named", async () => {
     computer(64 * GB);
-    const r = await ui(url, "/api/plan", { task: "Find the errors in these logs and list them", files: [{ name: "logs/app.log", size: 40_000 }], manager: "Claude Code", split: "rules" });
+    fake.ollama.models = []; // nothing on this computer yet, and no key: no model of Leanfare's for any part
+    await ui(url, "/api/refresh", { what: "ollama" });
+    const r = await ui(url, "/api/plan", { task: "Find the errors in these logs and list them", files: [{ name: "logs/app.log", size: 20_000 }], manager: "Claude Code", split: "rules" });
     expect(r.json.parts.some((p: any) => p.where === "you" && p.why.startsWith("Leanfare has no model"))).toBe(true);
     expect(r.json.local?.name).toBe("gemma4:31b-it-qat");
+  });
+  test("a part too big for any model on this computer (16k tokens at most): no local model is named for it", async () => {
+    computer(64 * GB);
+    await keys("openai");
+    fake.hooks.answer = (prompt) => (prompt.includes("The person works in") ? JSON.stringify({ parts: [
+      { title: "Read the log", kind: "read", effort: "low", needs: [], size: "large", task: "Find the errors in the log." },
+      { title: "Fix the cause", kind: "code", effort: "high", needs: [1], size: "small", task: "Fix it." },
+    ] }) : null);
+    const r = await ui(url, "/api/plan", { task: "Find the errors in this log and fix them", files: [{ name: "logs/big.log", size: 400_000 }], manager: "Claude Code" });
+    fake.hooks.answer = null;
+    expect(r.json.parts.filter((p: any) => p.where === "paid").map((p: any) => [p.kind, p.tokens > 50_000])).toEqual([["read", true]]);
+    expect(r.json.local).toBeNull();
   });
 });
 
@@ -183,6 +197,11 @@ describe("local_model, in an app", () => {
     const no = await tool({ action: "download" });
     expect(asked.params.message).toBe("Download gemma4:31b-it-qat (19 GB) with Ollama? It runs free, on this computer, and Leanfare's Auto and plans can then use it for reading and drafting. Apache-2.0: free to use for work.");
     expect(no.content[0].text).toBe("Nothing was downloaded: the user did not say yes to gemma4:31b-it-qat.");
+    expect(pulls()).toBe(before);
+    asked = null;
+    const claimed = await tool({ action: "download", yes: "yes" }); // a yes from the model is not the user's: the app still asks
+    expect(asked?.params?.message).toContain("Download gemma4:31b-it-qat");
+    expect(claimed.content[0].text).toBe("Nothing was downloaded: the user did not say yes to gemma4:31b-it-qat.");
     expect(pulls()).toBe(before);
     onAsk = (msg) => write({ jsonrpc: "2.0", id: msg.id, result: { action: "accept", content: { download: true } } });
     const yes = await tool({ action: "download" });
