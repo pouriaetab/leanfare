@@ -277,9 +277,10 @@ const onCodex = (part: Split, r: { tokens: number }, why: string): Part => ({ ..
 async function place(part: Split, files: PlanFile[], near: string | null, manager: string, signal: AbortSignal, codex = false): Promise<Part> {
   const r = reading(part, files);
   const stay = (why: string): Part => ({ ...part, where: "you", model: null, use: modelInYourApp(part, manager), seconds: null, tokens: r.tokens + OUT_YOU, cost: null, why });
-  // Reading, drafting and working out can run on your ChatGPT plan through Codex, before anything paid
-  // (unless the manager's grades moved Codex down for this kind).
-  const viaCodex = codex && !!DELEGATE_KIND[part.kind] && !movedDown(CODEX_ID, part.kind);
+  // Reading, drafting and working out can run on your ChatGPT plan through Codex, before anything paid.
+  // Codex moved down by the manager's grades for this kind takes only a part no model can take.
+  const codexCan = codex && !!DELEGATE_KIND[part.kind];
+  const viaCodex = codexCan && !movedDown(CODEX_ID, part.kind);
   if (part.kind === "code") return stay(`it changes the project, which only ${manager} can do`);
   if (part.kind === "act") return stay(`it needs ${manager}'s own tools`);
   const big = (part.effort === "high" && (part.kind === "reason" || part.kind === "write"));
@@ -305,7 +306,7 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
     return { ...part, where, model: { id: p.model.id, label: p.model.label }, use: null, seconds: p.seconds, tokens: r.tokens + OUT_LEANFARE, cost: p.estimate, why };
   } catch (e: any) {
     if (e?.status === 499) throw e;
-    if (viaCodex) return onCodex(part, r, "your ChatGPT plan through Codex: no model you ticked in Leanfare could take it");
+    if (codexCan) return onCodex(part, r, "your ChatGPT plan through Codex: no model you ticked in Leanfare could take it");
     return stay(e instanceof UserError ? `Leanfare has no model for it now (${e.message.replace(/\.$/, "").slice(0, 160)})` : "Leanfare has no model for it now");
   }
 }
@@ -476,6 +477,10 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
   const nearText = [limits.five !== null && limits.five >= NEAR ? `the 5 hours at ${Math.round(limits.five)}%` : "", limits.week !== null && limits.week >= NEAR ? `the week at ${Math.round(limits.week)}%` : ""].filter(Boolean).join(", ") || null;
   const placed: Part[] = [];
   for (const p of parts) placed.push(await place(p, input.files, nearText, manager, input.signal, codex.ok));
+  // A part that waits for one of yours is handed over by your app once yours are done, with delegate,
+  // which cannot run it on Codex: such a part is placed as if Codex were off.
+  const later = afterYours(placed);
+  for (let i = 0; i < placed.length; i++) if (placed[i].where === "codex" && later.has(placed[i].n)) placed[i] = await place(parts[i], input.files, nearText, manager, input.signal, false);
   const out = placed.filter((p) => p.where !== "you");
   const costs = out.map((p) => p.cost);
   const time = chains(placed);
@@ -631,6 +636,9 @@ async function runPart(p: Part, plan: PlanResult, at: (n: number) => RunPart, si
   const context = p.task.includes(CONTEXT) ? "" : `\n\n${CONTEXT} ${plan.task.slice(0, 4000)}`; // a part split by rules carries it already
   const task = `${p.task}${before.length ? `\n\nWhat the earlier parts found:\n\n${before.join("\n\n")}` : ""}${context}`;
   if (p.where === "codex") {
+    // The switch in Settings and the ChatGPT plan's limits hold when the part runs, not only when the plan was made.
+    const ok = await codexFor(plan.manager);
+    if (!ok.ok) throw Object.assign(new UserError(409, `This part was to run on Codex, but ${ok.why ?? "Codex is off in Settings now"}. Make the plan again to place it elsewhere.`, "codex_off"), { spent: 0 });
     // Codex reads the files itself, from the folder that holds them all (none named: an empty folder).
     const known = wherePaths.get(plan.id) ?? new Map();
     const paths = p.files.map((n) => known.get(n)?.path).filter((x): x is string => !!x);
