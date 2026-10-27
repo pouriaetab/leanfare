@@ -17,6 +17,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { selfCommand } from "./self";
 import { shellEnv } from "./shellenv";
+import { autoView, type AutoView } from "./workers";
 
 // Your home folder as the apps see it: HOME (what your shell and the tests use), but on Windows the
 // user profile, which is where the apps keep their files even when a Unix-style shell sets HOME.
@@ -75,7 +76,7 @@ function claudeJson() {
 }
 
 export type AppStatus = "added" | "old" | "not added" | "broken" | "not installed";
-export interface AppView { id: string; name: string; status: AppStatus; file: string; after: string; manual: string | null; note: string | null }
+export interface AppView { id: string; name: string; status: AppStatus; file: string; after: string; manual: string | null; note: string | null; auto: AutoView | null } // auto: plan by itself (workers.ts), where the app has a way
 
 const NAME = "leanfare";
 export const entry = () => selfCommand("mcp");
@@ -256,6 +257,7 @@ export function appsView(): AppView[] {
       id: a.id, name: a.name, status, file: a.file(), after: a.after,
       manual: a.format === "claude-cli" ? claudeAddLine() : null,
       note: status === "broken" ? `Its settings file (${a.file()}) is not valid ${a.format === "toml" ? "TOML" : "JSON"} in the shape it uses, so Leanfare leaves it alone.` : status === "old" ? "Added before, from another copy of Leanfare: press Update to point it at this one." : null,
+      auto: (() => { try { return autoView(a.id); } catch { return null; } })(),
     };
   });
 }

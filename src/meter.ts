@@ -229,7 +229,7 @@ const ours = (cmd: unknown): cmd is string => typeof cmd === "string" && /(^|[\s
 // The command Leanfare's line runs first: what was there before (kept after --then).
 const before = (cmd: string): string | null => { const i = cmd.indexOf(" --then "); return i < 0 ? null : unquote(cmd.slice(i + 8).trim()); };
 
-function readClaudeSettings(): any {
+export function readClaudeSettings(): any {
   const file = claudeSettingsFile();
   if (!existsSync(file)) return {};
   const text = readFileSync(file, "utf8");
@@ -252,9 +252,7 @@ function readKept(): any {
 }
 
 export function setStatusline(on: boolean) {
-  const file = claudeSettingsFile();
   const j = readClaudeSettings();
-  if (existsSync(file)) copyFileSync(file, `${file}.leanfare-backup`); // the file as it was, once per change
   const cur = j.statusLine?.command;
   if (on) {
     const keep = ours(cur) ? before(cur) : typeof cur === "string" && cur.trim() ? cur : null;
@@ -267,13 +265,20 @@ export function setStatusline(on: boolean) {
     else delete j.statusLine;
     try { unlinkSync(keptFile()); } catch {}
   }
-  // Written whole, then swapped in, so Claude Code never reads half a file. A settings file that
-  // is a link (kept with your dotfiles) stays a link: the file it points to is the one written.
+  writeClaudeSettings(j);
+  return statuslineState();
+}
+
+// Claude Code's settings file, written whole, then swapped in, so Claude Code never reads half a
+// file; the file as it was is kept next to it, once per change. A settings file that is a link
+// (kept with your dotfiles) stays a link: the file it points to is the one written.
+export function writeClaudeSettings(j: unknown) {
+  const file = claudeSettingsFile();
+  if (existsSync(file)) copyFileSync(file, `${file}.leanfare-backup`);
   let target = file;
   try { target = realpathSync(file); } catch {}
   mkdirSync(dirname(target), { recursive: true });
   const tmp = `${target}.leanfare-${process.pid}`;
   writeFileSync(tmp, JSON.stringify(j, null, 2) + "\n");
   renameSync(tmp, target);
-  return statuslineState();
 }
