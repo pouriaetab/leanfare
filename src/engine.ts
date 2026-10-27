@@ -60,18 +60,23 @@ export function chargeOf(m: Model, listCost: number | null): { cost: number | nu
 // ---- answer lengths seen before (for estimates) --------------------------------
 
 // Answers sent with a thinking effort are compared with answers at the same effort first.
+// Lengths are kept apart by the kind of work: the delegate's short hand off answers, the checks'
+// verdicts and the trial's one word answers would make every chat estimate too low, and the other
+// way round. "main" is everything else (the chat and your other apps).
+export type LengthGroup = "main" | "delegate" | "check" | "trial";
+export const lengthGroup = (source: string | undefined): LengthGroup => (source === "delegate" || source === "check" || source === "trial" ? source : "main");
 let hist = { at: 0, map: new Map<string, number | null>() };
-export function outputHistory(task: string, model: string | null, effort: string | null = null): number | null {
-  if (effort) { const v = lengthsSeen(task, model, effort); if (v !== null) return v; }
-  return lengthsSeen(task, model, null);
+export function outputHistory(task: string, model: string | null, effort: string | null = null, group: LengthGroup = "main"): number | null {
+  if (effort) { const v = lengthsSeen(task, model, effort, group); if (v !== null) return v; }
+  return lengthsSeen(task, model, null, group);
 }
-function lengthsSeen(task: string, model: string | null, effort: string | null): number | null {
+function lengthsSeen(task: string, model: string | null, effort: string | null, group: LengthGroup): number | null {
   if (Date.now() - hist.at > 60_000) hist = { at: Date.now(), map: new Map() };
-  const k = `${task}|${model ?? ""}|${effort ?? ""}`;
+  const k = `${task}|${model ?? ""}|${effort ?? ""}|${group}`;
   if (hist.map.has(k)) return hist.map.get(k)!;
   const since = new Date(now().getTime() - 30 * 86_400_000).toISOString();
-  const where = ["task = ?", "status = 'ok'", "ts >= ?", ...(model ? ["model = ?"] : []), ...(effort ? ["effort = ?"] : [])].join(" AND ");
-  const args = [task, since, ...(model ? [model] : []), ...(effort ? [effort] : [])];
+  const where = ["task = ?", "status = 'ok'", "ts >= ?", group === "main" ? "source NOT IN ('delegate', 'check', 'trial')" : "source = ?", ...(model ? ["model = ?"] : []), ...(effort ? ["effort = ?"] : [])].join(" AND ");
+  const args = [task, since, ...(group === "main" ? [] : [group]), ...(model ? [model] : []), ...(effort ? [effort] : [])];
   const rows = db.query(`SELECT out_tokens AS o FROM ledger WHERE ${where} ORDER BY id DESC LIMIT 200`).all(...args) as { o: number }[];
   const v = rows.length >= 5 ? median(rows.map((r) => r.o)) : null;
   hist.map.set(k, v);
@@ -135,6 +140,7 @@ export interface PlanInput {
   onlyWhy?: string; // what to say when that limit leaves no model
   optional?: boolean; // work that can be skipped (the delegate's check): never sent past the budget
   speed?: SpeedChoice; // cheapest, fastest or within N seconds (speed.ts); default: Settings
+  ledgerSource?: string; // where the ledger will say it came from ("delegate", "check", "trial"...): its answer lengths are its own
 }
 
 export interface Choice { id: string; label: string; estimate: number | null; seconds: number | null; measured: boolean }
@@ -231,10 +237,12 @@ export async function plan(input: PlanInput): Promise<Plan> {
   const inMax = promptMax(input.messages, input.system, input.tools);
   const capped = s.budget !== null && input.maxOut === null;
   const speed: SpeedChoice = input.speed ?? s.speed ?? "cheapest";
+  const group = lengthGroup(input.ledgerSource ?? input.source);
   const copies = Math.max(1, Math.min(128, Math.floor(input.copies ?? 1)));
   let model: Model, guess: Guess, reason: string, candidates: Model[] = [];
   let alternatives: Plan["alternatives"] = [];
   let choices: Plan["choices"] = null;
+  let inMargin: Model[] = []; // Auto: the models at the same quality, cheapest first, for when the pick would pass the budget
   if (amode) {
     const usable = usableModels(only);
     if (!usable.length && extra && usableModels(base).length) throw new UserError(400, input.onlyWhy ?? "None of the models you ticked can take this request.", "no_model_fits");
@@ -249,12 +257,13 @@ export async function plan(input: PlanInput): Promise<Plan> {
           : `No model is ready yet. Open Leanfare at http://127.0.0.1:${runtime.port}, add a key and tick a model, or start Ollama.`, "no_model_ready");
     }
     const effortAsked = input.effort ?? null;
-    const p = pickModel(input.messages, usable, amode, (t, mid) => outputHistory(t, mid, effortAsked && mid ? effortFor(getModel(mid)!, effortAsked) : null), input.system, input.guess,
+    const p = pickModel(input.messages, usable, amode, (t, mid) => outputHistory(t, mid, effortAsked && mid ? effortFor(getModel(mid)!, effortAsked) : null, group), input.system, input.guess,
       speed, (m, out) => secondsFor(m, out, effortAsked ? effortFor(m, effortAsked) : null));
     if (p) {
       model = p.model; guess = p.guess; reason = p.reason;
       candidates = p.candidates.map((c) => c.model);
       alternatives = p.candidates.slice(1, 4).map((c) => ({ id: c.model.id, label: c.model.label, estimate: chargeOf(c.model, c.estimate).cost, rating: c.rating === null ? null : Math.round(c.rating), seconds: c.seconds ?? null }));
+      inMargin = p.candidates.slice(0, p.eligible).sort((a, b) => (a.estimate ?? Infinity) - (b.estimate ?? Infinity)).map((c) => c.model);
       const choice = (c: Candidate): Choice => ({ id: c.model.id, label: c.model.label, estimate: chargeOf(c.model, c.estimate).cost, seconds: c.seconds ?? null, measured: !!c.measured });
       choices = { cheapest: choice(p.cheapest), fastest: p.fastest ? choice(p.fastest) : null };
     } else {
@@ -295,7 +304,20 @@ export async function plan(input: PlanInput): Promise<Plan> {
   let reservation: string | null = null;
   if (s.budget !== null) {
     const most = reserveFor(model, inMax, input.maxOut, copies);
-    const fits = input.dry ? wouldFit(most) : !!(reservation = tryReserve(most));
+    let fits = input.dry ? wouldFit(most) : !!(reservation = tryReserve(most));
+    // Before anything cheaper in quality: another model at the same quality that fits (a speed
+    // choice may have picked a dearer one).
+    if (!fits && !isRetired(model, day)) for (const m of inMargin) {
+      if (m.id === model.id) continue;
+      const need = reserveFor(m, inMax, input.maxOut, copies);
+      if (input.dry ? wouldFit(need) : !!(reservation = tryReserve(need))) {
+        notes.push(`${model.label} could pass your budget (up to ${dollars(most)}), so Auto took ${m.label}, at the same quality.`);
+        model = m;
+        candidates = [m, ...candidates.filter((c) => c.id !== m.id)];
+        fits = true;
+        break;
+      }
+    }
     if (!fits) {
       const b = budgetState();
       const why = b.reached
@@ -315,7 +337,7 @@ export async function plan(input: PlanInput): Promise<Plan> {
     }
   }
   const effortAsked = input.effort && input.effort !== "auto" ? input.effort : null;
-  const outGuess = expectedOutput(guess.task, model, (t, mid) => outputHistory(t, mid, effortFor(model, effortAsked)));
+  const outGuess = expectedOutput(guess.task, model, (t, mid) => outputHistory(t, mid, effortFor(model, effortAsked), group));
   const estimate = chargeOf(model, estimateFor(model, inTok, outGuess)).cost;
   const time = secondsFor(model, outGuess, effortFor(model, effortAsked));
   const cheapestId = s.budget !== null ? cheapest(only, inTok)?.id ?? null : null;
@@ -809,7 +831,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
   if (paused) emit({ type: "waiting", message: "Paused. This message goes out when you press Start again." });
   let p: Plan;
   try {
-    p = await plan({ source: "chat", asked, messages, system: opts.system || undefined, maxOut: opts.maxOut ?? null, signal: ac.signal, effort: opts.effort ?? null, guess: opts.guess, only: opts.only, onlyWhy: opts.onlyWhy, optional: opts.optional, speed: opts.speed });
+    p = await plan({ source: "chat", asked, messages, system: opts.system || undefined, maxOut: opts.maxOut ?? null, signal: ac.signal, effort: opts.effort ?? null, guess: opts.guess, only: opts.only, onlyWhy: opts.onlyWhy, optional: opts.optional, speed: opts.speed, ledgerSource: opts.source });
   } catch (e: any) {
     const status = e instanceof UserError ? e.status : 500;
     const message = e instanceof UserError ? e.message : String(e?.message ?? e);

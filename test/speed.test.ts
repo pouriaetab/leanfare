@@ -154,3 +154,36 @@ describe("Auto picks by your speed, at the same quality", () => {
     expect(bad.json.error).toContain("speed must be cheapest, fastest, or a number of seconds");
   });
 });
+
+describe("what one kind of work learns stays with it", () => {
+  test("the trial's one word answers and the checks' verdicts do not make chat estimates short", async () => {
+    await keys("anthropic", "google", "xai");
+    const body = { messages: [{ role: "user", content: "What is the capital of Australia?" }], model: "google/gemini-3.8-flash" };
+    const before = (await ui(url, "/api/estimate", body)).json.estimate;
+    for (const source of ["trial", "check", "delegate"]) for (let i = 0; i < 6; i++)
+      db.query(`INSERT INTO ledger(ts, month, day, source, provider, model, task, price_status, usage_status, status, ms, first_ms, out_tokens)
+        VALUES ('2026-10-21T11:00:00Z', '2026-10', '2026-10-21', ?, 'google', 'google/gemini-3.8-flash', 'overall', 'listed', 'reported', 'ok', 900, 300, 3)`).run(source);
+    const { forgetHistoryCache } = await import("../src/engine");
+    forgetHistoryCache();
+    expect((await ui(url, "/api/estimate", body)).json.estimate).toBe(before);
+  });
+});
+
+describe("speed within a budget", () => {
+  test("when the fastest would pass the budget, Auto takes another model at the same quality before a weaker one", async () => {
+    await reset({ ticked: ALL_TICKED, budget: 1, atLimit: "cheapest", speed: "fastest" });
+    await keys("openai", "anthropic", "google", "deepseek", "xai", "mistral");
+    seed();
+    // Spent so far: just under the budget, so Gemini's reservation (up to its longest answer) does not fit, but Grok's does.
+    const { reserveFor } = await import("../src/engine");
+    const gemini = reserveFor(m("google/gemini-3.8-flash"), 40, null, 1);
+    const grok = reserveFor(m("xai/grok-4.20-beta"), 40, null, 1);
+    expect(grok).toBeLessThan(gemini);
+    db.query(`INSERT INTO ledger(ts, month, day, source, provider, model, price_status, usage_status, status, cost) VALUES ('2026-10-21T11:00:00Z', '2026-10', '2026-10-21', 'chat', 'openai', 'openai/gpt-5-mini', 'listed', 'reported', 'ok', ?)`).run(1 - (gemini + grok) / 2);
+    const { resetBudget } = await import("../src/budget");
+    resetBudget();
+    const r = await chat();
+    expect(r.headers.get("x-leanfare-model")).toBe("xai/grok-4.20-beta"); // not DeepSeek, 58 points under the best
+    expect(decodeURIComponent(r.headers.get("x-leanfare-reason")!)).toContain("so Auto took Grok 4.20 Beta, at the same quality.");
+  });
+});
