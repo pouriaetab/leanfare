@@ -12,6 +12,7 @@ import { VERSION } from "./config";
 import { call } from "./client";
 import { secondsText } from "./util";
 import { reportText } from "./trialtext";
+import { APP_MIME, PLAN_APP_HTML, PLAN_APP_URI } from "./planapp";
 import { readForDelegate, resolvePath, sizesForPlan } from "./readfiles";
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -40,6 +41,8 @@ const TOOLS = [
       additionalProperties: false,
     },
     annotations: { title: "Split a task across models", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    // Apps that show MCP Apps (Claude Desktop, Cowork) draw the plan as a table with a Run button (planapp.ts).
+    _meta: { ui: { resourceUri: PLAN_APP_URI }, "ui/resourceUri": PLAN_APP_URI },
   },
   {
     name: "plan_run",
@@ -256,7 +259,7 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
     const runNote = j.totals.out ? `\n\nOr call plan_run with id ${j.id} to run Leanfare's parts in the background, then plan_status for their answers.${saved ? ` The plan is saved in ${saved}/plan.md.` : ""}` : "";
     return text(`${j.table}\n\n${j.next}${runNote}${note}`, {
       id: j.id, saved_in: saved,
-      parts: j.parts.map((p: any) => ({ n: p.n, title: p.title, kind: p.kind, effort: p.effort, needs: p.needs, runs_on: p.where, model: p.model?.id ?? null, seconds: p.seconds, tokens: p.tokens, cost_usd: p.cost, files: p.files, task: p.task })),
+      parts: j.parts.map((p: any) => ({ n: p.n, title: p.title, kind: p.kind, effort: p.effort, needs: p.needs, runs_on: p.where, model: p.model?.id ?? null, model_label: p.model?.label ?? null, seconds: p.seconds, tokens: p.tokens, cost_usd: p.cost, files: p.files, task: p.task })),
       totals: j.totals, split: j.split, limits: j.limits,
     });
   }
@@ -389,9 +392,15 @@ export async function handleMessage(msg: any, send = { reply, error }): Promise<
     setClient(params?.clientInfo?.name);
     canAsk = !!params?.capabilities?.elicitation;
     const asked = params?.protocolVersion;
-    return send.reply(id, { protocolVersion: LEGACY.includes(asked) ? asked : LEGACY[0], capabilities: { tools: { listChanged: false } }, serverInfo: SERVER, instructions: INSTRUCTIONS });
+    return send.reply(id, { protocolVersion: LEGACY.includes(asked) ? asked : LEGACY[0], capabilities: { tools: { listChanged: false }, resources: {} }, serverInfo: SERVER, instructions: INSTRUCTIONS });
   }
-  if (method === "server/discover") return send.reply(id, { resultType: "complete", supportedVersions: [...MODERN, ...LEGACY], capabilities: { tools: {} }, _meta: META, instructions: INSTRUCTIONS });
+  if (method === "server/discover") return send.reply(id, { resultType: "complete", supportedVersions: [...MODERN, ...LEGACY], capabilities: { tools: {}, resources: {} }, _meta: META, instructions: INSTRUCTIONS });
+  // The plan's page (an MCP App): listed and read like any resource.
+  if (method === "resources/list") return done({ resources: [{ uri: PLAN_APP_URI, name: "Leanfare plan", title: "Leanfare plan", description: "The plan as a table with a Run button, for apps that show MCP Apps.", mimeType: APP_MIME }] });
+  if (method === "resources/read") {
+    if (params?.uri !== PLAN_APP_URI) return send.error(id, -32002, `Leanfare has no resource ${String(params?.uri)}.`);
+    return done({ contents: [{ uri: PLAN_APP_URI, mimeType: APP_MIME, text: PLAN_APP_HTML, _meta: { ui: { csp: { connectDomains: [], resourceDomains: [] }, prefersBorder: true } } }] });
+  }
   if (method === "ping") return done({});
   if (method === "tools/list") return done({ tools: TOOLS });
   if (method === "tools/call") {

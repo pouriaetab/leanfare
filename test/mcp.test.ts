@@ -78,10 +78,28 @@ describe("the protocol", () => {
     expect(v.error.data.supported).toContain("2026-07-28");
     const c = await rpc("tools/list", { _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } });
     expect(c.error.code).toBe(-32602);
-    const m = await rpc("resources/list", {});
+    const m = await rpc("prompts/list", {}); // Leanfare has tools and one page, no prompts
     expect(m.error.code).toBe(-32601);
     const t = await rpc("tools/call", { name: "nope", arguments: {} });
     expect(t.error.code).toBe(-32602);
+  });
+});
+
+describe("the plan's page (an MCP App)", () => {
+  test("the plan tool names its page, and the page is a resource of the MCP App kind", async () => {
+    const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "claude-ai", version: "1" } });
+    expect(init.result.capabilities.resources).toEqual({});
+    const tools = (await rpc("tools/list", {})).result.tools;
+    expect(tools.find((t: any) => t.name === "plan")._meta).toEqual({ ui: { resourceUri: "ui://leanfare/plan" }, "ui/resourceUri": "ui://leanfare/plan" });
+    const list = await rpc("resources/list", {});
+    expect(list.result.resources).toEqual([expect.objectContaining({ uri: "ui://leanfare/plan", mimeType: "text/html;profile=mcp-app" })]);
+    const read = await rpc("resources/read", { uri: "ui://leanfare/plan" });
+    const c = read.result.contents[0];
+    expect(c.mimeType).toBe("text/html;profile=mcp-app");
+    expect(c.text).toContain("ui/initialize");
+    expect(c._meta.ui.csp).toEqual({ connectDomains: [], resourceDomains: [] }); // it reaches nothing outside
+    const none = await rpc("resources/read", { uri: "ui://leanfare/other" });
+    expect(none.error.message).toContain("no resource");
   });
 });
 
