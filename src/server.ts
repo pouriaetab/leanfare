@@ -14,7 +14,7 @@ import { appsView, setApp } from "./apps";
 import { SUBSCRIPTIONS } from "./subscriptions";
 import { db, lastRepair } from "./db";
 import { allKeys, getKey, keyWhere, keychainNote, removeKey, saveKey, storeName } from "./keys";
-import { MAX_INSTRUCTIONS, MODES, saveSettings, settings, validatePatch } from "./settings";
+import { BRIEF, MAX_INSTRUCTIONS, MODES, saveSettings, settings, validatePatch } from "./settings";
 import { budgetState } from "./budget";
 import * as connect from "./connect";
 import * as local from "./local";
@@ -294,7 +294,9 @@ async function chatRoute(req: Request, body: any): Promise<Response> {
         if (gone.length) send({ type: "notice", message: `No longer there, so left out: ${gone.join(", ")} (attached earlier).` });
         let title = "Chat";
         try { if (chatId) title = (db.query("SELECT title FROM chats WHERE id = ?").get(chatId) as any)?.title ?? title; } catch {}
-        const out = await runChat(messages, asked, req.signal, send, title, { system, effort, meta: compare ? { compare } : undefined });
+        // Short answers (Settings): said first, then the chat's own instructions, which win where they differ.
+        const told = [s.brief ? BRIEF : "", system].filter(Boolean).join("\n\n");
+        const out = await runChat(messages, asked, req.signal, send, title, { system: told, effort, meta: compare ? { compare } : undefined });
         // Asked again: the new answer takes the old one's place only if it came
         // (words, and no failure on the way); otherwise the old one stays.
         const keep = action === "again" ? !!out.text && out.status !== "error" : !!(out.text || out.status !== "error");

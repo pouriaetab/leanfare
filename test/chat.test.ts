@@ -1,7 +1,7 @@
 // The chat screen's own features, end to end against the fake providers:
 // instructions per chat; asking again, asking another model, editing a question.
 import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { ALL_TICKED, boot, fake, keys, ledger, readSSE, reset, ui } from "./app";
+import { ALL_TICKED, boot, fake, keys, ledger, post, readSSE, reset, ui } from "./app";
 
 let url = "";
 beforeAll(async () => { url = (await boot()).url; });
@@ -20,6 +20,21 @@ describe("instructions for a chat (a system prompt)", () => {
     await readSSE(await chatScreen(url, { messages: [{ role: "user", content: "Hi" }], model: "anthropic/claude-haiku-4-5", system: "Answer in one line." }));
     expect(lastSent().body.system).toBe("Answer in one line.");
     expect(lastSent().body.messages.map((m: any) => m.role)).toEqual(["user"]);
+  });
+
+  test("short answers, on by default: said first, then the chat's own instructions; never kept with the chat, nor sent to other apps' requests", async () => {
+    const { BRIEF, DEFAULTS } = await import("../src/settings");
+    expect(DEFAULTS.brief).toBe(true);
+    await reset({ ticked: ALL_TICKED, brief: true });
+    await keys("openai");
+    const { events } = await readSSE(await chatScreen(url, { messages: [{ role: "user", content: "Hi" }], model: "openai/gpt-5-mini", system: "Answer in French." }));
+    expect(lastSent().body.messages[0]).toEqual({ role: "system", content: `${BRIEF}\n\nAnswer in French.` });
+    expect((await ui(url, `/api/chats/${chatIdOf(events)}`)).json.chat.system).toBe("Answer in French."); // the chat keeps only its own
+    await readSSE(await chatScreen(url, { messages: [{ role: "user", content: "Hi" }], model: "openai/gpt-5-mini" }));
+    expect(lastSent().body.messages[0]).toEqual({ role: "system", content: BRIEF });
+    await post(`${url}/v1/chat/completions`, { model: "openai/gpt-5-mini", messages: [{ role: "user", content: "Hi" }] });
+    expect(lastSent().body.messages).toEqual([{ role: "user", content: "Hi" }]); // another app's request goes as it was sent
+    expect(BRIEF).toContain("table or a numbered list");
   });
 
   test("no instructions: nothing extra is sent", async () => {
