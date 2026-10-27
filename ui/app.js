@@ -2227,8 +2227,8 @@
         a.status === "broken" ? null : runButton(a.status === "added" ? "Remove" : a.status === "old" ? "Update" : "Add", (signal) => toggleApp(a, a.status !== "added", signal), a.status === "added" ? "btn small" : "btn small primary")),
       a.note ? h("div", { class: "note", text: a.note }) : null,
       a.manual && a.status !== "added" ? h("div", { class: "note manual" }, "Or in Terminal: ", h("code", { text: a.manual }), " ", copyBtn(a.manual)) : null,
-      // Plan by itself (workers.ts): once Leanfare's tools are in the app.
-      a.auto && (a.status === "added" || a.auto.on || a.auto.partly) ? h("div", { class: "row auto-row" },
+      // Plan by itself (workers.ts): once Leanfare's tools are in the app, from this copy or another.
+      a.auto && (a.status === "added" || a.status === "old" || a.auto.on || a.auto.partly) ? h("div", { class: "row auto-row" },
         h("span", { class: "grow note", text: `${a.auto.what}${a.auto.on ? " · on" : a.auto.partly ? " · partly on" : ""}.` }),
         runButton(a.auto.on || a.auto.partly ? "Turn off" : "Turn on", (signal) => toggleAuto(a, !(a.auto.on || a.auto.partly), signal), a.auto.on || a.auto.partly ? "btn small" : "btn small primary")) : null);
     return h("div", { class: "setting apps" }, h("h3", { text: "Use Leanfare in your apps" }),
