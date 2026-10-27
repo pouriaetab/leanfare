@@ -10,6 +10,7 @@
 // stdout, one message per line; anything for a person goes to stderr.
 import { existsSync, readFileSync } from "node:fs";
 import { PORT, VERSION, paths } from "./config";
+import { selfCommand } from "./self";
 import { readForDelegate } from "./readfiles";
 
 const MODERN = ["2026-07-28"];
@@ -107,8 +108,8 @@ async function app(): Promise<App> {
   if (await healthy(a.base)) return a;
   if (process.env.LEANFARE_URL) throw new Error(`Leanfare is not answering at ${a.base}.`);
   starting ??= (async () => {
-    const cli = new URL("./cli.ts", import.meta.url).pathname;
-    const child = Bun.spawn([process.execPath, cli, "--no-open"], { stdin: "ignore", stdout: "ignore", stderr: "ignore", env: { ...process.env, LEANFARE_NO_OPEN: "1" } });
+    const self = selfCommand("--no-open");
+    const child = Bun.spawn([self.command, ...self.args], { stdin: "ignore", stdout: "ignore", stderr: "ignore", env: { ...process.env, LEANFARE_NO_OPEN: "1" } });
     child.unref();
     for (let i = 0; i < 100; i++) {
       await Bun.sleep(100);

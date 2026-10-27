@@ -9,6 +9,7 @@ import { BUN_TESTED, DATA_ID, HOST, PORT, UI_DIR, VERSION, allProviders, baseOf,
 import { TASKS, allModels, getModel, isRetired, refreshCatalog, refreshOllama, refreshOpenRouter, retiresWithin, served, store, type Model } from "./data";
 import * as extra from "./providers";
 import { findKeys, readFound, recognize } from "./findkeys";
+import { appsView, setApp } from "./apps";
 import { db, lastRepair } from "./db";
 import { allKeys, getKey, keyWhere, keychainNote, removeKey, saveKey, storeName } from "./keys";
 import { MAX_INSTRUCTIONS, MODES, saveSettings, settings, validatePatch } from "./settings";
@@ -450,6 +451,13 @@ async function api(req: Request, url: URL): Promise<Response> {
       }
     }
     return json({ results, state: state() });
+  }
+  // Use Leanfare in your apps: its MCP server in Claude Desktop, Claude Code, Cursor and the rest (apps.ts).
+  if (p === "/api/apps" && m === "GET") return json({ apps: appsView() });
+  if (p === "/api/apps" && m === "POST") {
+    const b = await readBody(req);
+    try { return json({ app: await setApp(String(b.id ?? ""), !!b.on), apps: appsView() }); }
+    catch (e: any) { return json({ error: String(e?.message ?? e), apps: appsView() }, 409); }
   }
   // Providers you add: any address that speaks OpenAI's format (see providers.ts).
   if (p === "/api/providers/registry" && m === "GET") {

@@ -22,6 +22,7 @@ import { costOf, type Usage } from "./cost";
 import { getModel } from "./data";
 import { pricedAs, recentEntries, type Limits, type MeterEntry } from "./plans";
 import { settings, type PlanProvider } from "./settings";
+import { selfCommand } from "./self";
 import { meterCacheFile, quote, readSnaps, unquote, type Snap } from "./statusline";
 import { UserError } from "./upstream";
 import { now } from "./util";
@@ -221,8 +222,7 @@ export const claudeSettingsFile = () => {
   return join(dir || join(homedir(), ".claude"), "settings.json");
 };
 const keptFile = () => join(DATA_DIR, "statusline-kept.json"); // the status line you had, as it was, to give back
-const cliPath = () => new URL("./cli.ts", import.meta.url).pathname;
-export const ourCommand = () => `${quote(process.execPath)} ${quote(cliPath())} statusline`;
+export const ourCommand = () => { const c = selfCommand(); return [c.command, ...c.args].map(quote).join(" ") + " statusline"; };
 // Leanfare's line, set by the button or by hand ("leanfare statusline", "bun .../cli.ts statusline").
 const ours = (cmd: unknown): cmd is string => typeof cmd === "string" && /(^|[\s'"/])(leanfare|cli\.ts)['"]?\s+statusline\b/.test(cmd);
 // The command Leanfare's line runs first: what was there before (kept after --then).
