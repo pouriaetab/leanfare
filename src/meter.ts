@@ -224,7 +224,8 @@ export const claudeSettingsFile = () => {
 const keptFile = () => join(DATA_DIR, "statusline-kept.json"); // the status line you had, as it was, to give back
 export const ourCommand = () => { const c = selfCommand(); return [c.command, ...c.args].map(quote).join(" ") + " statusline"; };
 // Leanfare's line, set by the button or by hand ("leanfare statusline", "bun .../cli.ts statusline").
-const ours = (cmd: unknown): cmd is string => typeof cmd === "string" && /(^|[\s'"/])(leanfare|cli\.ts)['"]?\s+statusline\b/.test(cmd);
+// On Windows the program is ...\leanfare.exe, written with backslashes, in any case.
+const ours = (cmd: unknown): cmd is string => typeof cmd === "string" && /(^|[\s'"/\\])(leanfare(\.exe)?|cli\.ts)['"]?\s+statusline\b/i.test(cmd);
 // The command Leanfare's line runs first: what was there before (kept after --then).
 const before = (cmd: string): string | null => { const i = cmd.indexOf(" --then "); return i < 0 ? null : unquote(cmd.slice(i + 8).trim()); };
 

@@ -70,7 +70,7 @@ describe("grading", () => {
   const grade = (id: string, answer: string) => { const i = QUESTIONS.findIndex((q) => q.id === id); return QUESTIONS[i].grade(answer, T[i]); };
   const cases: [string, string, boolean][] = [
     ["log-errors", "19", true], ["log-errors", "There are 19 ERROR lines.", true], ["log-errors", "18", false], ["log-errors", "u-19", false],
-    ["log-503", "r-11104", true], ["log-503", "`r-11104`", true], ["log-503", "r-11104 or r-10001", false], ["log-503", "r-1110", false],
+    ["log-503", "r-11104", true], ["log-503", "`r-11104`", true], ["log-503", "r-11104 or r-10001", false], ["log-503", "r-1110", false], ["log-503", "r-111040", false],
     ["log-user", "u-23", true], ["log-user", "u-23 (4 lines)", true], ["log-user", "u-14", false], ["log-user", "u-23, u-14", false],
     ["yaml-retry", "7", true], ["yaml-retry", "retry_limit: 7", true], ["yaml-retry", "4", false], ["yaml-retry", "Seven.", true],
     ["csv-refunds", "2412.77", true], ["csv-refunds", "$2,412.77", true], ["csv-refunds", "2412.7", false], ["csv-refunds", "2,400.00", false],
@@ -161,7 +161,7 @@ describe("a run", () => {
     expect((db.query("SELECT status FROM trials ORDER BY id DESC LIMIT 1").get() as any).status).toBe("stopped");
   }, 60_000);
 
-  test("a free plan's limit a minute: the trial waits, then asks once more", async () => {
+  test("a free plan's limit a minute: the trial waits, then asks once more; the wait is not the answer's time", async () => {
     await keys(...ALL_KEYS);
     answers();
     const until = Date.now() + 200;
@@ -169,9 +169,50 @@ describe("a run", () => {
     await ui(url, "/api/trial/start", {});
     const r = (await finished()).report;
     expect(r.rows[0]).toMatchObject({ q: "log-errors", effort: "low", ok: true, right: true });
+    expect(r.rows[0].seconds).toBeLessThan(timing.rateWait / 1000);
     expect(r.errors).toEqual([]);
     expect(ledger().filter((x) => x.status === "error").length).toBeGreaterThan(0); // the refused tries, as the trial's
   }, 60_000);
+  test("stopped while it waits out a limit: nothing more is sent", async () => {
+    await keys(...ALL_KEYS);
+    answers();
+    fake.hooks.fail = () => 429;
+    timing.rateWait = 5000;
+    try {
+      await ui(url, "/api/trial/start", {});
+      for (let i = 0; i < 100 && ledger().length === 0; i++) await Bun.sleep(20);
+      await Bun.sleep(100); // now waiting out the limit
+      const sent = fake.seen.length;
+      const v = (await ui(url, "/api/trial/stop", {})).json;
+      expect(v.report.status).toBe("stopped");
+      await Bun.sleep(150);
+      expect(fake.seen.length).toBe(sent);
+      expect(ledger().filter((x) => x.status === "stopped")).toEqual([]);
+    } finally { timing.rateWait = 400; }
+  }, 60_000);
+  test("Stop in Leanfare (the running list's Stop) stops the trial, not just one answer", async () => {
+    await keys(...ALL_KEYS);
+    answers();
+    const { stopRunning } = await import("../src/engine");
+    fake.hooks.slow = () => 300; // each answer takes a while, so the Stop lands while one is running
+    await ui(url, "/api/trial/start", {});
+    await Bun.sleep(120);
+    stopRunning();
+    const v = await finished();
+    expect(v.report.status).toBe("stopped");
+    expect(v.report.done).toBeLessThan(30);
+  }, 60_000);
+  test("when the budget is why no model can answer, the estimate says so", async () => {
+    await reset({ ticked: ALL_TICKED, budget: 0.000001, atLimit: "stop" });
+    await keys(...ALL_KEYS);
+    const { db: d } = await import("../src/db");
+    d.query("INSERT INTO ledger(ts, month, day, source, provider, model, price_status, usage_status, status, cost, out_tokens) VALUES ('2026-10-21T11:00:00Z', '2026-10', '2026-10-21', 'chat', 'google', 'google/gemini-3.8-flash', 'listed', 'reported', 'ok', 1, 10)").run();
+    const { resetBudget } = await import("../src/budget");
+    resetBudget();
+    const e = (await ui(url, "/api/trial")).json.estimate;
+    expect(e.models.low).toBeNull();
+    expect(e.error).toContain("budget");
+  });
 
   test("with no model ready, the estimate says so and nothing runs", async () => {
     const v = (await ui(url, "/api/trial")).json;

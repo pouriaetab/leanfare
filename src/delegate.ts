@@ -226,15 +226,15 @@ export function receiptOf(r: Omit<DelegateResult, "receipt">, maxOut: number): s
 
 // What a hand off would cost and take before it is sent (the trial's estimate): the first answer
 // only, as Auto would pick it now. Null when no model is ready.
-export async function estimateDelegate(input: DelegateInput, signal: AbortSignal): Promise<{ estimate: number | null; seconds: number | null; model: string | null }> {
+export async function estimateDelegate(input: DelegateInput, signal: AbortSignal): Promise<{ estimate: number | null; seconds: number | null; model: string | null; error: string | null }> {
   const numbered = input.kind !== "write";
   const block = filesBlock(input.files, numbered);
   const messages: Msg[] = [{ role: "user", content: block ? `${input.task}\n\n${block}` : input.task }];
   try {
     const p = await plan({ source: "chat", asked: `auto-${TIER[input.effort]}`, messages, system: doerSystem(numbered, input.kind === "write", input.files.length > 0),
-      maxOut: input.maxOut, signal, dry: true, effort: input.effort, guess: taskFor(input.kind, messages), speed: input.speed });
-    return { estimate: p.estimate, seconds: p.seconds, model: p.model.id };
-  } catch { return { estimate: null, seconds: null, model: null }; }
+      maxOut: input.maxOut, signal, dry: true, effort: input.effort, guess: taskFor(input.kind, messages), speed: input.speed, ledgerSource: input.trial ? "trial" : "delegate" });
+    return { estimate: p.estimate, seconds: p.seconds, model: p.model.id, error: null };
+  } catch (e: any) { return { estimate: null, seconds: null, model: null, error: String(e?.message ?? e) }; }
 }
 
 export async function runDelegate(input: DelegateInput, signal: AbortSignal): Promise<DelegateResult> {

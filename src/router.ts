@@ -91,6 +91,7 @@ export interface Pick {
   // At the same quality (the models within the mode's margin): the cheapest and, when times are known, the fastest.
   cheapest: Candidate;
   fastest: Candidate | null;
+  eligible: number; // how many of the candidates, from the first, are within the margin
 }
 
 export function estimateFor(m: Model, inTokens: number, outTokens: number): number | null {
@@ -144,7 +145,7 @@ export function pickModel(messages: Msg[], usable: Model[], mode: Mode, history:
   if (how) reason += ` It is ${how}: ${chosen.seconds == null ? "its time is not known" : `${secondsText(chosen.seconds)}${chosen.measured ? "" : " (a rough guess)"}`}.`;
   const cheapest = [...eligible].sort(byPrice)[0];
   const fastest = timeOf ? [...eligible].sort(byTime)[0] : null;
-  return { model: chosen.model, guess, mode, reason, estimate: chosen.estimate, candidates: [...eligible, ...rest], best, cheapest, fastest };
+  return { model: chosen.model, guess, mode, reason, estimate: chosen.estimate, candidates: [...eligible, ...rest], best, cheapest, fastest, eligible: eligible.length };
 }
 
 // What a request's "model" field means. Accepts "auto", Leanfare's own ids

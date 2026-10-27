@@ -11,11 +11,11 @@
 import type { PlanProvider } from "./settings";
 
 export interface Preset { name: string; price: number | null; limits: string }
-export interface SubInfo { label: string; logs: string | null; usageUrl: string | null; presets: Preset[]; note: string }
+export interface SubInfo { label: string; logs: string | null; usageUrl: string | null; presets: Preset[]; limits: string; note: string }
 
 export const SUBSCRIPTIONS: Record<PlanProvider, SubInfo> = {
   claude: {
-    label: "Claude", logs: "Claude Code", usageUrl: "https://claude.ai/settings/usage",
+    label: "Claude", logs: "Claude Code", usageUrl: "https://claude.ai/settings/usage", limits: "a 5 hour session limit and a weekly limit",
     presets: [
       { name: "Claude Pro", price: 20, limits: "a 5 hour session limit and a weekly limit" },
       { name: "Claude Max 5x", price: 100, limits: "5 times Pro's session limit, and a weekly limit" },
@@ -24,7 +24,7 @@ export const SUBSCRIPTIONS: Record<PlanProvider, SubInfo> = {
     note: "Claude's two percentages come from Claude Code's status line once Leanfare is in it.",
   },
   chatgpt: {
-    label: "ChatGPT", logs: "Codex", usageUrl: "https://chatgpt.com/codex/settings/usage",
+    label: "ChatGPT", logs: "Codex", usageUrl: "https://chatgpt.com/codex/settings/usage", limits: "Codex: a 5 hour limit and a weekly limit, by plan",
     presets: [
       { name: "ChatGPT Go", price: 8, limits: "higher limits than Free; numbers not published" },
       { name: "ChatGPT Plus", price: 20, limits: "Codex: a 5 hour limit and a weekly limit" },
@@ -34,7 +34,7 @@ export const SUBSCRIPTIONS: Record<PlanProvider, SubInfo> = {
     note: "Codex writes how much of its limits each message used, and which plan you are on.",
   },
   perplexity: {
-    label: "Perplexity", logs: null, usageUrl: "https://www.perplexity.ai/account/usage",
+    label: "Perplexity", logs: null, usageUrl: "https://www.perplexity.ai/account/usage", limits: "weekly and monthly limits, by plan",
     presets: [
       { name: "Perplexity Pro", price: 20, limits: "weekly limits on Pro Searches and uploads, monthly limits on Research; numbers not published" },
       { name: "Perplexity Max", price: 200, limits: "10,000 credits a month, unlimited Ask searches" },
@@ -42,7 +42,7 @@ export const SUBSCRIPTIONS: Record<PlanProvider, SubInfo> = {
     note: "Perplexity keeps no usage numbers on this computer: its own usage page shows the weekly bar.",
   },
   google: {
-    label: "Google AI", logs: null, usageUrl: null,
+    label: "Google AI", logs: null, usageUrl: null, limits: "limits that refresh every 5 hours up to a weekly cap, by plan",
     presets: [
       { name: "Google AI Plus", price: 4.99, limits: "limits that refresh every 5 hours up to a weekly cap: 2 times Free" },
       { name: "Google AI Pro", price: 19.99, limits: "limits that refresh every 5 hours up to a weekly cap: 4 times Free" },
@@ -51,7 +51,7 @@ export const SUBSCRIPTIONS: Record<PlanProvider, SubInfo> = {
     note: "Google keeps no usage numbers for the Gemini app on this computer.",
   },
   copilot: {
-    label: "GitHub Copilot", logs: null, usageUrl: "https://github.com/settings/copilot",
+    label: "GitHub Copilot", logs: null, usageUrl: "https://github.com/settings/copilot", limits: "monthly AI credits, by plan",
     presets: [
       { name: "Copilot Pro", price: 10, limits: "1,500 AI credits a month, resetting on the 1st" },
       { name: "Copilot Pro+", price: 39, limits: "7,000 AI credits a month, resetting on the 1st" },
@@ -59,7 +59,7 @@ export const SUBSCRIPTIONS: Record<PlanProvider, SubInfo> = {
     note: "GitHub shows your monthly credits on its own page.",
   },
   cursor: {
-    label: "Cursor", logs: null, usageUrl: "https://cursor.com/dashboard",
+    label: "Cursor", logs: null, usageUrl: "https://cursor.com/dashboard", limits: "monthly pools of usage, reset with your billing",
     presets: [
       { name: "Cursor Pro", price: 20, limits: "two monthly pools of usage, reset with your billing" },
       { name: "Cursor Ultra", price: 200, limits: "larger monthly pools, reset with your billing" },
@@ -83,5 +83,17 @@ export function chatgptPlan(planType: string | null): { name: string; price: num
   return hit ? { ...hit, from: planType } : null;
 }
 
-export const presetLimits = (provider: PlanProvider, name: string): string | null =>
-  SUBSCRIPTIONS[provider].presets.find((p) => p.name.toLowerCase() === name.trim().toLowerCase())?.limits ?? null;
+// The limits of the plan you entered: its preset by name; else the preset whose own words are all in
+// it ("Max 20x" for "claude max 20x plan"); else the kind of limits every plan of it has.
+const words = (s: string) => s.toLowerCase().split(/\s+/).filter(Boolean);
+export function presetLimits(provider: PlanProvider, name: string): string | null {
+  const info = SUBSCRIPTIONS[provider];
+  const n = name.trim().toLowerCase();
+  if (!n) return null;
+  const exact = info.presets.find((p) => p.name.toLowerCase() === n);
+  if (exact) return exact.limits;
+  const label = new Set(words(info.label)), have = new Set(words(n));
+  const fits = info.presets.map((p) => ({ p, need: words(p.name).filter((w) => !label.has(w)) }))
+    .filter((x) => x.need.length && x.need.every((w) => have.has(w))).sort((a, b) => b.need.length - a.need.length);
+  return fits[0]?.p.limits ?? info.limits;
+}
