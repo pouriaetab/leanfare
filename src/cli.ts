@@ -28,6 +28,9 @@ const HELP = `Leanfare ${VERSION}: every top AI model in one app on your own com
   leanfare apps       the AI apps on this computer, and whether Leanfare's tools are in each
   leanfare apps add claude-desktop   add Leanfare's tools to one (claude-desktop, claude-code, cursor, codex,
                       gemini-cli, windsurf, vscode, lm-studio); "leanfare apps remove <app>" takes them out
+  leanfare trial      try the delegate before you trust it: 10 questions with known answers, at low, medium
+                      and high effort; "--report" shows the last one again, "--share" opens it as a GitHub issue
+                      for you to read and send (nothing is sent on its own)
 
   --port 4748         use another port
   --no-open           do not open the browser
@@ -228,6 +231,46 @@ async function apps() {
   process.exit(0);
 }
 
+// leanfare trial [--report] [--share]: the delegate trial, run by the Leanfare that is running (trial.ts).
+async function trial() {
+  const { call } = await import("./client");
+  const say = (line = "") => console.log(line);
+  const { reportText, trialSecs: secs } = await import("./trialtext");
+  const usd = (v: number | null) => (v === null ? "cost unknown" : v === 0 ? "$0" : v < 0.01 ? `$${v.toPrecision(2)}` : `$${v.toFixed(v < 1 ? 4 : 2)}`);
+  const report = (r: any) => say(`\n${reportText(r)}`);
+  try {
+    if (flag("report") || flag("share")) {
+      const { j } = await call("/api/trial");
+      if (!j.report) { say("No trial has run yet. Run one with: leanfare trial"); process.exit(0); }
+      if (flag("share")) {
+        if (flag("no-open") || process.env.LEANFARE_NO_OPEN === "1") say(j.report.share.url);
+        else { openBrowser(j.report.share.url); say("Opened GitHub with the results filled in. Read them, then press Submit if you want to send them."); }
+      } else report(j.report);
+      process.exit(0);
+    }
+    const before = (await call("/api/trial")).j;
+    if (!before.running) {
+      const e = before.estimate;
+      if (!e?.models?.low) { console.error("No model is ready yet. Open Leanfare, add a key and tick a model, then run the trial again."); process.exit(1); }
+      say(`Leanfare delegate trial: ${e.questions} questions with known answers about files Leanfare makes up, each asked at low, medium and high effort (${e.answers} answers).`);
+      say(`${e.estimate === 0 ? "$0 on the models you ticked now (free)" : e.estimate === null ? "On the models you ticked now" : `About ${usd(e.estimate)} on the models you ticked now`}${typeof e.seconds === "number" ? `, about ${Math.max(1, Math.round(e.seconds / 60))} min` : ""}. Nothing of yours is sent. Ctrl+C stops it.\n`);
+      await call("/api/trial/start", { method: "POST", json: {} });
+    } else say("A trial is already running; following it.\n");
+    process.on("SIGINT", () => { call("/api/trial/stop", { method: "POST", json: {} }).catch(() => {}).finally(() => { say("\nStopped."); process.exit(130); }); });
+    let shown = 0;
+    for (;;) {
+      const { j } = await call("/api/trial");
+      const r = j.report;
+      for (; r && shown < r.rows.length; shown++) {
+        const x = r.rows[shown];
+        say(`${String(shown + 1).padStart(3)}/${r.total}  ${x.what} · ${x.effort} · ${x.ok ? `${x.right ? "right" : "WRONG"} · ${x.label ?? "?"}${x.check ? ` · check ${x.check}` : ""}` : "no answer"} · ${secs(x.seconds)}`);
+      }
+      if (!j.running) { if (r) report(r); process.exit(r?.status === "failed" ? 1 : 0); }
+      await Bun.sleep(1500);
+    }
+  } catch (e: any) { console.error(String(e?.message ?? e)); process.exit(1); }
+}
+
 if (flag("version") || command === "version" || args.includes("-v")) { console.log(VERSION); process.exit(0); }
 if (flag("help") || command === "help" || args.includes("-h")) { console.log(HELP); process.exit(0); }
 if (!Number.isInteger(port) || port < 1 || port > 65535) { console.error("The port must be a number from 1 to 65535."); process.exit(2); }
@@ -237,4 +280,5 @@ else if (command === "status") await status();
 else if (command === "mcp") { const { runMcp } = await import("./mcp"); await runMcp(); }
 else if (command === "statusline") { const { runStatusline } = await import("./statusline"); await runStatusline(args); }
 else if (command === "apps") await apps();
+else if (command === "trial") await trial();
 else { console.error(`Unknown command "${command}".\n\n${HELP}`); process.exit(2); }

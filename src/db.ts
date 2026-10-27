@@ -94,6 +94,8 @@ CREATE TABLE IF NOT EXISTS delegations(
   rerun_cost REAL
 );
 CREATE INDEX IF NOT EXISTS delegations_month ON delegations(month);
+-- The delegate trial's runs (trial.ts): grades, models, times and costs of questions about Leanfare's own made-up files.
+CREATE TABLE IF NOT EXISTS trials(id INTEGER PRIMARY KEY, started TEXT NOT NULL, finished TEXT, status TEXT NOT NULL, corpus TEXT NOT NULL, version TEXT NOT NULL, total INTEGER NOT NULL, rows TEXT NOT NULL, note TEXT);
 `;
 
 // Columns added after 0.1: an older file gets them on its first start.

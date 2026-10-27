@@ -791,7 +791,7 @@ export interface ChatOptions {
   effort?: string | null; // thinking effort (auto: each model's default)
   system?: string; // the chat's instructions, sent first as a system message
   meta?: Record<string, unknown>; // added to the answer's details (the answer it is compared with)
-  source?: string; // where the ledger says it came from (default "chat"; the delegate's work is "delegate", its checks "check")
+  source?: string; // where the ledger says it came from (default "chat"; the delegate's work is "delegate", its checks "check", the trial's "trial")
   guess?: Guess; // the task, when the caller knows it
   only?: (m: Model) => boolean; // a further limit on the models Auto may pick
   onlyWhy?: string; // what to say when that limit leaves no model

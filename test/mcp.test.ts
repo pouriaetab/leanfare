@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ALL_TICKED, boot, keys, ledger, reset } from "./app";
+import { ALL_TICKED, boot, fake, keys, ledger, reset } from "./app";
 import { db } from "../src/db";
 import { forgetSpeeds } from "../src/speed";
 
@@ -55,7 +55,7 @@ describe("the protocol", () => {
     const unknown = await rpc("initialize", { protocolVersion: "2019-01-01", capabilities: {} });
     expect(unknown.result.protocolVersion).toBe("2025-11-25");
     const list = await rpc("tools/list", {});
-    expect(list.result.tools.map((t: any) => t.name)).toEqual(["ask", "delegate", "spend", "models", "estimate"]);
+    expect(list.result.tools.map((t: any) => t.name)).toEqual(["ask", "delegate", "spend", "models", "estimate", "trial"]);
     expect(list.result.resultType).toBeUndefined();
   });
 
@@ -65,7 +65,7 @@ describe("the protocol", () => {
     expect(d.result._meta["io.modelcontextprotocol/serverInfo"].name).toBe("leanfare");
     const list = await rpc("tools/list", modern());
     expect(list.result.resultType).toBe("complete");
-    expect(list.result.tools).toHaveLength(5);
+    expect(list.result.tools).toHaveLength(6);
     for (const t of list.result.tools) expect(t.inputSchema.type).toBe("object");
   });
 
@@ -131,6 +131,26 @@ describe("the tools", () => {
     expect(f.result.structuredContent.speed).toBe("fastest");
   });
 
+  test("trial: start returns at once, status follows it, and the report names the lowest effort that passed", async () => {
+    await keys("openai", "anthropic", "google", "deepseek", "xai", "mistral");
+    const { QUESTIONS, timing, truths } = await import("../src/trial");
+    const T = truths();
+    fake.hooks.answer = (prompt) => { const i = QUESTIONS.findIndex((q) => prompt.includes(q.task)); return i < 0 ? null : Array.isArray(T[i]) ? (T[i] as string[]).join(", ") : String(T[i]); };
+    timing.pause = 0;
+    try {
+      const none = await rpc("tools/call", { name: "trial", arguments: {} });
+      expect(none.result.content[0].text).toBe("No trial has run yet. Call trial with action start to begin one.");
+      const s = await rpc("tools/call", { name: "trial", arguments: { action: "start" } });
+      expect(s.result.content[0].text).toMatch(/^The trial started: 30 answers, about \$[\d.]+, about \d+ min\. Ask for its status in a few minutes\.$/);
+      let r: any = null;
+      for (let i = 0; i < 200; i++) { r = await rpc("tools/call", { name: "trial", arguments: { action: "status" } }); if (!r.result.structuredContent.running) break; await Bun.sleep(50); }
+      expect(r.result.structuredContent).toMatchObject({ running: false, status: "done", lowest_passing: "low" });
+      expect(r.result.content[0].text).toContain("Low effort passes (at most one miss): Claude can hand reading work to Leanfare at effort low.");
+      expect(r.result.content[0].text).toContain("To share these numbers on GitHub, open this address; you read them and press Submit yourself, nothing is sent on its own: https://github.com/pouriaetab/leanfare/issues/new?title=");
+      expect((await rpc("tools/call", { name: "trial", arguments: { action: "fly" } })).result.isError).toBe(true);
+    } finally { timing.pause = 2000; }
+  }, 30_000);
+
   test("delegate: the door reads the files itself, and the answer comes back with its receipt", async () => {
     await keys("openai", "anthropic", "google", "deepseek", "xai", "mistral");
     const folder = mkdtempSync(join(tmpdir(), "leanfare-door-"));
@@ -178,6 +198,6 @@ describe("the end of the input", () => {
     expect((await run('{"jsonrpc":"2.0","id":1,"method":"ping"}')).map((m) => m.id)).toEqual([1]);
     const two = await run('{"jsonrpc":"2.0","id":1,"method":"ping"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}');
     expect(two.map((m) => m.id)).toEqual([1, 2]);
-    expect(two[1].result.tools).toHaveLength(5);
+    expect(two[1].result.tools).toHaveLength(6);
   }, 20000);
 });
