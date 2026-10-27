@@ -514,6 +514,11 @@
     const table = h("div", { class: "plan-table-wrap" }, h("table", { class: "plan-table" }, h("thead", {}, h("tr", {}, ...head.map((x) => h("th", { text: x })))), h("tbody", {}, ...rows)));
     const time = [t.seconds !== null ? `Leanfare's parts take ${secsShort(t.seconds)} done at once` : "", t.after !== null && t.after !== undefined ? `${t.seconds !== null ? "the ones after yours take" : "Leanfare's parts wait for yours, then take"} ${secsShort(t.after)}${t.seconds !== null ? " once yours are done" : ""}` : ""].filter(Boolean).join("; ");
     const sum = h("p", { class: "plan-sum", text: `${t.out} of ${t.parts} parts go to Leanfare, keeping about ${tokShort(t.kept)} tokens out of your plan${t.used ? `; about ${tokShort(t.used)} stay in it` : ""}.${time ? ` ${time}.` : ""} Pay per use: ${t.cost === null ? "not known" : money(t.cost)}.${t.out ? "" : ` ${nothingOut(P.parts)}`}` });
+    // A local model that would run the reading and drafting free: pressing Download it is the yes.
+    const localNote = P.local ? h("p", { class: "fine plan-local" }, `A local model fits this computer: ${P.local.name} (${gbs(P.local.size)}), rated like ${P.local.like}, free to run. `,
+      h("button", { class: "btn small", type: "button", text: "Download it", onclick: async () => {
+        try { await api("/api/local/pull", { body: { name: P.local.name, sizeBytes: P.local.size } }); S.local = null; toast(`Downloading ${P.local.name}: Settings, Local models shows how it goes.`, "done"); } catch (e) { failed(e); }
+      } })) : null;
     const lim = P.limits ? h("p", { class: "fine", text: `Your Claude plan now: ${[P.limits.five !== null ? `5 hours ${Math.round(P.limits.five)}% used` : "", P.limits.week !== null ? `week ${Math.round(P.limits.week)}% used` : ""].filter(Boolean).join(", ")}. Near a limit, more parts go to Leanfare.` }) : null;
     const how = h("p", { class: "fine", text: P.split.note ?? (P.split.model ? `Split by ${P.split.model.label}${typeof P.split.cost === "number" ? `, ${money(P.split.cost)}` : ""}.` : "Split by rules.") });
     // Something of Leanfare's left to run: never run, or ended without an answer.
@@ -532,7 +537,7 @@
       r.error ? h("p", { class: "pl-note", text: r.error }) : null,
       r.receipt ? h("p", { class: "fine", text: r.receipt }) : null)) : [];
     return h("div", { class: "card plan-result", id: "planResult" }, h("h3", {}, "The plan", h("span", { class: "grow" }), h("small", { text: P.task.length > 80 ? P.task.slice(0, 80) + "…" : P.task })),
-      table, sum, laterNote, lim, buttons, how, ...answers);
+      table, sum, localNote, laterNote, lim, buttons, how, ...answers);
   }
   // Only the plan's card is drawn again while its parts run: the boxes above keep what is typed and their focus.
   function redrawPlanResult() {
@@ -1837,14 +1842,19 @@
   async function startDownload(input) {
     const name = input.value.trim();
     if (!name) { toast("Type the model's name first, for example gemma3:12b.", "error"); return; }
+    if (await startDownloadOf(name)) input.value = "";
+  }
+  // The suggested model's Download (and the Plan tab's) passes its size, so a model too big for this
+  // computer is refused before anything downloads.
+  async function startDownloadOf(name, sizeBytes) {
     try {
-      const r = await api("/api/local/pull", { body: { name } });
+      const r = await api("/api/local/pull", { body: { name, ...(sizeBytes ? { sizeBytes } : {}) } });
       pullStartedAt = Date.now();
       if (S.local) S.local.pull = r.pull;
-      input.value = "";
       renderLocal();
       ensurePoll();
-    } catch (e) { failed(e); }
+      return true;
+    } catch (e) { failed(e); return false; }
   }
   async function stopDownload(ev) {
     if (ev.detail > 1 || Date.now() - pullStartedAt < 500) return; // the second click of a double click is not a Stop
@@ -1914,6 +1924,16 @@
       h("div", { class: "section-title", text: L.installed.length ? `On this computer · ${L.installed.length} model${L.installed.length === 1 ? "" : "s"} · ${gbs(L.total)}` : "On this computer" }),
       L.installed.length ? h("div", { class: "lmodels" }, ...L.installed.map(localRow)) : h("p", { text: "No models yet. Download one below." }));
     const busy = !!L.pull?.active;
+    // The open model Leanfare suggests for this computer (local.ts says how it chooses), downloaded on a press.
+    const sg = L.suggest?.suggestion;
+    if (sg && !busy) {
+      card.append(h("div", { class: "section-title", text: "Suggested for this computer" }),
+        h("div", { class: "srow" },
+          h("span", { class: "nm", title: sg.name, text: sg.name }),
+          h("span", { class: "facts" }, h("span", { text: gbs(sg.size) }), fitChip(sg.fit), h("span", { title: `Rated like ${sg.like}, a little lower for the lighter copy that runs here`, text: `★ ${sg.rating}` }), h("span", { text: sg.license })),
+          h("button", { class: "btn small primary", type: "button", text: "Download", onclick: () => startDownloadOf(sg.name, sg.size) })),
+        h("p", { class: "note", text: L.suggest.why }));
+    } else if (L.suggest?.why && !busy) card.append(h("p", { class: "note", text: `Suggested for this computer: none. ${L.suggest.why}` }));
     const input = h("input", { type: "text", placeholder: "gemma3:12b   or   hf.co/user/repo:Q4_K_M", autocomplete: "off", spellcheck: "false", "data-keep": "local-name", "aria-label": "Model to download", disabled: busy, value: busy ? L.pull.name : null,
       onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); if (!busy) startDownload(input); } } });
     card.append(h("div", { class: "section-title", text: "Download a model" }),

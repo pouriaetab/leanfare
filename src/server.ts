@@ -409,6 +409,7 @@ async function api(req: Request, url: URL): Promise<Response> {
   // in the background while the page polls its progress.
   if (p === "/api/local" && m === "GET") return json(await local.overview());
   if (p === "/api/local/pull" && m === "GET") return json({ pull: local.pullView() });
+  if (p === "/api/local/suggest" && m === "GET") return json(local.suggestLocal());
   if (p === "/api/local/pull" && m === "POST") { const b = await readBody(req); return json({ pull: await local.startPull(b.name, b.sizeBytes) }); }
   if (p === "/api/local/pull/stop" && m === "POST") { local.stopPull(); return json({ pull: local.pullView() }); }
   if (p === "/api/local/pull/dismiss" && m === "POST") { local.dismissPull(); return json({ pull: null }); }

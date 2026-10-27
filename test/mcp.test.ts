@@ -58,7 +58,7 @@ describe("the protocol", () => {
     const unknown = await rpc("initialize", { protocolVersion: "2019-01-01", capabilities: {} });
     expect(unknown.result.protocolVersion).toBe("2025-11-25");
     const list = await rpc("tools/list", {});
-    expect(list.result.tools.map((t: any) => t.name)).toEqual(["plan", "plan_run", "plan_stop", "plan_status", "ask", "delegate", "spend", "models", "estimate", "trial"]);
+    expect(list.result.tools.map((t: any) => t.name)).toEqual(["plan", "plan_run", "plan_stop", "plan_status", "ask", "delegate", "spend", "models", "estimate", "trial", "local_model"]);
     expect(list.result.resultType).toBeUndefined();
   });
 
@@ -68,7 +68,7 @@ describe("the protocol", () => {
     expect(d.result._meta["io.modelcontextprotocol/serverInfo"].name).toBe("leanfare");
     const list = await rpc("tools/list", modern());
     expect(list.result.resultType).toBe("complete");
-    expect(list.result.tools).toHaveLength(10);
+    expect(list.result.tools).toHaveLength(11);
     for (const t of list.result.tools) expect(t.inputSchema.type).toBe("object");
   });
 
@@ -285,6 +285,6 @@ describe("the end of the input", () => {
     expect((await run('{"jsonrpc":"2.0","id":1,"method":"ping"}')).map((m) => m.id)).toEqual([1]);
     const two = await run('{"jsonrpc":"2.0","id":1,"method":"ping"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}');
     expect(two.map((m) => m.id)).toEqual([1, 2]);
-    expect(two[1].result.tools).toHaveLength(10);
+    expect(two[1].result.tools).toHaveLength(11);
   }, 20000);
 });

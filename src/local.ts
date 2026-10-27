@@ -10,7 +10,7 @@ import { existsSync, statfsSync } from "node:fs";
 import { homedir, totalmem } from "node:os";
 import { dirname, join } from "node:path";
 import { baseOf } from "./config";
-import { refreshOllama, store } from "./data";
+import { LOCAL_PENALTY, allModels, refreshOllama, store, twinOf } from "./data";
 import { saveSettings, settings } from "./settings";
 import { UserError } from "./upstream";
 import { providerMessage } from "./util";
@@ -61,11 +61,53 @@ async function ask(path: string, init: RequestInit = {}, timeoutMs = 3_000): Pro
 
 export interface Installed { name: string; size: number; params: string | null; quant: string | null; family: string | null; modified: string | null; loaded: boolean; fit: Fit }
 
+// ---- the model to suggest for this computer ---------------------------------------------------------
+// Open models anyone may use for work (Apache 2.0), in the sizes Ollama serves (download sizes, rounded
+// up). Leanfare suggests the best rated one that runs comfortably here, has room on the disk and is
+// better than what is installed, and downloads it only on a yes. A model Leanfare cannot rate yet (no
+// twin in the catalogue) is not suggested: Auto would not pick it. One that only runs tightly is
+// suggested when none runs comfortably, and says so.
+export const SUGGESTED: { name: string; size: number }[] = [
+  { name: "gemma4:e2b-it-qat", size: 4.3e9 },
+  { name: "gemma4:e4b-it-qat", size: 6.1e9 },
+  { name: "gemma4:12b-it-qat", size: 7.2e9 },
+  { name: "gpt-oss:20b", size: 14e9 },
+  { name: "gemma4:26b-a4b-it-qat", size: 16e9 },
+  { name: "qwen3.8:27b", size: 18e9 },
+  { name: "gemma4:31b-it-qat", size: 19e9 },
+  { name: "gpt-oss:120b", size: 65e9 },
+];
+export interface Suggestion { name: string; size: number; fit: Fit; rating: number; like: string; license: "Apache-2.0" }
+export function suggestLocal(): { suggestion: Suggestion | null; why: string } {
+  if (!onThisComputer()) return { suggestion: null, why: "Ollama runs on another computer, so Leanfare cannot tell what fits there." };
+  const mem = probe.memory();
+  const free = probe.free(modelsDir());
+  const catalogue = allModels().filter((m) => !m.local);
+  const have = store.ollama;
+  const haveBest = have.reduce<{ rating: number; label: string } | null>((b, m) => (m.ratings.overall !== undefined && (!b || m.ratings.overall > b.rating) ? { rating: m.ratings.overall, label: m.label } : b), null);
+  const haveTwins = new Set(have.map((m) => twinOf(m.apiId, catalogue)?.id).filter(Boolean));
+  const rated = SUGGESTED.map((c) => ({ c, twin: twinOf(c.name, catalogue) })).filter((x) => x.twin);
+  if (!rated.length) return { suggestion: null, why: "Leanfare has no rating yet for the open models on its list, so it suggests none." };
+  const runs = rated.map((x) => ({ ...x, fit: fit(x.c.size, mem), rating: x.twin!.ratings.overall! - LOCAL_PENALTY })).filter((x) => x.fit !== "too big");
+  if (!runs.length) return { suggestion: null, why: `None of the rated open models on Leanfare's list runs in ${gb(mem)} of memory.` };
+  const roomy = runs.filter((x) => free === null || free - x.c.size >= MIN_FREE);
+  if (!roomy.length) return { suggestion: null, why: `The disk has ${gb(free ?? 0)} free; the models that run here need more, and Leanfare keeps ${gb(MIN_FREE)} free.` };
+  const fresh = roomy.filter((x) => !haveTwins.has(x.twin!.id) && (!haveBest || x.rating > haveBest.rating));
+  if (!fresh.length) return { suggestion: null, why: `${haveBest?.label ?? "What you have"} is already as good as what runs here.` };
+  const comfy = fresh.filter((x) => x.fit === "fits");
+  const top = (comfy.length ? comfy : fresh).sort((a, b) => b.rating - a.rating || a.c.size - b.c.size)[0];
+  const how = top.fit === "fits" ? `runs comfortably in this computer's ${gb(mem)} of memory` : `runs in this computer's ${gb(mem)} of memory, but tightly: other apps may slow down while it answers`;
+  return {
+    suggestion: { name: top.c.name, size: top.c.size, fit: top.fit, rating: Math.round(top.rating), like: top.twin!.label, license: "Apache-2.0" },
+    why: `${top.c.name} (${gb(top.c.size)}) ${how}, and is rated like ${top.twin!.label}. It runs free, on this computer, and Leanfare's Auto and plans can use it for reading and drafting. Apache 2.0: free to use for work.`,
+  };
+}
+
 export async function overview() {
   const memory = probe.memory();
   const here = onThisComputer();
   const free = here ? probe.free(modelsDir()) : null;
-  const base = { tried: `${host()}/api/tags`, installUrl: INSTALL_URL, memory: { total: memory, usable: Math.round(memory * 0.7) }, disk: { free, minFree: MIN_FREE, known: free !== null }, remote: !here, pull: pullView() };
+  const base = { tried: `${host()}/api/tags`, installUrl: INSTALL_URL, memory: { total: memory, usable: Math.round(memory * 0.7) }, disk: { free, minFree: MIN_FREE, known: free !== null }, remote: !here, pull: pullView(), suggest: suggestLocal() };
   try {
     const tags = await (await ask("/api/tags")).json() as any;
     let ps: any = { models: [] };
