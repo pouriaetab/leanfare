@@ -2242,13 +2242,14 @@
     const v = c?.version ? ` ${c.version}` : "";
     const status = !c ? "Looking for Codex…"
       : !c.installed ? "Codex is not on this computer. To get it, in Terminal: npm install -g @openai/codex, then codex login (sign in with ChatGPT)."
+      : c.login === "other" ? `Codex${v} is signed in with an API key or another login, not with ChatGPT, so Leanfare does not use it: that would be billed per use. In Terminal: codex login (sign in with ChatGPT).`
       : !c.signedIn ? `Codex${v} is here, but not signed in. In Terminal: codex login (sign in with ChatGPT).`
       : `Codex${v} is here and signed in.`;
     return h("div", { class: "setting", id: "codexCard" }, h("h3", { text: "Your ChatGPT plan, through Codex" }),
       h("p", { class: "note", text: status }),
       h("label", { class: "check" }, h("input", { type: "checkbox", checked: !!s.codexPlan, onchange: (e) => patchSettings({ codexPlan: e.target.checked }, e.target.checked ? "Plans can run reading and drafting on Codex now." : "Plans no longer use Codex.") }),
         " Let plans run their reading, drafting and working out on Codex, before pay per use"),
-      h("p", { text: "Codex runs those parts read only, in the folder of their files, and they count toward your ChatGPT plan's Codex limits; Leanfare pays nothing for them. Parts that change your project stay with the app you work in. Near 85% of your ChatGPT plan's 5 hours or week, Leanfare leaves Codex alone." }),
+      h("p", { text: "Codex runs those parts read only, in the folder of their files, without your MCP servers, apps or plugins, and they count toward your ChatGPT plan's Codex limits; Leanfare pays nothing for them. Codex itself decides what it reads there, as when you use it. Parts that change your project stay with the app you work in. Near 85% of your ChatGPT plan's 5 hours or week, Leanfare leaves Codex alone." }),
       runButton("Look again", () => loadCodex(true), "btn small quiet"));
   }
 

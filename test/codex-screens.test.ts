@@ -14,11 +14,11 @@ const was = process.env.LEANFARE_CODEX_BIN;
 beforeAll(async () => {
   url = (await boot()).url;
   dir = realpathSync(mkdtempSync(join(tmpdir(), "leanfare-fakecodex-ui-")));
-  writeFileSync(join(dir, "codex"), `#!/bin/sh\ncase "$1" in --version) echo "codex-cli 0.159.0" ;; login) [ -f "${dir}/signed-out" ] && exit 1; echo ok ;; *) exit 2 ;; esac\n`);
+  writeFileSync(join(dir, "codex"), `#!/bin/sh\ncase "$1" in --version) echo "codex-cli 0.159.0" ;; login) [ -f "${dir}/signed-out" ] && exit 1; [ -f "${dir}/apikey" ] && { echo "API key configured - sk-***abcde" >&2; exit 0; }; echo "Logged in using ChatGPT" >&2 ;; mcp) echo "[]" ;; *) exit 2 ;; esac\n`);
   chmodSync(join(dir, "codex"), 0o755);
 });
 afterAll(() => { if (was === undefined) delete process.env.LEANFARE_CODEX_BIN; else process.env.LEANFARE_CODEX_BIN = was; rmSync(dir, { recursive: true, force: true }); });
-beforeEach(async () => { forgetCodex(); await reset({ ticked: ALL_TICKED }); process.env.LEANFARE_CODEX_BIN = join(dir, "codex"); rmSync(join(dir, "signed-out"), { force: true }); });
+beforeEach(async () => { forgetCodex(); await reset({ ticked: ALL_TICKED }); process.env.LEANFARE_CODEX_BIN = join(dir, "codex"); for (const f of ["signed-out", "apikey"]) rmSync(join(dir, f), { force: true }); });
 afterEach(closeApp);
 async function waitFor(ok: () => boolean, ms = 8000) { for (let i = 0; i < ms / 50 && !ok(); i++) await Bun.sleep(50); }
 const card = (doc: any) => doc.querySelector("#codexCard");
@@ -47,6 +47,13 @@ describe("Settings: your ChatGPT plan, through Codex", () => {
     [...card(doc).querySelectorAll("button")].find((b: any) => b.textContent === "Look again").click();
     await waitFor(() => !!card(doc)?.textContent.includes("not on this computer"));
     expect(card(doc).textContent).toContain("Codex is not on this computer. To get it, in Terminal: npm install -g @openai/codex, then codex login (sign in with ChatGPT).");
+  }, 20000);
+  test("signed in with an API key: says Leanfare uses Codex only on the ChatGPT plan", async () => {
+    writeFileSync(join(dir, "apikey"), "");
+    const doc = await open(url);
+    doc.querySelector('.tabs button[data-tab="settings"]').click();
+    await waitFor(() => !!card(doc)?.textContent.includes("API key"));
+    expect(card(doc).textContent).toContain("Codex 0.159.0 is signed in with an API key or another login, not with ChatGPT, so Leanfare does not use it: that would be billed per use. In Terminal: codex login (sign in with ChatGPT).");
   }, 20000);
 });
 
