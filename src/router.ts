@@ -105,9 +105,9 @@ const fmtUsd = (v: number | null) => (v === null ? "no listed price" : v === 0 ?
 // `speed` (speed.ts): the cheapest (as before), the fastest, or the cheapest expected within N seconds;
 // `timeOf` estimates an answer's seconds from how fast each model answered before.
 export function pickModel(messages: Msg[], usable: Model[], mode: Mode, history: (task: string, model: string | null) => number | null, system?: unknown, forced?: Guess,
-  speed: SpeedChoice = "cheapest", timeOf?: (m: Model, outTokens: number) => { seconds: number; measured: boolean }): Pick | null {
+  speed: SpeedChoice = "cheapest", timeOf?: (m: Model, outTokens: number) => { seconds: number; measured: boolean }, inTokens?: number): Pick | null {
   const guess = forced ?? guessTask(messages);
-  const inTok = promptTokens(messages as any, system);
+  const inTok = inTokens ?? promptTokens(messages as any, system);
   const day = localDay();
   const live = usable.filter((m) => !isRetired(m, day));
   const rated: Candidate[] = [];

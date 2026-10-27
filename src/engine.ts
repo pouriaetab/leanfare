@@ -141,6 +141,7 @@ export interface PlanInput {
   optional?: boolean; // work that can be skipped (the delegate's check): never sent past the budget
   speed?: SpeedChoice; // cheapest, fastest or within N seconds (speed.ts); default: Settings
   ledgerSource?: string; // where the ledger will say it came from ("delegate", "check", "trial"...): its answer lengths are its own
+  tokens?: number; // a dry plan's input tokens, when the caller knows them without the text (the planner): counted, never built
 }
 
 export interface Choice { id: string; label: string; estimate: number | null; seconds: number | null; measured: boolean }
@@ -233,8 +234,8 @@ export async function plan(input: PlanInput): Promise<Plan> {
   const mediaWords = [media.images ? "images" : "", media.pdfs ? "PDFs" : ""].filter(Boolean).join(" and ");
   const amode = autoMode(input.asked, input.mode ?? s.mode);
   const mode = amode ?? input.mode ?? s.mode;
-  const inTok = promptTokens(input.messages as any, input.system);
-  const inMax = promptMax(input.messages, input.system, input.tools);
+  const inTok = input.tokens ?? promptTokens(input.messages as any, input.system);
+  const inMax = input.tokens !== undefined ? input.tokens * 4 : promptMax(input.messages, input.system, input.tools); // the most: a token per byte
   const capped = s.budget !== null && input.maxOut === null;
   const speed: SpeedChoice = input.speed ?? s.speed ?? "cheapest";
   const group = lengthGroup(input.ledgerSource ?? input.source);
@@ -258,7 +259,7 @@ export async function plan(input: PlanInput): Promise<Plan> {
     }
     const effortAsked = input.effort ?? null;
     const p = pickModel(input.messages, usable, amode, (t, mid) => outputHistory(t, mid, effortAsked && mid ? effortFor(getModel(mid)!, effortAsked) : null, group), input.system, input.guess,
-      speed, (m, out) => secondsFor(m, out, effortAsked ? effortFor(m, effortAsked) : null));
+      speed, (m, out) => secondsFor(m, out, effortAsked ? effortFor(m, effortAsked) : null), input.tokens);
     if (p) {
       model = p.model; guess = p.guess; reason = p.reason;
       candidates = p.candidates.map((c) => c.model);

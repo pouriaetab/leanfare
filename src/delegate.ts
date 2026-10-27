@@ -33,6 +33,7 @@ export type CheckPolicy = "auto" | "always" | "never";
 export interface DelegateInput {
   task: string; files: DelegateFile[]; kind: Kind | null; effort: Effort; check: CheckPolicy; maxOut: number; speed?: SpeedChoice;
   trial?: boolean; // the trial's questions (trial.ts): ledger rows say "trial", and none count in the delegate's own pass rates
+  only?: (m: Model) => boolean; // a limit on every model of the task (the answer, the check, a second try): a plan's free part stays on free models
 }
 
 export const KINDS: Kind[] = ["read", "write", "reason"];
@@ -271,11 +272,14 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   const none = { checker: null, verdict: null, checkCost: null, rerun: null, rerunCost: null };
 
   const doFit = fit(prompt.length + system.length, input.maxOut);
-  const first = await run(messages, `auto-${TIER[input.effort]}`, "Delegate", { system, source, guess, only: doFit.ok, onlyWhy: tooMuch(doFit.need), effort: input.effort, maxOut: input.maxOut, speed: input.speed });
+  const limit = input.only;
+  const within = (ok: (m: Model) => boolean) => (limit ? (m: Model) => ok(m) && limit(m) : ok);
+  const first = await run(messages, `auto-${TIER[input.effort]}`, "Delegate", { system, source, guess, only: within(doFit.ok), onlyWhy: tooMuch(doFit.need), effort: input.effort, maxOut: input.maxOut, speed: input.speed });
   if (first.status !== "ok") {
     write({ ...row, ...none, model: first.meta?.model?.id ?? null, cost: first.cost, answerTokens: 0, status: first.status, chance: 0 });
-    if (first.status === "stopped") throw new UserError(499, gone() ? "Stopped." : "Stopped in Leanfare before it answered.", "stopped");
-    throw new UserError(first.error!.status, first.error!.message, "delegate_failed");
+    // spent: what the call was charged, so whoever runs it can count it (a plan's run does).
+    if (first.status === "stopped") throw Object.assign(new UserError(499, gone() ? "Stopped." : "Stopped in Leanfare before it answered.", "stopped"), { spent: first.cost });
+    throw Object.assign(new UserError(first.error!.status, first.error!.message, "delegate_failed"), { spent: first.cost });
   }
   const doer = getModel(first.meta.model.id) ?? null; // null only if the price list changed while it ran
   const chance = input.check === "always" ? 1 : input.check === "never" ? 0 : CHANCE[input.effort];
@@ -289,13 +293,13 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   // The caller went away part way: the row keeps what was charged, and there is no answer to give.
   const stopped = () => {
     write({ ...row, model: first.meta.model.id, cost: first.cost, answerTokens: tokensOf(first.text.length), status: "stopped", chance, checker: check.checker?.id ?? null, verdict: null, checkCost: check.cost, rerun: null, rerunCost });
-    return new UserError(499, "Stopped.", "stopped");
+    return Object.assign(new UserError(499, "Stopped.", "stopped"), { spent: add(...spent) });
   };
 
   if (picked) {
     const checkPrompt = `The task:\n${input.task}${block ? `\n\n${block}` : ""}\n\nThe answer to check:\n${first.text}`;
     const ckFit = fit(checkPrompt.length + CHECKER_SYSTEM.length, CHECK_MAX_OUT);
-    const above = doer ? ratedAbove(doer) : () => false;
+    const above = within(doer ? ratedAbove(doer) : () => false);
     const stronger = (m: Model) => above(m) && ckFit.ok(m);
     if (!usableModels(above).length) {
       check.verdict = "skipped";

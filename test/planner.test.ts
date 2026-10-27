@@ -4,7 +4,7 @@ import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chainSeconds, checkPlan, forgetPlans, keptPlan, makePlan, paidOf, readSplit, rulesSplit, runView, SIZE_TOKENS, SPLIT_SYSTEM, startRun, stopRun, tableOf, type Part } from "../src/planner";
+import { chainSeconds, checkPlan, forgetPlans, keptPlan, makePlan, paidOf, readSplit, rulesSplit, runView, SIZE_TOKENS, SPLIT_SYSTEM, splitView, startRun, stopRun, tableOf, type Part } from "../src/planner";
 import { saveSettings } from "../src/settings";
 import { saveSnap } from "../src/statusline";
 import { ALL_TICKED, boot, fake, keys, ledger, reset, ui } from "./app";
@@ -158,7 +158,7 @@ describe("where each part runs", () => {
       { n: 1, title: "Read | the logs", kind: "read", effort: "low", needs: [], task: "", files: [], size: "large", where: "local", model: { id: "ollama/qwen", label: "Qwen" }, seconds: 40, tokens: SIZE_TOKENS.large, cost: 0, why: "" },
       { n: 2, title: "Fix it", kind: "code", effort: "high", needs: [1], task: "", files: [], size: "small", where: "you", model: null, seconds: null, tokens: 5000, cost: null, why: "" },
     ] as Part[];
-    const t = tableOf({ task: "x", manager: "Claude Code", parts, totals: { parts: 2, out: 1, kept: SIZE_TOKENS.large, used: 5000, seconds: 40, cost: 0 }, split: { by: "rules", model: null, cost: null, note: null }, limits: null });
+    const t = tableOf({ task: "x", manager: "Claude Code", parts, totals: { parts: 2, out: 1, later: 0, kept: SIZE_TOKENS.large, used: 5000, seconds: 40, after: null, cost: 0 }, split: { by: "rules", model: null, cost: null, note: null }, limits: null });
     expect(t).toContain("| 1 | Read / the logs | read, low | Leanfare, on this computer | Qwen | ~40 s | ~150k kept | $0 | now |");
     expect(t).toContain("| 2 | Fix it | code, high | you (Claude Code) | your model |  | ~5k of your plan | in your plan | after 1 |");
     expect(t).toContain("1 of 2 parts go to Leanfare, keeping about 150k tokens out of your plan; about 5k stay in it.");
@@ -188,7 +188,13 @@ describe("running a plan here (the Plan tab)", () => {
     expect(startRun(plan.id)).toBe(v); // asked again while it runs: the same run
     await until(() => !runView(plan.id)!.running);
     const st = Object.fromEntries(runView(plan.id)!.parts.map((p) => [p.n, p.status]));
-    expect(st).toEqual({ 1: "done", 2: "done", 3: "yours", 4: "yours", 5: "blocked" });
+    expect(st).toEqual({ 1: "done", 2: "done", 3: "yours", 4: "yours", 5: "after_yours" }); // 5 needs 3, which is yours: yours to hand over once 3 is done
+    expect(plan.totals.later).toBe(1);
+    // The time of Leanfare's parts: 1 then 2 now; 5 counted apart, from when yours are done.
+    expect(plan.totals.seconds).toBeCloseTo(plan.parts[0].seconds! + plan.parts[1].seconds!, 5);
+    expect(plan.totals.after).toBeCloseTo(plan.parts[4].seconds!, 5);
+    expect(plan.table).toContain("the ones after yours take");
+    expect(plan.next).toContain("Part 5 waits for yours: once yours are done, run it with delegate");
     const two = prompts.find((x) => x.includes("Explain how the router picks a model"))!;
     expect(two).toContain("What the earlier parts found");
     expect(two).toContain("MODULES: proxy, router, cost."); // part 1's answer, handed on
@@ -251,12 +257,12 @@ describe("paid parts: within the cap they run, above it they wait for a yes", ()
     expect(paid.parts).toEqual([1, 2, 5]); // on these keys every Leanfare part is pay per use
     const v = startRun(plan.id);
     await until(() => !runView(plan.id)!.running);
-    expect(runView(plan.id)!.parts.map((p) => p.status)).toEqual(["asks", "asks", "yours", "yours", "asks"]);
-    expect(runView(plan.id)!.asks).toMatchObject({ parts: [1, 2, 5], cap: 0 });
+    expect(runView(plan.id)!.parts.map((p) => p.status)).toEqual(["asks", "asks", "yours", "yours", "after_yours"]); // part 5 waits for part 3, which is yours
+    expect(runView(plan.id)!.asks).toMatchObject({ parts: [1, 2], cap: 0 });
     expect(ledger().filter((x: any) => x.source === "delegate").length).toBe(0); // nothing paid went out
     startRun(plan.id, { paid: true });
     await until(() => !runView(plan.id)!.running);
-    expect(runView(plan.id)!.parts.map((p) => p.status)).toEqual(["done", "done", "yours", "yours", "blocked"]);
+    expect(runView(plan.id)!.parts.map((p) => p.status)).toEqual(["done", "done", "yours", "yours", "after_yours"]);
     expect(runView(plan.id)!.asks).toBeNull();
     expect(v.id).toBe(plan.id);
   });
@@ -280,10 +286,11 @@ describe("paid parts: within the cap they run, above it they wait for a yes", ()
       const plan = await makePlan({ task: "Reverse engineer LiteLLM", files: [], manager: "Claude Code", signal: signal() });
       const kept = keptPlan(plan.id)!;
       Object.assign(kept.parts[0], { where: "free", cost: 0 }); // part 1 free, part 2 (after it) paid
+      saveSettings({ providers: { google: { on: true, free: true } } }); // so a free model is there for part 1 (a free part runs on free models only)
       startRun(plan.id);
       await until(() => runView(plan.id)!.parts[0].status === "running");
-      expect(runView(plan.id)!.parts[1].status).toBe("asks");
-      startRun(plan.id, { paid: true });
+      expect(runView(plan.id)!.parts[1].status).toBe("waiting"); // it waits for part 1 first
+      startRun(plan.id, { paid: true }); // the yes, while part 1 runs
       expect(runView(plan.id)!.parts[1].status).toBe("waiting");
       await until(() => !runView(plan.id)!.running);
       expect(runView(plan.id)!.parts.slice(0, 2).map((p) => p.status)).toEqual(["done", "done"]);
@@ -295,5 +302,38 @@ describe("paid parts: within the cap they run, above it they wait for a yes", ()
     expect(validatePatch({ planAuto: "0.25" })).toEqual({ patch: { planAuto: 0.25 } });
     expect(validatePatch({ planAuto: "" })).toEqual({ patch: { planAuto: 0 } });
     expect(validatePatch({ planAuto: -1 })).toEqual({ error: "planAuto must be a dollar amount from 0 to 1,000" });
+  });
+});
+
+describe("folders and searches", () => {
+  test("past 200 files the split model sees their folders; past 200 folders, the largest and the rest together", () => {
+    const files = Array.from({ length: 250 }, (_, i) => ({ name: `repo/m${i}/a.py`, size: 1000 + i }));
+    const shown = splitView(files);
+    expect(shown.length).toBe(200);
+    expect(shown[0].name).toBe("repo/m249/a.py"); // the largest first; a folder of one file is named by its file
+    expect(shown.at(-1)).toMatchObject({ name: "(everything else) (51 files)", size: files.slice(0, 51).reduce((n, f) => n + f.size, 0) });
+    expect(shown.at(-1)!.members.length).toBe(51);
+    expect(shown.reduce((n, g) => n + g.members.length, 0)).toBe(250); // every file is in one of them
+  });
+
+  test("a search part runs on the model the plan named; one that fails says so, and the parts after it wait", async () => {
+    await reset({ ticked: [...ALL_TICKED, "perplexity/sonar"] });
+    await keys("openai", "google", "deepseek", "perplexity");
+    const make = () => makePlan({ task: "Research the open source vector databases and compare them", files: [], manager: "Claude Code", split: "rules", signal: signal() });
+    const plan = await make();
+    expect(plan.parts[0]).toMatchObject({ kind: "search", where: "paid", model: { id: "perplexity/sonar" } });
+    startRun(plan.id, { paid: true });
+    await until(() => !runView(plan.id)!.running);
+    const one = runView(plan.id)!.parts[0];
+    expect(one).toMatchObject({ status: "done", answer: "Hello from sonar." });
+    expect(one.receipt).toContain("Sonar");
+    fake.hooks.fail = (_text, provider) => (provider === "perplexity" ? 500 : null);
+    const again = await make();
+    startRun(again.id, { paid: true });
+    await until(() => !runView(again.id)!.running);
+    const [first, second] = runView(again.id)!.parts;
+    expect(first.status).toBe("failed");
+    expect(first.error).toBeTruthy();
+    expect(second.status).toBe("blocked"); // it needs the sources
   });
 });
