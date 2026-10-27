@@ -1,4 +1,4 @@
-// Use Leanfare in your apps: adds Leanfare's MCP server (its tools: delegate, ask, spend, models,
+// Use Leanfare in your apps: adds Leanfare's MCP server (its tools: plan, delegate, ask, spend, models,
 // estimate, trial) to the AI apps you already use, so they work as usual with Leanfare on top. One
 // press per app, undone the same way.
 //
