@@ -3,8 +3,9 @@
 //   bun scripts/preflight.ts            everything
 //   bun scripts/preflight.ts --offline  skip the online licence checks
 import { BUN_TESTED } from "../src/config";
+import { fileURLToPath } from "node:url";
 
-const root = new URL("..", import.meta.url).pathname;
+const root = fileURLToPath(new URL("..", import.meta.url));
 const offline = process.argv.includes("--offline");
 const run = async (name: string, cmd: string[]) => {
   const t0 = performance.now();

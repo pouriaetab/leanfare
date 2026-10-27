@@ -5,8 +5,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startFake, KEYS } from "../test/fake";
+import { fileURLToPath } from "node:url";
 
-const root = new URL("..", import.meta.url).pathname;
+const root = fileURLToPath(new URL("..", import.meta.url));
 const fake = startFake();
 const port = 4700 + Math.floor(Math.random() * 40);
 const env: Record<string, string> = { ...process.env as Record<string, string>, LEANFARE_DATA_DIR: mkdtempSync(join(tmpdir(), "leanfare-smoke-")), LEANFARE_KEYSTORE: "file", LEANFARE_NO_OPEN: "1", LEANFARE_DATA_URL: `${fake.base}/data.json` };

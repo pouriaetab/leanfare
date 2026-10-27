@@ -4,11 +4,12 @@
 //   bun scripts/build-data.ts path/to/data.json
 import { writeFileSync } from "node:fs";
 import { buildCatalog } from "../src/data";
+import { fileURLToPath } from "node:url";
 
 const src = process.argv[2] ?? process.env.LEANFARE_DATA_URL ?? "https://pouriaetab.github.io/llmledger/data.json";
 const raw = src.startsWith("http") ? await (await fetch(src)).json() : await Bun.file(src).json();
 const cat = buildCatalog(raw);
-const out = new URL("../data/catalog.json", import.meta.url).pathname;
+const out = fileURLToPath(new URL("../data/catalog.json", import.meta.url));
 writeFileSync(out, JSON.stringify(cat));
 const byProvider: Record<string, { all: number; top: string[] }> = {};
 for (const m of cat.models) {
