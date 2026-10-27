@@ -165,11 +165,15 @@ export function mediaIn(messages: { content: unknown }[]): Media {
   return acc;
 }
 
-// The estimate's input: about four characters a token, a few tokens of framing per message, plus images and documents.
-export function promptTokens(messages: { role: string; content: unknown }[], system?: unknown): number {
+// The characters of a prompt's text, with a few for the framing of each message.
+export function promptChars(messages: { content: unknown }[], system?: unknown): number {
   let chars = textOfContent(system).length;
   for (const m of messages) chars += textOfContent(m.content).length + 16; // a few tokens of framing per message
-  return Math.ceil(chars / 4) + mediaIn(messages).est;
+  return chars;
+}
+// The estimate's input: about four characters a token, a few tokens of framing per message, plus images and documents.
+export function promptTokens(messages: { role: string; content: unknown }[], system?: unknown): number {
+  return Math.ceil(promptChars(messages, system) / 4) + mediaIn(messages).est;
 }
 
 // The budget reservation's input: the most tokens a request can be. Everything it sends at one

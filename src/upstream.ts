@@ -2,8 +2,8 @@
 // translating between OpenAI's chat format and Anthropic's Messages format so
 // Claude models work behind the OpenAI address and in the chat.
 import { baseOf, provider, type ProviderDef, type ProviderId } from "./config";
-import { LOCAL_CONTEXT, type Model } from "./data";
-import { fromAnthropicUsage, type Usage } from "./cost";
+import { LOCAL_CONTEXT, localNeed, type Model } from "./data";
+import { fromAnthropicUsage, promptChars, type Usage } from "./cost";
 import { providerMessage, redact } from "./util";
 
 export class UserError extends Error {
@@ -223,11 +223,12 @@ const plainText = (c: any): string => (typeof c === "string" ? c : c.map((p: any
 const posInt = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : null);
 export function toOllama(body: any, m: Model, stream: boolean, cap: number | null): any {
   const messages = body.messages.map((msg: any) => ({ role: msg.role, content: plainText(msg.content) }));
-  const chars = messages.reduce((n: number, x: { content: string }) => n + x.content.length, 0);
-  const out = posInt(body.max_completion_tokens) ?? posInt(body.max_tokens) ?? cap ?? 2048;
+  // The answer's limit: the one asked for, or the budget's; none otherwise (Ollama then writes until it is done).
+  const out = posInt(body.max_completion_tokens) ?? posInt(body.max_tokens) ?? cap ?? null;
   const most = Math.min(m.context ?? LOCAL_CONTEXT, LOCAL_CONTEXT);
-  const want = Math.ceil(chars / 3) + out + 256; // three characters a token, as Leanfare counts, the answer, and room
-  const options: Record<string, unknown> = { num_ctx: Math.min(most, Math.max(4096, Math.ceil(want / 1024) * 1024)), num_predict: out };
+  const want = localNeed(promptChars(messages), out); // as Auto counts it (data.ts)
+  const options: Record<string, unknown> = { num_ctx: Math.min(most, Math.max(4096, Math.ceil(want / 1024) * 1024)) };
+  if (out !== null) options.num_predict = out;
   if (typeof body.temperature === "number") options.temperature = body.temperature;
   if (typeof body.top_p === "number") options.top_p = body.top_p;
   if (typeof body.seed === "number") options.seed = body.seed;
