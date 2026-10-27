@@ -31,7 +31,8 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { costOf, fromAnthropicUsage, type Usage } from "./cost";
 import { getModel } from "./data";
-import { PLAN_KEYS, settings, type PlanProvider } from "./settings";
+import { foundApps, usedIn } from "./found";
+import { PLAN_KEYS, covers, settings, type Plan, type PlanProvider } from "./settings";
 import { lastSnap } from "./statusline";
 import { SUBSCRIPTIONS, chatgptPlan, presetLimits } from "./subscriptions";
 import { localMonth, now } from "./util";
@@ -244,6 +245,9 @@ export interface ModelRow {
 }
 export interface PlanView {
   provider: PlanProvider; label: string; logs: string | null; // logs: the program whose log files hold its use; null: none on this computer
+  month: string;
+  apps: { name: string; first: string | null; last: string | null; used: boolean }[]; // its apps on this computer (found.ts); used: in this month
+  outside: Plan | null; // the plan you entered, when it does not cover this month (then plan is null)
   usageUrl: string | null; // the company's own page for the plan's use
   limitsText: string | null; // the kinds of limits the plan has (subscriptions.ts), for the plan you entered
   recognized: { name: string; price: number | null; from: string } | null; // ChatGPT: the plan Codex says you are on
@@ -281,10 +285,13 @@ function limitsView(l: Limits | null): LimitsView | null {
 const viewCache = new Map<string, { at: number; view: PlanView }>();
 
 // The plan and the ratio come from the settings as they are now, never from when the files were read:
-// a plan saved a second ago shows at once, without reading the files again.
+// a plan saved a second ago shows at once, without reading the files again. A plan counts only in the
+// months it covers; the apps found on this computer are added the same way.
 function withPlan(view: PlanView): PlanView {
-  const plan = settings().plans?.[view.provider] ?? null;
-  return { ...view, plan, ratio: plan && plan.price > 0 ? view.value / plan.price : null, limitsText: plan ? presetLimits(view.provider, plan.name) : null };
+  const entered = settings().plans?.[view.provider] ?? null;
+  const plan = entered && covers(entered, view.month) ? entered : null;
+  const apps = foundApps().filter((a) => a.provider === view.provider).map((a) => ({ name: a.name, first: a.first, last: a.last, used: usedIn(a, view.month) }));
+  return { ...view, plan, outside: entered && !plan ? entered : null, apps, ratio: plan && plan.price > 0 ? view.value / plan.price : null, limitsText: plan ? presetLimits(view.provider, plan.name) : null };
 }
 const FRESH_MS = 30_000;
 
@@ -302,16 +309,15 @@ export function planView(provider: PlanProvider, month = localMonth(), force = f
 }
 
 // A plan with no log files on this computer: its price and its kinds of limits only.
-function unlogged(provider: PlanProvider): PlanView {
-  const plan = settings().plans?.[provider] ?? null;
+function unlogged(provider: PlanProvider, month: string): PlanView {
   return {
-    provider, label: PLAN_PROVIDERS[provider].label, logs: null, usageUrl: SUBSCRIPTIONS[provider].usageUrl, limitsText: null, recognized: null,
-    found: false, files: 0, plan, input: 0, cached: 0, output: 0, tokens: 0, value: 0, unpricedTokens: 0, ratio: null, models: [], limits: null, at: new Date().toISOString(),
+    provider, label: PLAN_PROVIDERS[provider].label, logs: null, month, apps: [], outside: null, usageUrl: SUBSCRIPTIONS[provider].usageUrl, limitsText: null, recognized: null,
+    found: false, files: 0, plan: null, input: 0, cached: 0, output: 0, tokens: 0, value: 0, unpricedTokens: 0, ratio: null, models: [], limits: null, at: new Date().toISOString(),
   };
 }
 
 async function readMonth(provider: PlanProvider, month: string): Promise<PlanView> {
-  if (!LOGGED.includes(provider)) return unlogged(provider);
+  if (!LOGGED.includes(provider)) return unlogged(provider, month);
   const [y, mo] = month.split("-").map(Number);
   const monthStart = new Date(y, mo - 1, 1).getTime();
   const notBefore = monthStart - 36 * 3600_000; // a file not touched since before the month began holds nothing from it
@@ -352,25 +358,26 @@ async function readMonth(provider: PlanProvider, month: string): Promise<PlanVie
     models.push({ model: name, label: m?.label ?? name, id: m ? id : null, input, cached: u.cacheRead, output: u.output, tokens, value: v });
   }
   models.sort((a, b) => (b.value ?? -1) - (a.value ?? -1) || b.tokens - a.tokens);
-  const plan = settings().plans?.[provider] ?? null;
   const sum = (k: "input" | "cached" | "output") => models.reduce((n, m) => n + m[k], 0);
   const view: PlanView = {
-    provider, label: PLAN_PROVIDERS[provider].label, logs: PLAN_PROVIDERS[provider].logs,
+    provider, label: PLAN_PROVIDERS[provider].label, logs: PLAN_PROVIDERS[provider].logs, month, apps: [], outside: null,
     usageUrl: SUBSCRIPTIONS[provider].usageUrl, limitsText: null,
     recognized: provider === "chatgpt" ? chatgptPlan(newest?.plan ?? null) : null,
-    found: dirs.length > 0, files: files.length, plan,
+    found: dirs.length > 0, files: files.length, plan: null,
     input: sum("input"), cached: sum("cached"), output: sum("output"), tokens: models.reduce((n, m) => n + m.tokens, 0),
     value, unpricedTokens: unpriced,
-    ratio: plan && plan.price > 0 ? value / plan.price : null,
+    ratio: null, // withPlan puts the plan and the ratio in, as the settings are when asked
     models, limits: provider === "chatgpt" && month === localMonth() ? limitsView(newest) : null, at: new Date().toISOString(),
   };
   viewCache.set(`${provider}:${month}`, { at: Date.now(), view });
   return view;
 }
 
-// Claude and ChatGPT always (their logs may be here); the others when you entered a plan for them.
+// Claude and ChatGPT always (their logs may be here); the others when you entered a plan for them,
+// or when one of their apps is on this computer.
 export async function plansView(month = localMonth(), force = false) {
-  const wanted = planProviders.filter((p) => LOGGED.includes(p) || settings().plans?.[p]);
+  const apps = foundApps(force);
+  const wanted = planProviders.filter((p) => LOGGED.includes(p) || settings().plans?.[p] || apps.some((a) => a.provider === p));
   const views = await Promise.all(wanted.map((p) => planView(p, month, force)));
   return { month, providers: views, note: settings().showValue ? NOTE + VALUE_NOTE : NOTE };
 }
@@ -401,7 +408,7 @@ export function plansBrief(): Partial<Record<PlanProvider, Brief>> {
   const show = settings().showValue;
   for (const p of planProviders) {
     const plan = settings().plans?.[p];
-    if (!plan) continue;
+    if (!plan || !covers(plan, month)) continue;
     const hit = viewCache.get(`${p}:${month}`);
     if (!hit || Date.now() - hit.at > BRIEF_STALE_MS) planView(p, month, true).catch(() => {});
     const w = windowsNow(p, hit?.view ?? null);

@@ -466,6 +466,16 @@ describe("subscriptions: compressed and archived Codex sessions, the plan Codex 
   });
   test("the settings take every subscription Leanfare knows, and say which when the name is wrong", () => {
     expect(validatePatch({ plans: { copilot: { name: "Copilot Pro", price: 10 } } })).toMatchObject({ patch: { plans: { copilot: { name: "Copilot Pro", price: 10 } } } });
-    expect(validatePatch({ plans: { netflix: { name: "x", price: 1 } } })).toEqual({ error: "plans can hold claude, chatgpt, perplexity, google, copilot, cursor" });
+    expect(validatePatch({ plans: { netflix: { name: "x", price: 1 } } })).toEqual({ error: "plans can hold claude, chatgpt, perplexity, google, copilot, cursor, grok" });
+    expect(validatePatch({ plans: { grok: { name: "SuperGrok", price: 30 } } })).toMatchObject({ patch: { plans: { grok: { name: "SuperGrok", price: 30 } } } });
+  });
+
+  test("a plan's months: since and until as months, an empty one means always or now, and an end before the start is refused", () => {
+    expect(validatePatch({ plans: { perplexity: { name: "Perplexity Pro", price: 20, since: "2026-03", until: "" } } })).toMatchObject({ patch: { plans: { perplexity: { name: "Perplexity Pro", price: 20, since: "2026-03" } } } });
+    const p: any = validatePatch({ plans: { perplexity: { name: "Perplexity Pro", price: 20, since: "", until: null } } });
+    expect(p.patch.plans.perplexity).toEqual({ name: "Perplexity Pro", price: 20 }); // nothing kept for an empty month
+    expect(validatePatch({ plans: { claude: { name: "Claude Max", price: 200, since: "July" } } })).toEqual({ error: "the claude plan's since must be a month like 2026-07" });
+    expect(validatePatch({ plans: { claude: { name: "Claude Max", price: 200, since: "2026-13" } } })).toEqual({ error: "the claude plan's since must be a month like 2026-07" });
+    expect(validatePatch({ plans: { claude: { name: "Claude Max", price: 200, since: "2026-09", until: "2026-07" } } })).toEqual({ error: "the claude plan ends (2026-07) before it starts (2026-09)" });
   });
 });
