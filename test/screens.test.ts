@@ -915,3 +915,32 @@ describe("Setting up with no typing (Settings)", () => {
     expect(bad(doc)).toBe(false);
   }, 20000);
 });
+
+describe("Use Leanfare in your apps (Settings)", () => {
+  const { mkdirSync, mkdtempSync, readFileSync } = require("node:fs") as typeof import("node:fs");
+  const { tmpdir } = require("node:os") as typeof import("node:os");
+  const { join } = require("node:path") as typeof import("node:path");
+  const toasts = (doc: any) => [...doc.querySelectorAll("#toasts .toast")].map((t: any) => t.textContent).join(" | ");
+  const bad = (doc: any) => /\bnull\b|\bundefined\b|NaN|\[object Object\]/.test(doc.body.textContent);
+  async function waitFor(ok: () => boolean, ms = 8000) { for (let i = 0; i < ms / 50 && !ok(); i++) await Bun.sleep(50); }
+  const realHome = process.env.HOME;
+  afterEach(() => { process.env.HOME = realHome; });
+
+  test("the apps on this computer are listed with Add; Add writes the app's settings and turns into Remove", async () => {
+    const home = mkdtempSync(join(tmpdir(), "leanfare-apps-screen-"));
+    process.env.HOME = home;
+    mkdirSync(join(home, ".cursor"), { recursive: true });
+    const doc = await openApp();
+    doc.querySelector('.tabs button[data-tab="settings"]').click();
+    await waitFor(() => !!doc.querySelector(".apps .app-row"));
+    const row = () => [...doc.querySelectorAll(".apps .app-row")].find((r: any) => r.textContent.includes("Cursor")) as any;
+    expect(row().textContent).toContain("not added yet");
+    [...row().querySelectorAll("button")].find((b: any) => b.textContent === "Add").click();
+    await waitFor(() => toasts(doc).includes("Added Leanfare's tools to Cursor."));
+    expect(JSON.parse(readFileSync(join(home, ".cursor", "mcp.json"), "utf8")).mcpServers.leanfare.args.at(-1)).toBe("mcp");
+    await waitFor(() => row().textContent.includes("added") && !row().textContent.includes("not added"));
+    expect([...row().querySelectorAll("button")].map((b: any) => b.textContent)).toContain("Remove");
+    expect(doc.querySelector(".apps").textContent).toContain("more not found on this computer");
+    expect(bad(doc)).toBe(false);
+  }, 20000);
+});
