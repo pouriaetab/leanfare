@@ -443,6 +443,7 @@
   // kept out of your plan and the cost. Leanfare's parts can run here at once; the rest is for the
   // app you work in (Copy for Claude Code hands it the plan).
   const planBox = { ta: null, rules: null };
+  const PLAN_APPS = [["Claude Code", "Claude Code"], ["Claude", "Claude Desktop or Cowork"], ["Codex", "Codex"], ["Gemini CLI", "Gemini CLI"], ["Cursor", "Cursor"], ["you", "No app (just you)"]];
   let planTimer = null;
   const RUNS_ON = { you: "you", local: "Leanfare, on this computer", free: "Leanfare, free model", paid: "Leanfare, pay per use" };
   const STATUS = { waiting: "waiting", running: "running…", done: "done", failed: "failed", stopped: "stopped", yours: "yours to do", after_yours: "after yours", blocked: "waits for a part that is not done", asks: "paid: waits for a yes" };
@@ -453,6 +454,10 @@
       planBox.ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); $("#planGo")?.click(); } });
       planBox.rules = h("input", { type: "checkbox", "aria-label": "Split by rules" });
       planBox.paths = h("textarea", { rows: "2", "aria-label": "Files or folders", placeholder: "Files or folders it is about (optional), one per line, like ~/code/litellm", maxlength: "20000" });
+      // The app the parts that stay with you are done in: the table names the model to pick there.
+      planBox.works = h("select", { "aria-label": "Works in", onchange: (e) => store.set("planWorks", e.target.value) },
+        ...PLAN_APPS.map(([v, t]) => h("option", { value: v, text: t })));
+      planBox.works.value = PLAN_APPS.some(([v]) => v === store.get("planWorks", "")) ? store.get("planWorks", "") : "Claude Code";
     }
     const go = runButton("Make the plan", async (signal) => {
       const task = planBox.ta.value.trim();
@@ -461,25 +466,31 @@
       if (S.planRun?.running) { try { await api("/api/plan/stop", { body: { id: S.planRun.id } }); toast("Stopped the parts of the last plan.", "done"); } catch {} }
       S.planRun = null;
       const paths = planBox.paths.value.split("\n").map((x) => x.trim()).filter(Boolean);
-      S.plan = await api("/api/plan", { body: { task, paths, manager: "Claude Code", split: planBox.rules.checked ? "rules" : "auto" }, signal });
+      S.plan = await api("/api/plan", { body: { task, paths, manager: planBox.works.value, split: planBox.rules.checked ? "rules" : "auto" }, signal });
       renderPlan();
     }, "btn primary");
     go.id = "planGo";
     const form = h("div", { class: "card plan-form" },
       h("h3", {}, "Plan a task", h("span", { class: "grow" }), h("small", { text: "a table of the parts and their models, before anything starts" })),
       planBox.ta, planBox.paths,
-      h("div", { class: "row" }, go, h("label", { class: "check" }, planBox.rules, "Split by rules (no model asked)"), h("span", { class: "grow" }),
+      h("div", { class: "row" }, go, h("label", { class: "check" }, "Works in ", planBox.works), h("label", { class: "check" }, planBox.rules, "Split by rules (no model asked)"), h("span", { class: "grow" }),
         h("small", { class: "fine", text: "A model you ticked splits it: a few cents or less, $0 on free models." })));
     el.replaceChildren(h("div", { class: "plan-col" }, form, S.plan ? planResultEl(S.plan) : planHelpEl()));
   }
   function planHelpEl() {
     return h("div", { class: "card" }, h("h3", { text: "How it works" }), h("ol", { class: "plan-help" },
       h("li", { text: "Leanfare splits the task into parts: reading, drafting, working something out, changing code, searching." }),
-      h("li", { text: "For each part it picks where it runs: changes to your project and the hardest judgement stay with the app you work in (your plan); reading and drafting go to the cheapest model that rates well enough, local and free ones first." }),
+      h("li", { text: "For each part it picks where it runs and the model: changes to your project and the hardest judgement stay with the app you work in, on the model to pick there (in Claude Code: Opus for the hardest, Sonnet for most code, Haiku for light work); reading and drafting go to the cheapest model that rates well enough, local and free ones first." }),
       h("li", { text: "Run Leanfare's parts here, at once, or copy the plan into Claude Code, which runs them with Leanfare's delegate tool." }),
       h("li", { text: "In Claude Code and the other apps, the plan tool gives the same table (Settings, Use Leanfare in your apps)." })));
   }
   const tokShort = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(Math.round(n)));
+  // When every part stays with you: what would send some out (as planner.ts says it).
+  const nothingOut = (parts) => {
+    const hints = [parts.some((p) => p.kind === "search" && p.where === "you") ? "tick Perplexity Sonar in Leanfare and the searches go out" : "",
+      parts.every((p) => !p.files.length) ? "name the files or folder it is about and the reading goes out" : ""].filter(Boolean);
+    return `Nothing goes to Leanfare: ${hints.length ? hints.join("; ") : "every part changes the project or needs the hardest judgement"}.`;
+  };
   function planResultEl(P) {
     const run = S.planRun?.id === P.id ? S.planRun : null;
     const st = (n) => run?.parts.find((x) => x.n === n) ?? null;
@@ -491,7 +502,7 @@
         h("td", { "data-label": "Part", class: "part" }, h("b", { text: p.title }), h("div", { class: "fine", text: p.why })),
         td("Kind", { text: `${p.kind}, ${p.effort}` }),
         td("Runs on", { text: p.where === "you" ? (P.manager === "you" ? "you" : `you (${P.manager})`) : RUNS_ON[p.where] }),
-        td("Model", { text: p.model?.label ?? "your model" }),
+        td("Model", { text: p.model?.label ?? p.use?.label ?? "your model" }),
         td("Time", { text: p.seconds === null ? "—" : secsShort(p.seconds) }),
         td("Tokens", { text: p.where === "you" ? `~${tokShort(p.tokens)} of your plan` : `~${tokShort(p.tokens)} kept` }),
         td("Cost", { text: p.where === "you" ? "in your plan" : p.cost === null ? "not known" : money(p.cost) }),
@@ -502,7 +513,7 @@
     const head = ["#", "Part", "Kind", "Runs on", "Model", "Time", "Tokens", "Cost", "When", ...(run ? ["Now"] : [])];
     const table = h("div", { class: "plan-table-wrap" }, h("table", { class: "plan-table" }, h("thead", {}, h("tr", {}, ...head.map((x) => h("th", { text: x })))), h("tbody", {}, ...rows)));
     const time = [t.seconds !== null ? `Leanfare's parts take ${secsShort(t.seconds)} done at once` : "", t.after !== null && t.after !== undefined ? `${t.seconds !== null ? "the ones after yours take" : "Leanfare's parts wait for yours, then take"} ${secsShort(t.after)}${t.seconds !== null ? " once yours are done" : ""}` : ""].filter(Boolean).join("; ");
-    const sum = h("p", { class: "plan-sum", text: `${t.out} of ${t.parts} parts go to Leanfare, keeping about ${tokShort(t.kept)} tokens out of your plan${t.used ? `; about ${tokShort(t.used)} stay in it` : ""}.${time ? ` ${time}.` : ""} Pay per use: ${t.cost === null ? "not known" : money(t.cost)}.` });
+    const sum = h("p", { class: "plan-sum", text: `${t.out} of ${t.parts} parts go to Leanfare, keeping about ${tokShort(t.kept)} tokens out of your plan${t.used ? `; about ${tokShort(t.used)} stay in it` : ""}.${time ? ` ${time}.` : ""} Pay per use: ${t.cost === null ? "not known" : money(t.cost)}.${t.out ? "" : ` ${nothingOut(P.parts)}`}` });
     const lim = P.limits ? h("p", { class: "fine", text: `Your Claude plan now: ${[P.limits.five !== null ? `5 hours ${Math.round(P.limits.five)}% used` : "", P.limits.week !== null ? `week ${Math.round(P.limits.week)}% used` : ""].filter(Boolean).join(", ")}. Near a limit, more parts go to Leanfare.` }) : null;
     const how = h("p", { class: "fine", text: P.split.note ?? (P.split.model ? `Split by ${P.split.model.label}${typeof P.split.cost === "number" ? `, ${money(P.split.cost)}` : ""}.` : "Split by rules.") });
     // Something of Leanfare's left to run: never run, or ended without an answer.

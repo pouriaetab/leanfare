@@ -870,6 +870,8 @@ describe("The Plan tab", () => {
     expect(t).toContain("go to Leanfare, keeping about");
     expect(t).toContain("Split by rules.");
     expect(t).toContain("One of Leanfare's parts waits for yours (see When)."); // part 5 reviews your changes
+    expect(t).toContain("Claude Sonnet 4.6"); // the parts that stay with you name the model to pick in Claude Code
+    expect(t).not.toContain("your model");
     expect(t).toContain("the ones after yours take");
     expect(doc.querySelector("#planResult tbody tr.yours")).toBeTruthy(); // the parts that stay with you are marked
     expect(doc.querySelector("#planResult td[data-label='Model']")).toBeTruthy(); // the phone shows each cell with its name
@@ -885,6 +887,15 @@ describe("The Plan tab", () => {
     expect(doc.querySelectorAll("#planResult .plan-answer").length).toBeGreaterThan(0);
     expect(doc.querySelector("#planResult .plan-answer .md")).toBeTruthy();
     expect(bad(doc)).toBe(false);
+    // Working in Codex instead: the same parts stay, named for Codex's models.
+    const works = doc.querySelector("#tab-plan select[aria-label='Works in']");
+    works.value = "Codex"; works.dispatchEvent(new win.Event("change"));
+    const before = doc.querySelector("#planResult");
+    doc.querySelector("#planGo").click();
+    await waitFor(() => doc.querySelector("#planResult") !== before && doc.querySelector("#planResult").textContent.includes("you (Codex)"));
+    t = doc.querySelector("#planResult").textContent;
+    expect(t).toContain("GPT-5 mini");
+    expect(t).not.toContain("Claude Sonnet 4.6");
   }, 40000);
 });
 
