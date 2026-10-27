@@ -28,7 +28,7 @@
 // computer: Leanfare shows their limits as their companies publish them (subscriptions.ts).
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { costOf, fromAnthropicUsage, type Usage } from "./cost";
 import { getModel } from "./data";
 import { PLAN_KEYS, settings, type PlanProvider } from "./settings";
@@ -71,7 +71,15 @@ function listFiles(dirs: string[], match: (name: string) => boolean, notBefore: 
       } catch {}
     }
   }
-  return { files, folders: dirs.length };
+  // The same session in two places (moved to archived_sessions, or compressed with the plain file
+  // still there) counts once: the newest copy of each file name, .zst or not, is kept.
+  const one = new Map<string, LogFile>();
+  for (const f of files) {
+    const k = basename(f.path).replace(/\.zst$/, "");
+    const had = one.get(k);
+    if (!had || f.mtime > had.mtime) one.set(k, f);
+  }
+  return { files: match === isCodexLog ? [...one.values()] : files, folders: dirs.length };
 }
 
 // ---- reading one log file ----------------------------------------------------------------------------

@@ -235,6 +235,15 @@ describe("Leanfare in Claude Code's status line (the settings file)", () => {
     expect(JSON.parse(readFileSync(settingsFile(), "utf8")).statusLine.command).toBe("echo 'my line'");
   });
 
+  test("Leanfare's own line is known on Windows too (backslashes, leanfare.exe, any case)", () => {
+    for (const command of ["'C:\\Users\\me\\AppData\\Local\\Leanfare\\bin\\leanfare.exe' statusline", "C:\\Tools\\LEANFARE.EXE statusline --then 'echo x'"]) {
+      writeFileSync(settingsFile(), JSON.stringify({ statusLine: { type: "command", command } }));
+      expect(statuslineState().installed).toBe(true);
+    }
+    writeFileSync(settingsFile(), JSON.stringify({ statusLine: { type: "command", command: "myleanfare statusline" } }));
+    expect(statuslineState().installed).toBe(false);
+  });
+
   test("no settings file yet: it is made; removing leaves no status line", () => {
     expect(setStatusline(true).installed).toBe(true);
     setStatusline(false);

@@ -396,6 +396,25 @@ describe("subscriptions: compressed and archived Codex sessions, the plan Codex 
     expect(v.files).toBe(2);
     expect(v.tokens).toBe(3300); // 1,100 from the compressed file, 2,200 from the archived one
   });
+  test("the same session in two places, or plain and compressed, counts once", async () => {
+    const one = jsonl([ctx("gpt-5-mini"), tc("2026-10-05T10:00:00Z", [1000, 0, 100])]);
+    put(join(codexRoot(), "sessions", "2026", "10", "05", "rollout-2026-10-05T10-00-00-twice.jsonl"), one);
+    put(join(codexRoot(), "archived_sessions", "rollout-2026-10-05T10-00-00-twice.jsonl"), one);
+    writeFileSync(join(codexRoot(), "archived_sessions", "rollout-2026-10-05T10-00-00-twice.jsonl.zst"), Bun.zstdCompressSync(new TextEncoder().encode(one)));
+    const v = await planView("chatgpt", MONTH, true);
+    expect(v.files).toBe(1);
+    expect(v.tokens).toBe(1100);
+  });
+  test("a plan's limits, from its name as you wrote it", async () => {
+    const { presetLimits } = await import("../src/subscriptions");
+    expect(presetLimits("claude", "Claude Max 20x")).toBe("20 times Pro's session limit, and a weekly limit");
+    expect(presetLimits("claude", "max 20x plan")).toBe("20 times Pro's session limit, and a weekly limit");
+    expect(presetLimits("claude", "Claude Max")).toBe("a 5 hour session limit and a weekly limit"); // 0.3's example name: the kind every Claude plan has
+    expect(presetLimits("chatgpt", "Plus")).toBe("Codex: a 5 hour limit and a weekly limit");
+    expect(presetLimits("copilot", "Copilot Pro+")).toBe("7,000 AI credits a month, resetting on the 1st");
+    expect(presetLimits("copilot", "Copilot Pro")).toBe("1,500 AI credits a month, resetting on the 1st");
+    expect(presetLimits("cursor", "")).toBeNull();
+  });
   test("an older Codex's resets_in_seconds counts from the event's time", () => {
     const at = Date.parse("2026-10-20T10:00:00Z");
     expect(limitsOf({ primary: { used_percent: 5, window_minutes: 300, resets_in_seconds: 3600 } }, at)!.windows[0].resets).toBe(at / 1000 + 3600);
