@@ -25,6 +25,7 @@ import { homedir } from "node:os";
 import { DEFAULT_MAX_OUT, TIER, runDelegate, taskFor, type Effort, type Kind } from "./delegate";
 import { allModels, type Model } from "./data";
 import { chargeOf, plan as route, runChat, usableModels } from "./engine";
+import { gb, suggestLocal } from "./local";
 import { planView, windowsNow } from "./plans";
 import { DELEGATE_LIMITS, readForDelegate, sizesForPlan, PLAN_FILES } from "./readfiles";
 import { guessTask, pickModel, type Msg } from "./router";
@@ -74,6 +75,7 @@ export interface PlanResult {
   totals: { parts: number; out: number; later: number; kept: number; used: number; seconds: number | null; after: number | null; cost: number | null }; // later: Leanfare's parts that wait for yours; seconds: the time of the others, after: of the ones after yours
   split: { by: "model" | "rules"; model: { id: string; label: string } | null; cost: number | null; note: string | null };
   limits: { five: number | null; week: number | null } | null; // the person's plan windows, when known (percent used)
+  local?: { name: string; size: number; like: string; rating: number; fit: string } | null; // a local model to download that would run reading and drafting free
   table: string; // the table as markdown
   next: string; // what to do now
 }
@@ -351,9 +353,12 @@ export function tableOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
     "|---|---|---|---|---|---|---|---|---|",
     ...rows.map((x) => `| ${x} |`),
     "",
-    `${t.out} of ${t.parts} parts go to Leanfare, keeping about ${tokText(t.kept)} tokens out of your plan${t.used ? `; about ${tokText(t.used)} stay in it` : ""}. ${timeLine(t)}Pay per use: ${usd(t.cost)}.${t.out ? "" : ` ${nothingOut(r.parts)}`}`,
+    `${t.out} of ${t.parts} parts go to Leanfare, keeping about ${tokText(t.kept)} tokens out of your plan${t.used ? `; about ${tokText(t.used)} stay in it` : ""}. ${timeLine(t)}Pay per use: ${usd(t.cost)}.${t.out ? "" : ` ${nothingOut(r.parts)}`}${r.local ? ` ${localLine(r.local)}` : ""}`,
   ].join("\n");
 }
+
+// A local model that would take the reading and drafting free: to download, on a yes.
+export const localLine = (l: NonNullable<PlanResult["local"]>) => `A local model fits this computer: ${l.name} (${gb(l.size)}), rated like ${l.like}, free to run. Download it in Settings, Local models (in your app: local_model).`;
 
 // When every part stays with the person: what would send some out.
 export function nothingOut(parts: Pick<Part, "kind" | "where" | "files">[]): string {
@@ -462,7 +467,12 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
     seconds: time.now, after: time.after,
     cost: costs.some((c) => c === null) ? null : costs.reduce<number>((a, b) => a + (b ?? 0), 0),
   };
-  const base = { task: input.task, manager, parts: placed, totals, split, limits: known ? limits : null };
+  // A part that goes to pay per use, or stays with you only because Leanfare had no model for it, could
+  // run free on this computer: the plan names a local model to download, when one fits.
+  const wantsLocal = placed.some((p) => DELEGATE_KIND[p.kind] && (p.where === "paid" || (p.where === "you" && p.why.startsWith("Leanfare has no model"))));
+  const sg = wantsLocal ? suggestLocal().suggestion : null;
+  const local = sg ? { name: sg.name, size: sg.size, like: sg.like, rating: sg.rating, fit: sg.fit } : null;
+  const base = { task: input.task, manager, parts: placed, totals, split, limits: known ? limits : null, local };
   const result: PlanResult = { id: randomId(), ...base, table: tableOf(base), next: nextOf(base) };
   keep(result, new Map(input.files.filter((f) => f.path).map((f) => [f.name, { path: f.path!, size: f.size }])));
   return result;

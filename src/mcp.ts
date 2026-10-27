@@ -157,6 +157,20 @@ const TOOLS = [
     inputSchema: { type: "object", properties: { action: { type: "string", enum: ["status", "start", "stop"], description: "status (the default), start or stop." } }, additionalProperties: false },
     annotations: { title: "Try the delegate first", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
+  {
+    name: "local_model",
+    title: "A local model for this computer",
+    description: "The open model Leanfare suggests for this computer: the best rated one that runs comfortably in its memory, fits on its disk and beats what is installed (free to run, and Leanfare's Auto and plans then use it for reading and drafting). suggest (the default) says which and why; download asks the user, then has Ollama download it; status says how the download goes. Nothing is downloaded without the user's yes.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["suggest", "download", "status"], description: "suggest (the default), download or status." },
+        yes: { type: "string", enum: ["yes", "no"], description: "For download, where your app cannot ask the user itself: yes only once the user agreed to the download." },
+      },
+      additionalProperties: false,
+    },
+    annotations: { title: "A local model for this computer", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  },
 ];
 
 // ---- the tools -------------------------------------------------------------------------
@@ -252,7 +266,35 @@ function askUser(params: unknown, opts: { ms?: number; late?: (result: any) => v
   });
 }
 
+const gbText = (b: number) => `${(b / 1e9).toFixed(b < 10e9 ? 1 : 0)} GB`;
+function pullLine(p: any): string {
+  if (!p) return "No download is running.";
+  const at = p.percent !== null && p.percent !== undefined ? `, ${p.percent}%` : "";
+  return p.active ? `${p.name}: ${String(p.step).toLowerCase()}${at}.` : p.message ?? `${p.name}: ${p.status}.`;
+}
+
 async function runTool(name: string, args: any, signal: AbortSignal): Promise<any> {
+  if (name === "local_model") {
+    const action = args?.action ?? "suggest";
+    if (action === "status") { const { j } = await call("/api/local/pull", {}, signal); return text(pullLine(j.pull), { pull: j.pull }); }
+    if (action !== "suggest" && action !== "download") return failure("local_model takes action suggest, download or status.");
+    const { j: s } = await call("/api/local/suggest", {}, signal);
+    if (action === "suggest") return text(s.suggestion ? `${s.why}\n\nTo download it: local_model with action download (the user is asked first).` : s.why, s);
+    if (!s.suggestion) return failure(s.why);
+    const sg = s.suggestion;
+    let yes = args?.yes === "yes";
+    if (!yes && canAsk) {
+      const a = await askUser({
+        message: `Download ${sg.name} (${gbText(sg.size)}) with Ollama? It runs free, on this computer, and Leanfare's Auto and plans can then use it for reading and drafting. ${sg.license}: free to use for work.`,
+        requestedSchema: { type: "object", properties: { download: { type: "boolean", title: `Download ${sg.name}`, description: `${gbText(sg.size)} of disk.`, default: false } }, required: ["download"] },
+      });
+      if (!(a?.action === "accept" && a.content?.download === true)) return text(`Nothing was downloaded: the user did not say yes to ${sg.name}.`, { downloading: false, suggestion: sg });
+      yes = true;
+    }
+    if (!yes) return text(`Ask the user first: download ${sg.name} (${gbText(sg.size)}) with Ollama, to run free on this computer? If they agree, call local_model with action download and yes yes.`, { downloading: false, asks: true, suggestion: sg });
+    const { j } = await call("/api/local/pull", { method: "POST", json: { name: sg.name, sizeBytes: sg.size } }, signal);
+    return text(`Downloading ${sg.name} with Ollama (${gbText(sg.size)}). Follow it with local_model action status.`, { downloading: true, pull: j.pull, suggestion: sg });
+  }
   if (name === "plan_run") {
     if (typeof args?.id !== "string" || !PLAN_ID.test(args.id)) return failure("plan_run needs the plan's id, from plan.");
     const yes = args.paid === "yes";
@@ -302,7 +344,7 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
         your_model: p.use ?? null, // a part that stays with you: the model to pick for it in your app (alias: Claude Code's name for it)
         seconds: p.seconds, tokens: p.tokens, cost_usd: p.cost,
         files: p.files.slice(0, 50), more_files: Math.max(0, p.files.length - 50), task: p.task })),
-      totals: j.totals, split: j.split, limits: j.limits,
+      totals: j.totals, split: j.split, limits: j.limits, local: j.local ?? null,
     });
   }
   if (name === "ask") {
