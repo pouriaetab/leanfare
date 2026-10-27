@@ -31,7 +31,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { costOf, fromAnthropicUsage, type Usage } from "./cost";
 import { getModel } from "./data";
-import { foundApps, usedIn } from "./found";
+import { foundApps, lookForApps, usedIn } from "./found";
 import { PLAN_KEYS, covers, settings, type Plan, type PlanProvider } from "./settings";
 import { lastSnap } from "./statusline";
 import { SUBSCRIPTIONS, chatgptPlan, presetLimits } from "./subscriptions";
@@ -376,7 +376,7 @@ async function readMonth(provider: PlanProvider, month: string): Promise<PlanVie
 // Claude and ChatGPT always (their logs may be here); the others when you entered a plan for them,
 // or when one of their apps is on this computer.
 export async function plansView(month = localMonth(), force = false) {
-  const apps = foundApps(force);
+  const apps = await lookForApps(force);
   const wanted = planProviders.filter((p) => LOGGED.includes(p) || settings().plans?.[p] || apps.some((a) => a.provider === p));
   const views = await Promise.all(wanted.map((p) => planView(p, month, force)));
   return { month, providers: views, note: settings().showValue ? NOTE + VALUE_NOTE : NOTE };
