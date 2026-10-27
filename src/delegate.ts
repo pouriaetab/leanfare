@@ -17,6 +17,7 @@
 // Each task is written to the delegations table with the chance it had of being checked,
 // so pass rates can be weighted back to every task. No words are kept there or in the
 // ledger: only models, verdicts, token counts and costs.
+import { parseSpeed, secondsText, type SpeedChoice } from "./speed";
 import { TASKS, getModel, isRetired, type Model } from "./data";
 import { db } from "./db";
 import { runChat, usableModels, type ChatOptions } from "./engine";
@@ -29,7 +30,7 @@ import { localDay, localMonth, now } from "./util";
 export type Kind = "read" | "write" | "reason";
 export type Effort = "low" | "medium" | "high";
 export type CheckPolicy = "auto" | "always" | "never";
-export interface DelegateInput { task: string; files: DelegateFile[]; kind: Kind | null; effort: Effort; check: CheckPolicy; maxOut: number }
+export interface DelegateInput { task: string; files: DelegateFile[]; kind: Kind | null; effort: Effort; check: CheckPolicy; maxOut: number; speed?: SpeedChoice }
 
 export const KINDS: Kind[] = ["read", "write", "reason"];
 export const EFFORTS: Effort[] = ["low", "medium", "high"];
@@ -77,7 +78,13 @@ export function checkDelegate(b: any): DelegateInput | string {
     if (total > DELEGATE_LIMITS.total) return `These files add up to more than ${mb(DELEGATE_LIMITS.total)}, the most delegate reads at once.`;
     files.push({ name, text: f.text.replace(/\u0000/g, "") });
   }
-  return { task: b.task.trim(), files, kind, effort, check, maxOut };
+  let speed: SpeedChoice | undefined;
+  if (b.speed !== undefined && b.speed !== null && b.speed !== "") {
+    const v = parseSpeed(b.speed);
+    if (v === null) return "speed must be cheapest, fastest, or a number of seconds from 1 to 3600.";
+    speed = v;
+  }
+  return { task: b.task.trim(), files, kind, effort, check, maxOut, ...(speed !== undefined ? { speed } : {}) };
 }
 
 // The rating a task is judged by: the kind says it, or Auto's usual guess decides.
@@ -177,6 +184,7 @@ export interface DelegateResult {
   check: DelegateCheck;
   tokens: { files: number; answer: number };
   cut: boolean; // the answer stopped at its limit
+  seconds: number; // how long the whole hand off took, checks included
   receipt: string;
 }
 
@@ -208,11 +216,13 @@ export function receiptOf(r: Omit<DelegateResult, "receipt">, maxOut: number): s
     else if (c.chance > 0) parts.push(`Not checked this time (Leanfare checks 1 in ${Math.round(1 / c.chance)} ${r.effort} effort answers).`);
   }
   if (r.tokens.files > 0) parts.push(`About ${num(r.tokens.files)} tokens of files stayed out of your context; this answer is about ${num(r.tokens.answer)}.`);
+  parts.push(`It took ${secondsText(r.seconds)}.`);
   if (r.cut) parts.push(`It stopped at its limit of ${num(maxOut)} tokens, so it may be cut short.`);
   return parts.join(" ");
 }
 
 export async function runDelegate(input: DelegateInput, signal: AbortSignal): Promise<DelegateResult> {
+  const started = performance.now();
   const numbered = input.kind !== "write";
   const block = filesBlock(input.files, numbered);
   const prompt = block ? `${input.task}\n\n${block}` : input.task;
@@ -243,7 +253,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   const none = { checker: null, verdict: null, checkCost: null, rerun: null, rerunCost: null };
 
   const doFit = fit(prompt.length + system.length, input.maxOut);
-  const first = await run(messages, `auto-${TIER[input.effort]}`, "Delegate", { system, source: "delegate", guess, only: doFit.ok, onlyWhy: tooMuch(doFit.need), effort: input.effort, maxOut: input.maxOut });
+  const first = await run(messages, `auto-${TIER[input.effort]}`, "Delegate", { system, source: "delegate", guess, only: doFit.ok, onlyWhy: tooMuch(doFit.need), effort: input.effort, maxOut: input.maxOut, speed: input.speed });
   if (first.status !== "ok") {
     write({ ...row, ...none, model: first.meta?.model?.id ?? null, cost: first.cost, answerTokens: 0, status: first.status, chance: 0 });
     if (first.status === "stopped") throw new UserError(499, gone() ? "Stopped." : "Stopped in Leanfare before it answered.", "stopped");
@@ -276,7 +286,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
       check.verdict = "skipped";
       check.why = `the models rated above ${doer!.label} cannot take the check's text (about ${num(ckFit.need)} tokens)`;
     } else {
-      const c = await run([{ role: "user", content: checkPrompt }], "auto-best", "Delegate check", { system: CHECKER_SYSTEM, source: "check", guess, only: stronger, onlyWhy: tooMuch(ckFit.need), maxOut: CHECK_MAX_OUT, optional: true });
+      const c = await run([{ role: "user", content: checkPrompt }], "auto-best", "Delegate check", { system: CHECKER_SYSTEM, source: "check", guess, only: stronger, onlyWhy: tooMuch(ckFit.need), maxOut: CHECK_MAX_OUT, optional: true, speed: input.speed });
       check.cost = c.cost;
       spent.push(c.cost);
       if (c.status === "stopped" && gone()) throw stopped();
@@ -293,7 +303,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
           const up = UP[TIER[input.effort]];
           const note = `\n\nA checker found a problem with an earlier answer to this task: ${(v.why || "it was judged wrong").replace(/[.!]?$/, ".")} Avoid it.`;
           const againFit = fit(prompt.length + note.length + system.length, input.maxOut);
-          const again = await run([{ role: "user", content: prompt + note }], up ? `auto-${up}` : checker.id, "Delegate, asked again", { system, source: "delegate", guess, only: (m: Model) => above(m) && againFit.ok(m), onlyWhy: tooMuch(againFit.need), effort: input.effort, maxOut: input.maxOut, optional: true });
+          const again = await run([{ role: "user", content: prompt + note }], up ? `auto-${up}` : checker.id, "Delegate, asked again", { system, source: "delegate", guess, only: (m: Model) => above(m) && againFit.ok(m), onlyWhy: tooMuch(againFit.need), effort: input.effort, maxOut: input.maxOut, optional: true, speed: input.speed });
           rerunCost = again.cost;
           spent.push(again.cost);
           if (again.status === "stopped" && gone()) throw stopped();
@@ -321,6 +331,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     check,
     tokens: { files: fileTokens, answer: answerTokens },
     cut: final.meta.finish === "length",
+    seconds: (performance.now() - started) / 1000,
   };
   write({ ...row, model: first.meta.model.id, cost: first.cost, answerTokens, status: "ok", chance, checker: check.checker?.id ?? null, verdict: picked ? check.verdict : null, checkCost: check.cost, rerun: firstUsed ? model.id : null, rerunCost });
   return { ...result, receipt: receiptOf(result, input.maxOut) };

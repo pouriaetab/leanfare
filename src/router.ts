@@ -4,6 +4,7 @@
 // Best value pick: among the models you ticked, the cheapest whose rating
 // for that task is within the mode's margin of the best one.
 // Every pick carries its reason, so a wrong guess is visible at a glance.
+import { secondsText, type SpeedChoice } from "./speed";
 import { costOf, mediaOf, promptTokens, textOfContent } from "./cost";
 import { TASKS, allModels, getModel, isRetired, type Model } from "./data";
 import { MODES, type Mode } from "./settings";
@@ -78,7 +79,7 @@ export function expectedOutput(task: string, model: Model | null, history: (task
 
 export const rating = (m: Model, task: string): number | null => m.ratings[task] ?? m.ratings.overall ?? null;
 
-export interface Candidate { model: Model; rating: number | null; estimate: number | null }
+export interface Candidate { model: Model; rating: number | null; estimate: number | null; seconds?: number | null; measured?: boolean }
 export interface Pick {
   model: Model;
   guess: Guess;
@@ -87,6 +88,9 @@ export interface Pick {
   estimate: number | null; // the estimate for the picked model
   candidates: Candidate[]; // in fallback order
   best: Candidate | null;
+  // At the same quality (the models within the mode's margin): the cheapest and, when times are known, the fastest.
+  cheapest: Candidate;
+  fastest: Candidate | null;
 }
 
 export function estimateFor(m: Model, inTokens: number, outTokens: number): number | null {
@@ -97,7 +101,10 @@ const fmtUsd = (v: number | null) => (v === null ? "no listed price" : v === 0 ?
 
 // The best value pick. `usable` is the set of ticked models whose provider is ready.
 // `forced` is a task the caller already knows (the delegate's kind), instead of the guess.
-export function pickModel(messages: Msg[], usable: Model[], mode: Mode, history: (task: string, model: string | null) => number | null, system?: unknown, forced?: Guess): Pick | null {
+// `speed` (speed.ts): the cheapest (as before), the fastest, or the cheapest expected within N seconds;
+// `timeOf` estimates an answer's seconds from how fast each model answered before.
+export function pickModel(messages: Msg[], usable: Model[], mode: Mode, history: (task: string, model: string | null) => number | null, system?: unknown, forced?: Guess,
+  speed: SpeedChoice = "cheapest", timeOf?: (m: Model, outTokens: number) => { seconds: number; measured: boolean }): Pick | null {
   const guess = forced ?? guessTask(messages);
   const inTok = promptTokens(messages as any, system);
   const day = localDay();
@@ -106,22 +113,38 @@ export function pickModel(messages: Msg[], usable: Model[], mode: Mode, history:
   const unrated: Candidate[] = [];
   for (const m of live) {
     const r = rating(m, guess.task);
-    const c = { model: m, rating: r, estimate: estimateFor(m, inTok, expectedOutput(guess.task, m, history)) };
+    const out = expectedOutput(guess.task, m, history);
+    const t = timeOf?.(m, out) ?? null;
+    const c: Candidate = { model: m, rating: r, estimate: estimateFor(m, inTok, out), seconds: t?.seconds ?? null, measured: t?.measured ?? false };
     (r !== null && c.estimate !== null ? rated : unrated).push(c);
   }
   if (!rated.length) return null;
   const margin = MODES[mode].margin;
   const best = rated.reduce((a, b) => (b.rating! > a.rating! ? b : a));
   const eligible = rated.filter((c) => c.rating! >= best.rating! - margin);
-  eligible.sort((a, b) => a.estimate! - b.estimate! || b.rating! - a.rating! || (b.model.added ?? "").localeCompare(a.model.added ?? ""));
+  const byPrice = (a: Candidate, b: Candidate) => a.estimate! - b.estimate! || b.rating! - a.rating! || (b.model.added ?? "").localeCompare(a.model.added ?? "");
+  const byTime = (a: Candidate, b: Candidate) => (a.seconds ?? Infinity) - (b.seconds ?? Infinity) || byPrice(a, b);
+  // How the pick was made, said in the reason: by price (as before), or by the time each is expected to take.
+  let how: string | null = null;
+  if (speed === "fastest" && timeOf) { eligible.sort(byTime); how = `the fastest of the ${eligible.length} within reach`; }
+  else if (typeof speed === "number" && timeOf) {
+    const inTime = eligible.filter((c) => (c.seconds ?? Infinity) <= speed).sort(byPrice);
+    const late = eligible.filter((c) => !inTime.includes(c)).sort(byTime);
+    eligible.splice(0, eligible.length, ...inTime, ...late);
+    how = inTime.length ? `the cheapest of the ${inTime.length} expected within ${speed} s` : `the fastest, since none of the ${eligible.length} within reach is expected within ${speed} s`;
+  } else eligible.sort(byPrice);
   const rest = rated.filter((c) => !eligible.includes(c)).sort((a, b) => b.rating! - a.rating!);
   const chosen = eligible[0];
   const usedRating = chosen.model.ratings[guess.task] !== undefined ? guess.task : "overall";
   const gap = Math.round(best.rating! - chosen.rating!);
   let reason = `${taskLabel(guess.task)}, guessed from ${guess.why}. ${MODES[mode].label}: ${MODES[mode].blurb}.`;
-  if (chosen === best) reason += ` ${chosen.model.label} is the best rated for this (${Math.round(chosen.rating!)}) and the cheapest of the ${eligible.length} within reach.`;
+  if (chosen === best && !how) reason += ` ${chosen.model.label} is the best rated for this (${Math.round(chosen.rating!)}) and the cheapest of the ${eligible.length} within reach.`;
+  else if (chosen === best) reason += ` ${chosen.model.label} is the best rated for this (${Math.round(chosen.rating!)}).`;
   else reason += ` ${chosen.model.label} is rated ${Math.round(chosen.rating!)}${usedRating !== guess.task ? " overall" : ""}, ${gap} under ${best.model.label}, at about ${fmtUsd(chosen.estimate)} instead of ${fmtUsd(best.estimate)}.`;
-  return { model: chosen.model, guess, mode, reason, estimate: chosen.estimate, candidates: [...eligible, ...rest], best };
+  if (how) reason += ` It is ${how}: ${chosen.seconds == null ? "its time is not known" : `${secondsText(chosen.seconds)}${chosen.measured ? "" : " (a rough guess)"}`}.`;
+  const cheapest = [...eligible].sort(byPrice)[0];
+  const fastest = timeOf ? [...eligible].sort(byTime)[0] : null;
+  return { model: chosen.model, guess, mode, reason, estimate: chosen.estimate, candidates: [...eligible, ...rest], best, cheapest, fastest };
 }
 
 // What a request's "model" field means. Accepts "auto", Leanfare's own ids

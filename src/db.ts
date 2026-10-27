@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS ledger(
   switched_from TEXT
 );
 CREATE INDEX IF NOT EXISTS ledger_month ON ledger(month);
+CREATE INDEX IF NOT EXISTS ledger_model ON ledger(model);
 CREATE TABLE IF NOT EXISTS chats(id TEXT PRIMARY KEY, title TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL, deleted TEXT);
 CREATE TABLE IF NOT EXISTS messages(
   id INTEGER PRIMARY KEY,

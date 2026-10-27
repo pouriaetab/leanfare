@@ -107,3 +107,55 @@ describe("speed", () => {
     }
   });
 });
+
+describe("at the same quality: the cheapest, the fastest, or the cheapest within a time", () => {
+  // Balanced, an everyday question: Gemini 3.8 Flash (1496), Claude Sonnet 4.6 (1472) and Grok 4.20 Beta
+  // (1471) are within reach; Grok is the cheapest. Here Gemini answers in 2 s, Sonnet in 8, Grok in 12.
+  const SECS: Record<string, number> = { "google/gemini-3.8-flash": 2, "anthropic/claude-sonnet-4-6": 8, "xai/grok-4.20-beta": 12 };
+  const timeOf = (m: Model) => ({ seconds: SECS[m.id] ?? 30, measured: m.id !== "anthropic/claude-sonnet-4-6" });
+  const usable = () => all.filter((m) => m.ratings.overall !== undefined && !m.retire);
+  const q = ask("What is the capital of Australia?");
+
+  test("cheapest is as before, and says nothing about time", () => {
+    const p = pickModel(q, usable(), "balanced", none, undefined, undefined, "cheapest", timeOf)!;
+    expect(p.model.id).toBe("xai/grok-4.20-beta");
+    expect(p.reason).not.toContain(" It is ");
+    expect(p.cheapest.model.id).toBe("xai/grok-4.20-beta");
+    expect(p.fastest!.model.id).toBe("google/gemini-3.8-flash");
+    expect(p.candidates[1].seconds).toBeDefined();
+  });
+  test("fastest takes the quickest of those within reach, whatever it costs, and says how long", () => {
+    const p = pickModel(q, usable(), "balanced", none, undefined, undefined, "fastest", timeOf)!;
+    expect(p.model.id).toBe("google/gemini-3.8-flash");
+    expect(p.reason).toContain("Gemini 3.8 Flash is the best rated for this (1496).");
+    expect(p.reason).toContain("It is the fastest of the 3 within reach: about 2 s.");
+    expect(p.candidates.slice(0, 3).map((c) => c.model.id)).toEqual(["google/gemini-3.8-flash", "anthropic/claude-sonnet-4-6", "xai/grok-4.20-beta"]); // then by time, for fallback
+  });
+  test("within N seconds: the cheapest of those expected in time; the slower ones come after, fastest first", () => {
+    const p = pickModel(q, usable(), "balanced", none, undefined, undefined, 10, timeOf)!;
+    const inTime = p.candidates.filter((c) => c.seconds! <= 10);
+    expect(inTime.map((c) => c.model.id).sort()).toEqual(["anthropic/claude-sonnet-4-6", "google/gemini-3.8-flash"]);
+    expect(p.model.id).toBe([...inTime].sort((a, b) => a.estimate! - b.estimate!)[0].model.id);
+    expect(p.reason).toContain("It is the cheapest of the 2 expected within 10 s");
+    expect(p.candidates[2].model.id).toBe("xai/grok-4.20-beta");
+    // A time from no answers yet is said to be a rough guess.
+    const sonnet = pickModel(q, usable().filter((m) => m.id !== "google/gemini-3.8-flash"), "balanced", none, undefined, undefined, 10, timeOf)!;
+    expect(sonnet.model.id).toBe("anthropic/claude-sonnet-4-6");
+    expect(sonnet.reason).toContain("about 8 s (a rough guess).");
+  });
+  test("when none is expected in time, the fastest, and the reason says so", () => {
+    const p = pickModel(q, usable(), "balanced", none, undefined, undefined, 1, timeOf)!;
+    expect(p.model.id).toBe("google/gemini-3.8-flash");
+    expect(p.reason).toContain("It is the fastest, since none of the 3 within reach is expected within 1 s: about 2 s.");
+  });
+  test("speed never trades quality: a faster model outside the mode's reach is not picked", () => {
+    const fastDeepSeek = (m: Model) => ({ seconds: m.id === "deepseek/deepseek-v4-flash" ? 0.5 : SECS[m.id] ?? 30, measured: true });
+    expect(pickModel(q, usable(), "balanced", none, undefined, undefined, "fastest", fastDeepSeek)!.model.id).toBe("google/gemini-3.8-flash"); // DeepSeek is 58 under the best
+    expect(pickModel(q, usable(), "save", none, undefined, undefined, "fastest", fastDeepSeek)!.model.id).toBe("deepseek/deepseek-v4-flash"); // within Save more's 80
+  });
+  test("with no times to go by, every choice falls back to the cheapest", () => {
+    const p = pickModel(q, usable(), "balanced", none, undefined, undefined, "fastest")!;
+    expect(p.model.id).toBe("xai/grok-4.20-beta");
+    expect(p.fastest).toBeNull();
+  });
+});

@@ -10,6 +10,7 @@
 // stdout, one message per line; anything for a person goes to stderr.
 import { existsSync, readFileSync } from "node:fs";
 import { PORT, VERSION, paths } from "./config";
+import { secondsText } from "./speed";
 import { selfCommand } from "./self";
 import { readForDelegate } from "./readfiles";
 
@@ -50,6 +51,7 @@ const TOOLS = [
         kind: { type: "string", enum: ["read", "write", "reason"], description: "read: find, pull out or summarize from the files. write: draft text or code. reason: work something out (a bug's cause, a plan, a proof). Leave it out to let Leanfare guess." },
         effort: { type: "string", enum: ["low", "medium", "high"], description: "How good the model must be: low takes the cheapest rated within 80 points of the best model the user ticked, medium within 40, high within 15. Also the thinking effort for models that think. Default medium." },
         check: { type: "string", enum: ["auto", "always", "never"], description: "auto (the default) has a stronger model check every high effort answer, 1 in 4 medium ones and 1 in 10 low ones." },
+        speed: { type: "string", description: "At the same quality: \"cheapest\" (however long it takes), \"fastest\" (whatever it costs), or a number of seconds to answer within, like \"30\". Default: the user's choice in Leanfare." },
         max_tokens: { type: "integer", minimum: 1, maximum: 64000, description: "The longest answer to allow, in tokens (default 8,192)." },
       },
       required: ["task"],
@@ -73,11 +75,15 @@ const TOOLS = [
   },
   {
     name: "estimate",
-    title: "Estimate a cost",
-    description: "Estimate what a prompt would cost before sending it: the model Auto would pick, why, and the estimate for it and the other choices. Nothing is sent to a model.",
+    title: "Estimate a cost and a time",
+    description: "Estimate what a prompt would cost and how long it would take before sending it: the model Auto would pick, why, and at the same quality the cheapest and the fastest choice. Nothing is sent to a model.",
     inputSchema: {
       type: "object",
-      properties: { prompt: { type: "string", description: "The prompt to price." }, model: { type: "string", description: "auto (the default) or a model id." } },
+      properties: {
+        prompt: { type: "string", description: "The prompt to price." },
+        model: { type: "string", description: "auto (the default) or a model id." },
+        speed: { type: "string", description: "For auto: \"cheapest\", \"fastest\", or a number of seconds to answer within, like \"30\". Default: the user's choice in Leanfare." },
+      },
       required: ["prompt"],
       additionalProperties: false,
     },
@@ -156,13 +162,13 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
     if (typeof args?.task !== "string" || !args.task.trim()) return failure("delegate needs a task.");
     const files = readForDelegate(args.files, args.folder);
     if (typeof files === "string") return failure(files);
-    const body = { task: args.task, files, kind: args.kind ?? null, effort: args.effort ?? "medium", check: args.check ?? "auto", ...(args.max_tokens !== undefined ? { max_tokens: args.max_tokens } : {}) };
+    const body = { task: args.task, files, kind: args.kind ?? null, effort: args.effort ?? "medium", check: args.check ?? "auto", ...(args.max_tokens !== undefined ? { max_tokens: args.max_tokens } : {}), ...(args.speed !== undefined ? { speed: args.speed } : {}) };
     const { j } = await call("/api/delegate", { method: "POST", json: body }, signal);
     return text(`${j.answer}\n\n(${j.receipt})`, {
       answer: j.answer, model: j.model.id, cost_usd: j.cost, total_usd: j.total, task: j.task, effort: j.effort,
       check: j.check.picked ? { verdict: j.check.verdict, by: j.check.checker?.id ?? null, why: j.check.why || null, cost_usd: j.check.cost } : null,
       first: j.first ? { model: j.first.model.id, cost_usd: j.first.cost } : null,
-      tokens: j.tokens, cut: j.cut,
+      tokens: j.tokens, cut: j.cut, seconds: j.seconds,
     });
   }
   if (name === "spend") {
@@ -190,11 +196,19 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
   }
   if (name === "estimate") {
     if (typeof args?.prompt !== "string" || !args.prompt.trim()) return failure("estimate needs a prompt.");
-    const { j } = await call("/api/estimate", { method: "POST", json: { messages: [{ role: "user", content: args.prompt }], model: typeof args.model === "string" && args.model ? args.model : "auto" } }, signal);
+    const { j } = await call("/api/estimate", { method: "POST", json: { messages: [{ role: "user", content: args.prompt }], model: typeof args.model === "string" && args.model ? args.model : "auto", ...(args.speed !== undefined ? { speed: args.speed } : {}) } }, signal);
     if (!j.plan) return failure(j.error ?? "Leanfare could not estimate this.");
     const p = j.plan;
     const alts = (p.alternatives ?? []).map((a: any) => `${a.label} about ${usd(a.estimate)}`).join(", ");
-    return text(`About ${usd(j.estimate)} on ${p.model.label} (an estimate). ${p.reason}${alts ? `\nOther choices: ${alts}.` : ""}`, { estimate_usd: j.estimate, model: p.model.id, task: p.task, reason: p.reason, alternatives: p.alternatives });
+    const secs = typeof p.seconds === "number" ? `, ${secondsText(p.seconds)}` : "";
+    const est = typeof p.seconds === "number" && !p.secondsMeasured ? "an estimate; the time is a rough guess" : "an estimate";
+    // At the same quality: the cheapest and the fastest, when either is not the pick.
+    const c = p.choices;
+    const one = (x: any) => `${x.label} (about ${usd(x.estimate)}${typeof x.seconds === "number" ? `, ${secondsText(x.seconds)}` : ""})`;
+    const same = c && (c.cheapest.id !== p.model.id || (c.fastest && c.fastest.id !== p.model.id))
+      ? `\nAt the same quality: the cheapest is ${one(c.cheapest)}${c.fastest ? `, the fastest is ${one(c.fastest)}` : ""}.` : "";
+    return text(`About ${usd(j.estimate)} on ${p.model.label}${secs} (${est}). ${p.reason}${same}${alts ? `\nOther choices: ${alts}.` : ""}`,
+      { estimate_usd: j.estimate, seconds: p.seconds ?? null, model: p.model.id, task: p.task, reason: p.reason, speed: p.speed ?? null, choices: c ?? null, alternatives: p.alternatives });
   }
   return null;
 }

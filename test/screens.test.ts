@@ -994,3 +994,65 @@ describe("Subscriptions on Savings and in Settings", () => {
     expect(bad(doc)).toBe(false);
   }, 20000);
 });
+
+describe("Speed: in Settings and beside the message box", () => {
+  const toasts = (doc: any) => [...doc.querySelectorAll("#toasts .toast")].map((t: any) => t.textContent).join(" | ");
+  const bad = (doc: any) => /\bnull\b|\bundefined\b|NaN|\[object Object\]/.test(doc.body.textContent);
+  async function waitFor(ok: () => boolean, ms = 8000) { for (let i = 0; i < ms / 50 && !ok(); i++) await Bun.sleep(50); }
+  beforeEach(async () => { await reset({ ticked: ALL_TICKED }); });
+
+  test("Settings saves your speed; the message box shows the same choice, its time, and hides it for a model you picked", async () => {
+    await keys("anthropic", "google", "xai");
+    const doc = await openApp();
+    doc.querySelector('.tabs button[data-tab="settings"]').click();
+    await waitFor(() => !!doc.querySelector(".setting select[aria-label='Speed']"));
+    const sel = doc.querySelector(".setting select[aria-label='Speed']");
+    expect(sel.value).toBe("cheapest");
+    expect([...sel.options].map((o: any) => o.textContent)).toEqual(["The cheapest, however long it takes", "The cheapest within about a minute", "The cheapest within about 20 seconds", "The cheapest within about 5 seconds", "The fastest, whatever it costs"]);
+    sel.value = "fastest";
+    sel.dispatchEvent(new win.Event("change", { bubbles: true }));
+    await waitFor(() => toasts(doc).includes("Speed: the fastest, whatever it costs."));
+    expect((await ui(url, "/api/state")).json.settings.speed).toBe("fastest");
+
+    doc.querySelector('.tabs button[data-tab="chat"]').click();
+    const box = () => doc.querySelector(".composer select.speed");
+    await waitFor(() => box()?.value === "fastest");
+    expect(box().value).toBe("fastest");
+    expect(box().hidden).toBe(false);
+    type(doc.querySelector("textarea"), "What is the capital of Australia?");
+    const est = () => doc.querySelector(".composer .est").textContent;
+    await waitFor(() => /about (a second|\d+ s)/.test(est()));
+    expect(est()).toMatch(/^≈ \$[\d.]+ · about (a second|\d+ s) on /);
+    box().value = "20";
+    box().dispatchEvent(new win.Event("change", { bubbles: true }));
+    await waitFor(() => toasts(doc).includes("Speed: within 20 s."));
+    expect((await ui(url, "/api/state")).json.settings.speed).toBe(20);
+    choose(doc, "google/gemini-3.8-flash");
+    await waitFor(() => box().hidden === true);
+    expect(box().hidden).toBe(true); // speed is how Auto picks; a model you chose is that model
+    expect(bad(doc)).toBe(false);
+  }, 20000);
+
+  test("an answer's details say its expected time and the cheapest and fastest at the same quality", async () => {
+    await keys("anthropic", "google", "xai");
+    const { db } = require("../src/db") as typeof import("../src/db");
+    const { forgetSpeeds } = require("../src/speed") as typeof import("../src/speed");
+    const row = db.query(`INSERT INTO ledger(ts, month, day, source, provider, model, price_status, usage_status, status, ms, first_ms, out_tokens)
+      VALUES ('2026-10-21T11:00:00Z', '2026-10', '2026-10-21', 'chat', ?, ?, 'listed', 'reported', 'ok', ?, ?, 400)`);
+    for (let i = 0; i < 3; i++) { row.run("google", "google/gemini-3.8-flash", 700, 300); row.run("xai", "xai/grok-4.20-beta", 29_000, 9_000); }
+    forgetSpeeds();
+    const doc = await openApp();
+    const ta = doc.querySelector("textarea");
+    type(ta, "What is the capital of Australia?");
+    await waitFor(() => doc.querySelector(".composer .est").textContent.includes("faster: Gemini 3.8 Flash"));
+    expect(doc.querySelector(".composer .est").textContent).toMatch(/on Grok 4\.20 Beta .* · faster: Gemini 3\.8 Flash ≈ \$[\d.]+, about a second$/);
+    key(ta, "Enter");
+    await waitIdle(doc);
+    await waitFor(() => !![...doc.querySelectorAll("button")].find((b: any) => b.textContent === "Why this model"));
+    [...doc.querySelectorAll("button")].find((b: any) => b.textContent === "Why this model").click();
+    await waitFor(() => doc.body.textContent.includes("At the same quality"));
+    expect(doc.body.textContent).toContain("Speed: expected about 29 s. At the same quality: cheapest Grok 4.20 Beta ≈ $");
+    expect(doc.body.textContent).toMatch(/fastest Gemini 3\.8 Flash ≈ \$[\d.]+, about a second\./);
+    expect(bad(doc)).toBe(false);
+  }, 20000);
+});

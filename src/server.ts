@@ -29,6 +29,7 @@ import { exportAll, importChats, readArchive, searchChats } from "./archive";
 import { clearCookie, controlOk, engineAllowed, keyOk, locked, newAccessKey, pageAllowed, sessionCookie } from "./lock";
 import { chargeOf, errorResponse, handleAnthropic, handleOpenAI, idle, pauseState, plan, planView, providerReady, runChat, runningList, setPaused, stopRunning, usableModels, usualModel } from "./engine";
 import { guessTask } from "./router";
+import { parseSpeed } from "./speed";
 import { dollars, localDay, now, randomId, redact } from "./util";
 
 const EFFORTS = ["auto", "low", "medium", "high"];
@@ -524,7 +525,7 @@ async function api(req: Request, url: URL): Promise<Response> {
     if (!messages.length) return json({ estimate: null });
     try {
       const system = typeof b.system === "string" && b.system.trim() ? b.system.slice(0, MAX_INSTRUCTIONS) : undefined;
-      const pl = await plan({ source: "chat", asked: typeof b.model === "string" ? b.model : "auto", messages, system, maxOut: null, signal: req.signal, dry: true, effort: EFFORTS.includes(b.effort) ? b.effort : settings().effort });
+      const pl = await plan({ source: "chat", asked: typeof b.model === "string" ? b.model : "auto", messages, system, maxOut: null, signal: req.signal, dry: true, effort: EFFORTS.includes(b.effort) ? b.effort : settings().effort, speed: parseSpeed(b.speed) ?? undefined });
       return json({ estimate: pl.estimate, plan: planView(pl) });
     } catch (e: any) {
       return json({ estimate: null, error: e instanceof UserError ? e.message : String(e?.message ?? e), guess: guessTask(messages) });
@@ -647,9 +648,9 @@ function corsFor(origin: string | null): Record<string, string> {
   if (!origin || !settings().allowOrigins.includes(origin)) return {};
   return {
     "access-control-allow-origin": origin,
-    "access-control-allow-headers": "authorization, content-type, x-api-key, anthropic-version, anthropic-beta, x-leanfare-mode",
+    "access-control-allow-headers": "authorization, content-type, x-api-key, anthropic-version, anthropic-beta, x-leanfare-mode, x-leanfare-speed",
     "access-control-allow-methods": "GET, POST, OPTIONS",
-    "access-control-expose-headers": "x-leanfare-model, x-leanfare-cost-usd, x-leanfare-estimate-usd, x-leanfare-reason, x-leanfare-auto, x-leanfare-task",
+    "access-control-expose-headers": "x-leanfare-model, x-leanfare-cost-usd, x-leanfare-estimate-usd, x-leanfare-estimate-seconds, x-leanfare-reason, x-leanfare-auto, x-leanfare-task",
     vary: "origin",
   };
 }

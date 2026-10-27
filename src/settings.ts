@@ -3,6 +3,7 @@
 import type { ProviderId } from "./config";
 import { getSetting, putSetting } from "./db";
 import type { CustomProvider } from "./providers";
+import { parseSpeed, type SpeedChoice } from "./speed";
 
 export type Mode = "save" | "balanced" | "best";
 export type Effort = "auto" | "low" | "medium" | "high"; // auto: each model's own default
@@ -33,6 +34,7 @@ export interface Settings {
   effort: Effort; // how hard thinking models think on the chat screen
   accessKey: string | null; // when set, other apps must send it (see lock.ts); null: no key needed
   custom: CustomProvider[]; // providers you added: a name and an address that speaks OpenAI's format (providers.ts)
+  speed: SpeedChoice; // at the same quality: the cheapest, the fastest, or the cheapest expected within N seconds (speed.ts)
 }
 
 export const DEFAULTS: Settings = {
@@ -51,6 +53,7 @@ export const DEFAULTS: Settings = {
   effort: "auto",
   accessKey: null,
   custom: [],
+  speed: "cheapest",
 };
 
 export const MAX_INSTRUCTIONS = 20_000; // characters
@@ -105,6 +108,7 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
     }
     out.plans = plans;
   }
+  if ("speed" in p) { const v = parseSpeed(p.speed); if (v === null) return { error: "speed must be cheapest, fastest, or a number of seconds from 1 to 3600" }; out.speed = v; }
   if ("atLimit" in p) { if (p.atLimit !== "cheapest" && p.atLimit !== "stop") return { error: "atLimit must be cheapest or stop" }; out.atLimit = p.atLimit; }
   if ("history" in p) out.history = !!p.history;
   if ("successors" in p) {
