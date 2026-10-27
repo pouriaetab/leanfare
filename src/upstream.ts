@@ -2,7 +2,7 @@
 // translating between OpenAI's chat format and Anthropic's Messages format so
 // Claude models work behind the OpenAI address and in the chat.
 import { baseOf, provider, type ProviderDef, type ProviderId } from "./config";
-import type { Model } from "./data";
+import { LOCAL_CONTEXT, type Model } from "./data";
 import { fromAnthropicUsage, type Usage } from "./cost";
 import { providerMessage, redact } from "./util";
 
@@ -208,6 +208,61 @@ export class AnthropicStreamTranslator {
 }
 
 // ---- keys -------------------------------------------------------------------
+
+// ---- Ollama's own chat API (models on this computer) -----------------------------
+// Ollama's OpenAI-style address runs every model at its default context, 4,096 tokens, and cuts a
+// longer prompt from the start without a word. Its own /api/chat takes the context for each request
+// (num_ctx), so a plain text request to a local model goes there, with room for what it holds, and
+// comes back in OpenAI's shape. Requests with tools or images keep the OpenAI-style address.
+export function ollamaPlain(body: any): boolean {
+  if (!Array.isArray(body?.messages) || body.tools || body.functions || body.tool_choice || body.response_format) return false;
+  return body.messages.every((m: any) => m && typeof m === "object" && (m.role === "system" || m.role === "user" || m.role === "assistant") && !m.tool_calls
+    && (typeof m.content === "string" || (Array.isArray(m.content) && m.content.every((p: any) => p?.type === "text" && typeof p.text === "string"))));
+}
+const plainText = (c: any): string => (typeof c === "string" ? c : c.map((p: any) => p.text).join(""));
+const posInt = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : null);
+export function toOllama(body: any, m: Model, stream: boolean, cap: number | null): any {
+  const messages = body.messages.map((msg: any) => ({ role: msg.role, content: plainText(msg.content) }));
+  const chars = messages.reduce((n: number, x: { content: string }) => n + x.content.length, 0);
+  const out = posInt(body.max_completion_tokens) ?? posInt(body.max_tokens) ?? cap ?? 2048;
+  const most = Math.min(m.context ?? LOCAL_CONTEXT, LOCAL_CONTEXT);
+  const want = Math.ceil(chars / 3) + out + 256; // three characters a token, as Leanfare counts, the answer, and room
+  const options: Record<string, unknown> = { num_ctx: Math.min(most, Math.max(4096, Math.ceil(want / 1024) * 1024)), num_predict: out };
+  if (typeof body.temperature === "number") options.temperature = body.temperature;
+  if (typeof body.top_p === "number") options.top_p = body.top_p;
+  if (typeof body.seed === "number") options.seed = body.seed;
+  if (typeof body.stop === "string" || Array.isArray(body.stop)) options.stop = Array.isArray(body.stop) ? body.stop : [body.stop];
+  return { model: m.apiId, messages, stream, options };
+}
+const ollamaUsage = (j: any) => (typeof j?.prompt_eval_count === "number" || typeof j?.eval_count === "number"
+  ? { prompt_tokens: j.prompt_eval_count ?? 0, completion_tokens: j.eval_count ?? 0, total_tokens: (j.prompt_eval_count ?? 0) + (j.eval_count ?? 0) } : null);
+const ollamaFinish = (j: any) => (j?.done_reason === "length" ? "length" : "stop");
+// A whole answer from /api/chat -> a whole OpenAI answer (thinking as reasoning, as Ollama's OpenAI address sends it).
+export function ollamaToOpenAI(j: any, model: string): any {
+  if (typeof j?.error === "string") return { error: { message: j.error } };
+  const msg = j?.message ?? {};
+  const usage = ollamaUsage(j);
+  return {
+    id: "chatcmpl-ollama", object: "chat.completion", created: Math.floor(Date.now() / 1000), model,
+    choices: [{ index: 0, message: { role: "assistant", content: typeof msg.content === "string" ? msg.content : "", ...(typeof msg.thinking === "string" && msg.thinking ? { reasoning: msg.thinking } : {}) }, finish_reason: ollamaFinish(j) }],
+    ...(usage ? { usage } : {}),
+  };
+}
+// One streamed line from /api/chat -> the OpenAI chunks it stands for.
+export function ollamaChunks(o: any, model: string): any[] {
+  if (typeof o?.error === "string") return [{ error: { message: o.error } }];
+  const base = { id: "chatcmpl-ollama", object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model };
+  const delta: Record<string, string> = {};
+  if (typeof o?.message?.thinking === "string" && o.message.thinking) delta.reasoning = o.message.thinking;
+  if (typeof o?.message?.content === "string" && o.message.content) delta.content = o.message.content;
+  const out: any[] = Object.keys(delta).length ? [{ ...base, choices: [{ index: 0, delta, finish_reason: null }] }] : [];
+  if (o?.done === true) {
+    out.push({ ...base, choices: [{ index: 0, delta: {}, finish_reason: ollamaFinish(o) }] });
+    const usage = ollamaUsage(o);
+    if (usage) out.push({ ...base, choices: [], usage });
+  }
+  return out;
+}
 
 export interface KeyCheck { ok: boolean; status: number; message: string; models: string[] | null }
 

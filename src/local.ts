@@ -251,7 +251,8 @@ async function run(j: Job) {
     const s = settings();
     if (!s.ticked.includes(made.id)) saveSettings({ ticked: [...s.ticked, made.id] }); // you asked for it, so it is ready to pick
     j.status = "done"; j.step = "Done"; j.ended = Date.now();
-    j.message = `Downloaded ${made.label}${j.size ? ` (${gb(j.size)})` : ""}. It is ticked, so the model list and Auto can use it.`;
+    const rated = made.ratings.overall !== undefined;
+    j.message = `Downloaded ${made.label}${j.size ? ` (${gb(j.size)})` : ""}. It is ticked${rated ? `, and rated like ${made.ratingFrom?.split(",")[0] ?? "its twin"}, so Auto and plans can use it` : ". Leanfare has no rating for this name, so Auto does not pick it: choose it by name in the chat"}.`;
   } catch (e: any) {
     if (e?.name === "AbortError" || !active(j)) return;
     fail(j, "Leanfare lost touch with Ollama. Open the Ollama app, then press Download to continue where it stopped.");

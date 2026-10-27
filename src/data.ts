@@ -308,6 +308,38 @@ export function buildOpenRouter(list: any, ratingsFrom: Catalog, asOf = now()): 
   return out;
 }
 
+// ---- models on this computer ---------------------------------------------------------
+// A model Ollama runs has no Arena rating of its own, and without one Auto never picks it. It borrows the
+// rating of the same model in the catalogue (gemma4:12b is Gemma 4 12B, qwen3.6:27b is Qwen3.6 27B), a
+// little lower for the lighter 4-bit copy Ollama runs. A name Leanfare cannot match stays unrated.
+export const LOCAL_PENALTY = 15;
+export const LOCAL_CONTEXT = 16_384; // the most context Leanfare asks of a local model (every token of it takes memory)
+const LOCAL_UNKNOWN = 8_192; // a local model whose context Ollama did not say
+const SIZE_TOKEN = /^e?\d+(\.\d+)?b$/; // 27b, 1.5b, e2b (Gemma's "effective" sizes)
+const PLAIN_EXTRA = /^(it|instruct|chat|preview|latest|qat|gguf|mlx|ud|gptq|awq|int[48]|a\d+(\.\d+)?b|fp\d+|bf16|q\d[\w.]*|iq\d\w*|k|m|s|l|xs|xxs|nl|\d{4}|\d{6,8})$/; // words that do not make it another model (quantizations like Q4_K_M)
+export function nameParts(name: string): { fam: string; size: string | null; extra: string[] } {
+  const t = name.toLowerCase().replace(/^.*\//, "").split(/[-_:\s]+/).filter(Boolean);
+  const i = t.findIndex((x) => SIZE_TOKEN.test(x));
+  if (i < 1) return { fam: t.join("").replace(/[^a-z0-9]/g, ""), size: null, extra: [] };
+  return { fam: t.slice(0, i).join("").replace(/[^a-z0-9]/g, ""), size: t[i], extra: t.slice(i + 1) };
+}
+export function twinOf(tag: string, models: Model[]): Model | null {
+  const me = nameParts(tag);
+  if (!me.size || !me.fam || me.extra.some((x) => !PLAIN_EXTRA.test(x))) return null;
+  const hits = models.filter((m) => {
+    if (m.local || m.ratingFrom || m.ratings.overall === undefined) return false;
+    const p = nameParts(m.name);
+    return p.fam === me.fam && p.size === me.size && p.extra.every((x) => PLAIN_EXTRA.test(x));
+  });
+  return hits.sort((a, b) => (b.ratings.overall ?? 0) - (a.ratings.overall ?? 0))[0] ?? null;
+}
+function lendTwin(m: Model, models: Model[]) {
+  const t = twinOf(m.apiId, models);
+  if (!t) { m.ratings = {}; delete m.ratingFrom; return; }
+  m.ratings = Object.fromEntries(Object.entries(t.ratings).map(([k, v]) => [k, v - LOCAL_PENALTY]));
+  m.ratingFrom = `${t.label}, ${LOCAL_PENALTY} lower for the lighter copy on this computer`;
+}
+
 export function ollamaModels(tags: any): Model[] {
   const list = Array.isArray(tags?.models) ? tags.models : [];
   return list
@@ -358,6 +390,8 @@ export const store = {
 };
 
 function reindex() {
+  const rated = [...(store.catalog?.models ?? []), ...store.openrouter];
+  for (const m of store.ollama) lendTwin(m, rated);
   store.index = new Map();
   for (const m of [...store.catalog.models, ...store.openrouter, ...store.ollama, ...store.extra]) store.index.set(m.id, m);
 }
@@ -445,14 +479,32 @@ export async function refreshOpenRouter(signal?: AbortSignal): Promise<SourceSta
   return st;
 }
 
+// How much context each local model takes, as Ollama says (/api/show), kept per model file.
+const contexts = new Map<string, number | null>();
+async function contextOf(host: string, t: any, signal?: AbortSignal): Promise<number | null> {
+  const key = `${t?.name}@${t?.digest ?? ""}`;
+  if (contexts.has(key)) return contexts.get(key)!;
+  let ctx: number | null = null;
+  try {
+    const j = await getJson(`${host}/api/show`, 3_000, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: t.name, name: t.name }), signal });
+    for (const [k, v] of Object.entries<any>(j?.model_info ?? {})) if (k.endsWith(".context_length") && typeof v === "number" && v > 0) { ctx = v; break; }
+    contexts.set(key, ctx);
+  } catch {} // not kept: asked again next time
+  return ctx;
+}
+
 export async function refreshOllama(signal?: AbortSignal): Promise<SourceStatus> {
   const st = store.status.ollama;
-  const url = `${baseOf("ollama").replace(/\/v1$/, "")}/api/tags`;
+  const host = baseOf("ollama").replace(/\/v1$/, "");
+  const url = `${host}/api/tags`;
   st.at = now().toISOString();
   st.tried = url;
   try {
     const tags = await getJson(url, 3_000, { signal });
-    store.ollama = ollamaModels(tags);
+    const models = ollamaModels(tags);
+    const list: any[] = Array.isArray(tags?.models) ? tags.models : [];
+    await Promise.all(models.map(async (m) => { m.context = Math.min((await contextOf(host, list.find((t) => t?.name === m.apiId), signal)) ?? LOCAL_UNKNOWN, LOCAL_CONTEXT); }));
+    store.ollama = models;
     store.ollamaFound = true;
     Object.assign(st, { state: "ok", error: null });
   } catch (e: any) {

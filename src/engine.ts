@@ -12,7 +12,7 @@ import { estimateFor, expectedOutput, guessTask, ledgerWhy, pickModel, resolveMo
 import { forgetSpeeds, parseSpeed, secondsFor, type SpeedChoice } from "./speed";
 import { successor } from "./retire";
 import { addSpent, budgetState, release, tryReserve, wouldFit } from "./budget";
-import { AnthropicStreamTranslator, UserError, anthropicDefaultMax, anthropicToOpenAI, effortFor, headersFor, networkError, openaiBody, plainError, toAnthropic } from "./upstream";
+import { AnthropicStreamTranslator, UserError, anthropicDefaultMax, anthropicToOpenAI, effortFor, headersFor, networkError, ollamaChunks, ollamaPlain, ollamaToOpenAI, openaiBody, plainError, toAnthropic, toOllama } from "./upstream";
 import { SSEParser, dollars, localDay, localMonth, median, now, providerMessage, randomId, redact, usd8 } from "./util";
 import { takesImages, takesPdfs } from "./files";
 
@@ -228,13 +228,16 @@ export async function plan(input: PlanInput): Promise<Plan> {
   // Images and PDFs go only to models that take them.
   const media = mediaIn(input.messages as any);
   const takes = (m: Model) => (!media.images || takesImages(m)) && (!media.pdfs || takesPdfs(m));
-  const base = media.images || media.pdfs ? (m: Model) => (!byAddress || byAddress(m)) && takes(m) : byAddress;
+  const inTok = input.tokens ?? promptTokens(input.messages as any, input.system);
+  // A model on this computer runs with the context Leanfare asks of it (at most 16k tokens), so Auto sends
+  // it only what fits there with room for the answer.
+  const roomy = (m: Model) => !m.local || m.context === null || m.context >= inTok + (input.maxOut ?? 1024);
+  const base = (m: Model) => (!byAddress || byAddress(m)) && (!(media.images || media.pdfs) || takes(m)) && roomy(m);
   const extra = input.only;
   const only = extra ? (m: Model) => (!base || base(m)) && extra(m) : base;
   const mediaWords = [media.images ? "images" : "", media.pdfs ? "PDFs" : ""].filter(Boolean).join(" and ");
   const amode = autoMode(input.asked, input.mode ?? s.mode);
   const mode = amode ?? input.mode ?? s.mode;
-  const inTok = input.tokens ?? promptTokens(input.messages as any, input.system);
   const inMax = input.tokens !== undefined ? input.tokens * 4 : promptMax(input.messages, input.system, input.tools); // the most: a token per byte
   const capped = s.budget !== null && input.maxOut === null;
   const speed: SpeedChoice = input.speed ?? s.speed ?? "cheapest";
@@ -395,6 +398,8 @@ export function record(p: Plan, m: Model, source: string, usage: Usage | null, o
 // ---- sending -------------------------------------------------------------------
 
 const RETRYABLE = new Set([408, 409, 425, 429, 500, 502, 503, 504, 529]);
+// Answers from Ollama's own /api/chat (upstream.ts says why): read as JSON lines and turned into OpenAI's shape.
+const OLLAMA_NATIVE = new WeakSet<Response>();
 
 function send(m: Model, body: any, stream: boolean, signal: AbortSignal, native: boolean, extraHeaders: Record<string, string>, cap: number | null, effortAsked: string | null = null): Promise<Response> {
   const def = provider(m.provider)!;
@@ -408,6 +413,9 @@ function send(m: Model, body: any, stream: boolean, signal: AbortSignal, native:
   } else if (def.kind === "anthropic") {
     url = `${base}/v1/messages`;
     payload = toAnthropic(cap && body.max_tokens == null && body.max_completion_tokens == null ? { ...body, max_tokens: cap } : body, m, stream, effort);
+  } else if (m.provider === "ollama" && ollamaPlain(body)) {
+    url = `${base.replace(/\/v1\/?$/, "")}/api/chat`;
+    payload = toOllama(body, m, stream, cap);
   } else {
     url = `${base}/chat/completions`;
     payload = openaiBody(m, body, stream, effort);
@@ -415,7 +423,8 @@ function send(m: Model, body: any, stream: boolean, signal: AbortSignal, native:
     if (cap && payload.max_tokens == null && payload.max_completion_tokens == null) payload[m.provider === "openai" ? "max_completion_tokens" : "max_tokens"] = cap;
   }
   const sig = stream ? signal : AbortSignal.any([signal, AbortSignal.timeout(15 * 60_000)]);
-  return fetch(url, { method: "POST", headers: { ...headersFor(def, getKey(m.provider)), ...extraHeaders }, body: JSON.stringify(payload), signal: sig });
+  const sent = fetch(url, { method: "POST", headers: { ...headersFor(def, getKey(m.provider)), ...extraHeaders }, body: JSON.stringify(payload), signal: sig });
+  return url.endsWith("/api/chat") ? sent.then((res) => { OLLAMA_NATIVE.add(res); return res; }) : sent;
 }
 
 // Sends to the planned model. For Auto, a busy or unreachable provider (before
@@ -474,8 +483,35 @@ async function* sseEvents(res: Response): AsyncGenerator<{ event: string; data: 
   }
 }
 
-// Any provider's stream as OpenAI-format chunks (Claude's is translated).
+// A stream of JSON lines (Ollama's /api/chat), one line at a time.
+async function* jsonLines(res: Response): AsyncGenerator<string> {
+  const reader = res.body!.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) { buf += dec.decode(); if (buf.trim()) yield buf; return; }
+      buf += dec.decode(value, { stream: true });
+      let i: number;
+      while ((i = buf.indexOf("\n")) >= 0) { const line = buf.slice(0, i); buf = buf.slice(i + 1); if (line.trim()) yield line; }
+    }
+  } finally {
+    try { await reader.cancel(); } catch {}
+  }
+}
+
+// Any provider's stream as OpenAI-format chunks (Claude's and Ollama's own are translated).
 async function* openaiChunks(res: Response, m: Model, modelName: string): AsyncGenerator<{ data: string; j: any }> {
+  if (OLLAMA_NATIVE.has(res)) {
+    for await (const line of jsonLines(res)) {
+      let o: any;
+      try { o = JSON.parse(line); } catch { continue; }
+      for (const j of ollamaChunks(o, modelName)) yield { data: JSON.stringify(j), j };
+      if (o?.done === true) { yield { data: "[DONE]", j: null }; return; }
+    }
+    return;
+  }
   if (provider(m.provider)!.kind === "anthropic") {
     const tr = new AnthropicStreamTranslator(modelName, true);
     for await (const ev of sseEvents(res)) {
@@ -610,12 +646,13 @@ export async function handleOpenAI(req: Request, body: any): Promise<Response> {
         const text = await r.text();
         let j: any;
         try { j = JSON.parse(text); } catch { throw new UserError(502, `${def.name} sent an answer Leanfare could not read.`, "bad_provider_answer"); }
-        const oj = def.kind === "anthropic" ? anthropicToOpenAI(j, name) : j;
+        const native = OLLAMA_NATIVE.has(r);
+        const oj = def.kind === "anthropic" ? anthropicToOpenAI(j, name) : native ? ollamaToOpenAI(j, name) : j;
         const msg = oj.choices?.[0]?.message ?? {};
         const answer = typeof msg.content === "string" ? msg.content : "";
         const empty = !answer.trim() && !msg.tool_calls?.length && !msg.function_call && oj.choices?.[0]?.finish_reason !== "content_filter";
-        const usage = def.kind === "anthropic" ? fromAnthropicUsage(j.usage) : fromOpenAIUsage(j.usage);
-        return { out: def.kind === "anthropic" ? JSON.stringify(oj) : text, answer, empty, usage, reported: reportedCost(j.usage), t };
+        const usage = def.kind === "anthropic" ? fromAnthropicUsage(j.usage) : fromOpenAIUsage(oj.usage);
+        return { out: def.kind === "anthropic" || native ? JSON.stringify(oj) : text, answer, empty, usage, reported: reportedCost(oj.usage), t };
       };
       let a = await read(res, t0);
       if (a.empty && !ac.signal.aborted) {

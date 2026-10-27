@@ -122,8 +122,10 @@ export function startFake() {
     deleteStatus: 0,
     partial: {} as Record<string, number>, // bytes already there for a name (kept when a pull is stopped)
     pulls: 0,
+    contexts: {} as Record<string, number | null>, // what /api/show says of a model's context (null: says nothing); 131072 when not set
+    showFails: false, // /api/show answers 500
     reset() {
-      Object.assign(this, { models: [llama()], loaded: [], down: false, steps: 8, gap: 10, error: null, errorAfter: 3, http: 0, httpMessage: "", cut: false, holding: false, deleteStatus: 0, partial: {}, pulls: 0 });
+      Object.assign(this, { models: [llama()], loaded: [], down: false, steps: 8, gap: 10, error: null, errorAfter: 3, http: 0, httpMessage: "", cut: false, holding: false, deleteStatus: 0, partial: {}, pulls: 0, contexts: {}, showFails: false });
     },
   };
   let dataJson: any = null;
@@ -185,6 +187,15 @@ export function startFake() {
         ollama.models = ollama.models.filter((m) => m.name !== name);
         ollama.loaded = ollama.loaded.filter((n) => n !== name);
         return new Response(null, { status: 200 });
+      }
+      // Ollama's /api/show: the model's facts, its context among them.
+      if (provider === "ollama" && url.pathname === "/ollama/api/show" && req.method === "POST") {
+        if (ollama.showFails) return Response.json({ error: "fake show failure" }, { status: 500 });
+        const name = String(body?.model ?? body?.name ?? "");
+        const m = ollama.models.find((x) => x.name === name);
+        if (!m) return Response.json({ error: `model '${name}' not found` }, { status: 404 });
+        const ctx = name in ollama.contexts ? ollama.contexts[name] : 131072;
+        return Response.json({ details: m.details, model_info: { "general.architecture": "fake", ...(ctx === null ? {} : { "fake.context_length": ctx }) } });
       }
       if (provider === "ollama" && url.pathname === "/ollama/api/pull" && req.method === "POST") {
         ollama.pulls++;
@@ -251,7 +262,7 @@ export function startFake() {
       const u = directive(text, "usage");
       const inTok = u?.[0] ?? Math.ceil(text.length / 4);
       // Like a real provider, never write more than the request allows.
-      const limit = body?.max_completion_tokens ?? body?.max_tokens ?? Infinity;
+      const limit = body?.max_completion_tokens ?? body?.max_tokens ?? body?.options?.num_predict ?? Infinity;
       const outTok = Math.min(u?.[1] ?? 12, limit);
       let capped = (u?.[1] ?? 12) > limit;
       const cached = directive(text, "cached")?.[0] ?? 0;
@@ -305,6 +316,28 @@ export function startFake() {
         }), { headers: { "content-type": "text/event-stream" } });
       }
 
+      // Ollama's own chat: a whole answer, or JSON lines as it streams them, with its own token counts.
+      if (provider === "ollama" && url.pathname === "/ollama/api/chat") {
+        const last = { model: body.model, created_at: "2026-10-21T12:00:00Z", message: { role: "assistant", content: "" }, done: true, done_reason: capped ? "length" : "stop", ...(nousage ? {} : { prompt_eval_count: inTok, eval_count: outTok }) };
+        if (!body.stream) return Response.json({ ...last, message: { role: "assistant", content: answer, ...(think ? { thinking: think } : {}) } });
+        return new Response(new ReadableStream({
+          async start(c) {
+            const send = (o: any) => c.enqueue(enc.encode(JSON.stringify(o) + "\n"));
+            try {
+              if (think) send({ model: body.model, message: { role: "assistant", content: "", thinking: think }, done: false });
+              for (const t of split) {
+                if (rec.aborted) return;
+                if (!t) continue;
+                send({ model: body.model, message: { role: "assistant", content: t }, done: false });
+                if (cut) { c.close(); return; } // the connection drops after one piece
+                if (gap) await Bun.sleep(gap);
+              }
+              send(last);
+              c.close();
+            } catch {}
+          },
+        }), { headers: { "content-type": "application/x-ndjson" } });
+      }
       if (url.pathname.endsWith("/chat/completions")) {
         // OpenRouter reports its cost as a number; Perplexity as an object with its search fee in it.
         const usage = { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok, prompt_tokens_details: { cached_tokens: cached }, ...(provider === "openrouter" ? { cost: 0.00042 } : {}), ...(provider === "perplexity" ? { search_context_size: "low", cost: { input_tokens_cost: 0.0001, output_tokens_cost: 0.0001, request_cost: 0.005, total_cost: 0.0052 } } : {}) };
