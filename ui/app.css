@@ -366,10 +366,11 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
 /* ---- local models (Settings) ----------------------------------------------- */
 .lmodels { display: grid; gap: 2px; }
 .lgroup { display: grid; gap: 4px; }
-.lrow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 5px 6px; border-radius: 8px; font-size: 13px; }
+.lrow, .srow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 5px 6px; border-radius: 8px; font-size: 13px; }
 .lrow:hover { background: var(--panel-2); }
-.lrow .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.lrow .facts { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; flex-wrap: wrap; justify-content: flex-end; }
+.srow { border: 1px solid var(--line); }
+.lrow .nm, .srow .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.srow .facts, .lrow .facts { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; flex-wrap: wrap; justify-content: flex-end; }
 .lconfirm { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; background: var(--warn-soft); border: 1px solid var(--warn); border-radius: 10px; padding: 8px 10px; font-size: 12.5px; }
 .lconfirm .grow { flex: 1 1 14rem; }
 .setting .row input[type="text"] { flex: 1; min-width: 180px; }
@@ -415,8 +416,8 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
   .settings .colL, .settings .colR { overflow: visible; flex: none; }
   .chat-item { min-height: 44px; }
   .mrow { min-height: 40px; }
-  .lrow { grid-template-columns: minmax(0, 1fr) auto; }
-  .lrow .facts { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }
+  .lrow, .srow { grid-template-columns: minmax(0, 1fr) auto; }
+  .lrow .facts, .srow .facts { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }
 }
 @media (min-width: 761px) and (max-width: 1180px) {
   .sv-grid { grid-template-columns: 1fr 1fr; }
