@@ -501,7 +501,9 @@
     const sum = h("p", { class: "plan-sum", text: `${t.out} of ${t.parts} parts go to Leanfare, keeping about ${tokShort(t.kept)} tokens out of your plan${t.used ? `; about ${tokShort(t.used)} stay in it` : ""}.${t.seconds !== null ? ` Leanfare's parts take ${secsShort(t.seconds)} done at once.` : ""} Pay per use: ${t.cost === null ? "not known" : money(t.cost)}.` });
     const lim = P.limits ? h("p", { class: "fine", text: `Your Claude plan now: ${[P.limits.five !== null ? `5 hours ${Math.round(P.limits.five)}% used` : "", P.limits.week !== null ? `week ${Math.round(P.limits.week)}% used` : ""].filter(Boolean).join(", ")}. Near a limit, more parts go to Leanfare.` }) : null;
     const how = h("p", { class: "fine", text: P.split.note ?? (P.split.model ? `Split by ${P.split.model.label}${typeof P.split.cost === "number" ? `, ${money(P.split.cost)}` : ""}.` : "Split by rules.") });
-    const canRun = t.out > 0 && !run?.running;
+    // Something of Leanfare's left to run: never run, or ended without an answer.
+    const left = !run || P.parts.some((p) => p.where !== "you" && ["waiting", "asks", "failed", "stopped", "blocked"].includes(st(p.n)?.status));
+    const canRun = t.out > 0 && !run?.running && left;
     const buttons = h("div", { class: "row" },
       // Pressing Run is the yes for the paid parts too (their cost is in the table); the monthly budget still holds.
       canRun ? runButton(run ? "Run the rest" : "Run Leanfare's parts", async (signal) => { S.planRun = await api("/api/plan/run", { body: { id: P.id, paid: true }, signal }); renderPlan(); pollPlan(); }, "btn primary small") : null,
