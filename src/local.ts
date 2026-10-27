@@ -67,15 +67,16 @@ export interface Installed { name: string; size: number; params: string | null; 
 // better than what is installed, and downloads it only on a yes. A model Leanfare cannot rate yet (no
 // twin in the catalogue) is not suggested: Auto would not pick it. One that only runs tightly is
 // suggested when none runs comfortably, and says so.
-export const SUGGESTED: { name: string; size: number }[] = [
-  { name: "gemma4:e2b-it-qat", size: 4.3e9 },
-  { name: "gemma4:e4b-it-qat", size: 6.1e9 },
-  { name: "gemma4:12b-it-qat", size: 7.2e9 },
-  { name: "gpt-oss:20b", size: 14e9 },
-  { name: "gemma4:26b-a4b-it-qat", size: 16e9 },
-  { name: "qwen3.8:27b", size: 18e9 },
-  { name: "gemma4:31b-it-qat", size: 19e9 },
-  { name: "gpt-oss:120b", size: 65e9 },
+// source: the maker's own copy on Hugging Face, whose licence scripts/licences.ts checks before a release.
+export const SUGGESTED: { name: string; size: number; source: string }[] = [
+  { name: "gemma4:e2b-it-qat", size: 4.3e9, source: "google/gemma-4-E2B-it" },
+  { name: "gemma4:e4b-it-qat", size: 6.1e9, source: "google/gemma-4-E4B-it" },
+  { name: "gemma4:12b-it-qat", size: 7.2e9, source: "google/gemma-4-12B-it" },
+  { name: "gpt-oss:20b", size: 14e9, source: "openai/gpt-oss-20b" },
+  { name: "gemma4:26b-a4b-it-qat", size: 16e9, source: "google/gemma-4-26B-A4B-it" },
+  { name: "qwen3.8:27b", size: 18e9, source: "Qwen/Qwen3.8-27B" },
+  { name: "gemma4:31b-it-qat", size: 19e9, source: "google/gemma-4-31B-it" },
+  { name: "gpt-oss:120b", size: 65e9, source: "openai/gpt-oss-120b" },
 ];
 export interface Suggestion { name: string; size: number; fit: Fit; rating: number; like: string; license: "Apache-2.0" }
 export function suggestLocal(): { suggestion: Suggestion | null; why: string } {

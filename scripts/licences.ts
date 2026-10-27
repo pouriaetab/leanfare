@@ -7,6 +7,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { SUGGESTED } from "../src/local";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const OPEN = new Set(["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "0BSD", "CC0-1.0", "Unlicense", "BlueOak-1.0.0"]);
@@ -71,11 +72,20 @@ if (!offline) {
   await check("models.dev (prices of providers you add)", "MIT", "https://raw.githubusercontent.com/sst/models.dev/dev/LICENSE", (t) => (/^MIT License/m.test(t) ? "MIT" : null));
   await check("gitleaks (key shapes for Paste any key)", "MIT", "https://raw.githubusercontent.com/gitleaks/gitleaks/master/LICENSE", (t) => (/^MIT License/m.test(t) ? "MIT" : null));
   await check("betterleaks (key shapes for Paste any key)", "MIT", "https://raw.githubusercontent.com/betterleaks/betterleaks/main/LICENSE", (t) => (/^MIT License/m.test(t) ? "MIT" : null));
+  // Not shipped, but Leanfare works with them: Ollama runs the local models, Codex runs plan parts on a ChatGPT plan.
+  await check("Ollama (runs the local models)", "MIT", "https://raw.githubusercontent.com/ollama/ollama/main/LICENSE", (t) => (/^MIT License/m.test(t) ? "MIT" : null));
+  await check("Codex CLI (runs plan parts on your ChatGPT plan)", "Apache-2.0", "https://raw.githubusercontent.com/openai/codex/main/LICENSE", (t) => (/Apache License\s+Version 2\.0/.test(t) ? "Apache-2.0" : null));
+  // The open models Leanfare suggests downloading (src/local.ts): each maker's own copy must be Apache 2.0.
+  for (const m of SUGGESTED) await check(`suggested model ${m.name} (${m.source})`, "apache-2.0", `https://huggingface.co/api/models/${m.source}`, (t) => {
+    const lic = JSON.parse(t).cardData?.license;
+    return lic === "apache-2.0" ? "apache-2.0" : null;
+  });
 }
 // Bun's notice travels with Leanfare (scripts/compile.ts puts it in every archive).
 const bunNotice = existsSync(join(root, "licenses/bun.md")) ? readFileSync(join(root, "licenses/bun.md"), "utf8") : "";
 add("Bun's notice for the one-file builds", "licenses/bun.md with the LGPL-2 terms and the JavaScriptCore source", bunNotice ? "present" : "missing", /LGPL/.test(bunNotice) && /oven-sh\/webkit/i.test(bunNotice));
 add("OpenRouter model list", "read at run time only", "fetched on your computer for your own costs; not shipped in releases", true);
+for (const m of SUGGESTED) if (!/^[\w.-]+\/[\w.-]+$/.test(m.source)) add(`suggested model ${m.name}`, "the maker's copy named, to check its licence", m.source || "none", false);
 
 const w = Math.max(...rows.map((r) => r.what.length));
 for (const r of rows) console.log(`${r.ok ? "ok  " : "FAIL"}  ${r.what.padEnd(w)}  needs ${r.needs}; found ${r.found}`);
