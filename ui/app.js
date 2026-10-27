@@ -209,6 +209,13 @@
     return t.set(text, kind, opts);
   }
   const failed = (e) => toast(String(e?.message ?? e), "error");
+  const secondsText = (x) => (x < 1.5 ? "about a second" : x < 90 ? `about ${Math.round(x)} s` : `about ${Math.round(x / 60)} min`);
+  // Speed at the same quality (Settings and the composer): the value, its Settings label, its composer label.
+  const SPEEDS = [["cheapest", "The cheapest, however long it takes", "Speed: cheapest"], [60, "The cheapest within about a minute", "Speed: within 1 min"],
+    [20, "The cheapest within about 20 seconds", "Speed: within 20 s"], [5, "The cheapest within about 5 seconds", "Speed: within 5 s"], ["fastest", "The fastest, whatever it costs", "Speed: fastest"]];
+  const speedValue = (v) => (/^\d+$/.test(v) ? Number(v) : v);
+  const speedOptions = (cur, col) => [...SPEEDS.map((x) => h("option", { value: String(x[0]), selected: x[0] === cur, text: x[col] })),
+    SPEEDS.some((x) => x[0] === cur) ? null : h("option", { value: String(cur), selected: true, text: col === 1 ? `The cheapest within ${cur} seconds` : `Speed: within ${cur} s` })];
 
   // The button that starts work becomes its Stop while it runs, and goes back to
   // its own label after. `work` receives an AbortSignal. While any
@@ -784,7 +791,7 @@
       const waitingText = meta.waiting ? meta.waiting : !m.content ? (meta.retryNote ? `Asking again: ${meta.retryNote.replace(/, so Leanfare .*$/, ".")}` : meta.slow ? "Taking longer than usual. You can stop it, or wait." : meta.model ? `Waiting for ${meta.model.label}…` : "Choosing a model…") : `Writing… ${num(Math.ceil(m.content.length / 4))} tokens`;
       line.prepend(h("span", { class: "spin" }));
       line.append(h("span", { text: waitingText }));
-      if (meta.estimate !== undefined && meta.estimate !== null) line.append(h("span", { text: `≈ ${money(meta.estimate)} (estimate)` }));
+      if (meta.estimate !== undefined && meta.estimate !== null) line.append(h("span", { text: `≈ ${money(meta.estimate)}${typeof meta.seconds === "number" ? `, ${secondsText(meta.seconds)}` : ""} (estimate)` }));
       box.append(line);
       return box;
     }
@@ -817,7 +824,8 @@
     rows.push(h("div", {}, h("b", { text: "Why: " }), meta.reason ?? ""));
     if (meta.task) rows.push(h("div", {}, h("b", { text: "Task guess: " }), `${S.st.tasks.find((t) => t[0] === meta.task)?.[1] ?? meta.task}, from ${meta.why}.`, meta.alt ? ` It could also have been ${S.st.tasks.find((t) => t[0] === meta.alt)?.[1]?.toLowerCase() ?? meta.alt}.` : ""));
     for (const n of meta.notes ?? []) rows.push(h("div", {}, h("b", { text: "Note: " }), n));
-    if (meta.alternatives?.length) rows.push(h("div", {}, h("b", { text: "Other choices: " }), meta.alternatives.map((a) => `${a.label} (rated ${a.rating ?? "—"}, ≈ ${money(a.estimate)})`).join(" · ")));
+    if (meta.model && sameQuality(meta)) rows.push(h("div", {}, h("b", { text: "Speed: " }), `${typeof meta.seconds === "number" ? `expected ${secondsText(meta.seconds)}${meta.secondsMeasured ? "" : " (a rough guess)"}. ` : ""}${sameQuality(meta)}`));
+    if (meta.alternatives?.length) rows.push(h("div", {}, h("b", { text: "Other choices: " }), meta.alternatives.map((a) => `${a.label} (rated ${a.rating ?? "—"}, ≈ ${money(a.estimate)}${typeof a.seconds === "number" ? `, ${secondsText(a.seconds)}` : ""})`).join(" · ")));
     if (meta.usual && meta.usualCost !== null && meta.usualCost !== undefined && meta.usual.id !== meta.model?.id) rows.push(h("div", {}, h("b", { text: "On your usual model: " }), `${meta.usual.label} would have cost ${money(meta.usualCost)} for the same tokens.`));
     if (meta.price) {
       const p = meta.price;
@@ -840,6 +848,12 @@
       try { S.st = await api("/api/settings", { body: { effort: effort.value } }); toast(effort.value === "auto" ? "Thinking models think as they do by default." : `Thinking effort: ${effort.value}.`, "done"); scheduleEstimate(); }
       catch (e) { failed(e); }
     });
+    const speed = h("select", { class: "speed", "aria-label": "Speed", title: "At the same quality, the cheapest, the cheapest within a time, or the fastest. Times come from how fast each model answered you before." },
+      ...speedOptions(S.st?.settings?.speed ?? "cheapest", 2));
+    speed.addEventListener("change", async () => {
+      try { S.st = await api("/api/settings", { body: { speed: speedValue(speed.value) } }); toast(`${speed.selectedOptions[0].textContent}.`, "done"); scheduleEstimate(); }
+      catch (e) { failed(e); }
+    });
     const est = h("div", { class: "est" });
     const send = h("button", { class: "btn primary send", type: "submit", text: "Send" });
     const back = h("button", { class: "btn small back", type: "button", text: "Chats", onclick: () => chatEl().classList.add("list-open") });
@@ -847,9 +861,9 @@
     const attach = h("button", { class: "attach", type: "button", "aria-label": "Attach files", title: "Attach images, PDFs or text files (or drop them here, or paste an image)", text: "+", onclick: () => picker.click() });
     const pending = h("div", { class: "pending" });
     const form = h("form", { class: "composer" },
-      h("div", { class: "box" }, pending, ta, h("div", { class: "bar" }, back, attach, picker, pick, effort, est, send)),
+      h("div", { class: "box" }, pending, ta, h("div", { class: "bar" }, back, attach, picker, pick, effort, speed, est, send)),
       h("div", { class: "hint", text: "Enter sends · Shift+Enter adds a line · Esc stops an answer · drop or paste files to attach" }));
-    composer = { form, ta, pick, est, send, pending, effort };
+    composer = { form, ta, pick, est, send, pending, effort, speed };
     ta.addEventListener("paste", (e) => {
       const files = [...(e.clipboardData?.files ?? [])];
       if (files.length) { e.preventDefault(); addFiles(files); }
@@ -939,11 +953,29 @@
     const thinkers = Object.values(st.models).flat().some((m) => ticked.has(m.id) && m.effort?.length);
     composer.effort.hidden = !thinkers;
     if (document.activeElement !== composer.effort) composer.effort.value = st.settings.effort ?? "auto";
+    composer.speed.hidden = S.model !== "auto"; // speed is how Auto picks; a model you chose is that model
+    if (document.activeElement !== composer.speed) { const cur = st.settings.speed ?? "cheapest"; composer.speed.replaceChildren(...speedOptions(cur, 2)); composer.speed.value = String(cur); }
     send.disabled = !ready() && !S.live;
     send.textContent = S.live ? "Stop" : "Send";
     send.classList.toggle("stop", !!S.live);
     if (!ready()) est.textContent = "To send, add a key in Settings or start Ollama, and tick at least one model.";
     else if (!composer.ta.value.trim() && !S.pending.length) est.textContent = S.model === "auto" ? `Auto picks ${st.modes[mode].blurb}.` : "";
+  }
+
+  // At the same quality: the cheapest and the fastest choice, said when either is not the pick.
+  const choiceText = (c) => `${c.label} ≈ ${money(c.estimate)}${typeof c.seconds === "number" ? `, ${secondsText(c.seconds)}` : ""}`;
+  function sameQuality(p) {
+    const c = p.choices;
+    if (!c || (c.cheapest.id === p.model?.id && (!c.fastest || c.fastest.id === p.model?.id))) return "";
+    return `At the same quality: cheapest ${choiceText(c.cheapest)}${c.fastest ? ` · fastest ${choiceText(c.fastest)}` : ""}.`;
+  }
+  // The one worth a glance in the composer: a faster one when Auto took the cheapest, a cheaper one when it took the fastest.
+  function otherChoice(p) {
+    const c = p.choices;
+    if (!c) return "";
+    if (c.fastest && c.fastest.id !== p.model.id && typeof c.fastest.seconds === "number" && typeof p.seconds === "number" && c.fastest.seconds < p.seconds * 0.7) return ` · faster: ${choiceText(c.fastest)}`;
+    if (c.cheapest.id !== p.model.id && c.cheapest.estimate !== null && p.estimate !== null && c.cheapest.estimate < p.estimate * 0.7) return ` · cheaper: ${choiceText(c.cheapest)}`;
+    return "";
   }
 
   let estTimer = null;
@@ -962,8 +994,8 @@
       if (r.error) { composer.est.textContent = r.error; return; }
       const p = r.plan;
       const nf = S.pending.length;
-      composer.est.textContent = `≈ ${money(r.estimate)} on ${p.model.label}${p.auto ? ` · ${S.st.tasks.find((t) => t[0] === p.task)?.[1] ?? p.task}` : ""}${p.effort ? ` · thinking ${p.effort}` : ""}${nf ? ` · ${nf} file${nf === 1 ? "" : "s"}` : ""} · estimate`;
-      composer.est.title = p.reason;
+      composer.est.textContent = `≈ ${money(r.estimate)}${typeof p.seconds === "number" ? ` · ${secondsText(p.seconds)}` : ""} on ${p.model.label}${p.auto ? ` · ${S.st.tasks.find((t) => t[0] === p.task)?.[1] ?? p.task}` : ""}${p.effort ? ` · thinking ${p.effort}` : ""}${nf ? ` · ${nf} file${nf === 1 ? "" : "s"}` : ""} · estimate${otherChoice(p)}`;
+      composer.est.title = [p.reason, sameQuality(p)].filter(Boolean).join("\n");
     } catch {}
   }
 
@@ -1886,6 +1918,15 @@
     } catch (e) { failed(e); }
   }
 
+  // Speed: at the same quality (the level above), the cheapest, the cheapest within a time, or the fastest.
+  // Times come from how fast each model answered you before (a rough guess until it has answered three times).
+  function speedSettingEl(s) {
+    const sel = h("select", { "aria-label": "Speed", onchange: (e) => patchSettings({ speed: speedValue(e.target.value) }, `Speed: ${e.target.selectedOptions[0].textContent.toLowerCase()}.`) },
+      ...speedOptions(s.speed ?? "cheapest", 1));
+    return h("div", { class: "setting" }, h("h3", { text: "Speed" }), sel,
+      h("p", { text: "At the same quality, a cheaper model can be slower, or faster: Leanfare times each model's answers and picks by your choice. Every estimate shows its time next to its price." }));
+  }
+
   // ---- Use Leanfare in your apps (Settings) -----------------------------------------------------------
   // Leanfare's MCP tools in the apps you already use: one press per app, undone the same way.
   const APP_STATUS = { added: "added", old: "added from another copy of Leanfare", "not added": "not added yet", broken: "its settings file is not valid, so Leanfare leaves it alone", "not installed": "not on this computer" };
@@ -1979,6 +2020,7 @@
       h("div", { class: "section-title", text: "Choices" }),
       h("div", { class: "setting" }, h("h3", { text: "How Auto picks" }), modeSeg,
         h("p", { text: `${st.modes[s.mode].label}: ${st.modes[s.mode].blurb}, for the task Leanfare guesses from your message (coding, math, writing, long prompts and more). Ratings come from the Arena leaderboard.` })),
+      speedSettingEl(s),
       h("div", { class: "setting" }, h("h3", { text: "Thinking effort" }),
         h("div", { class: "seg", role: "group", "aria-label": "Thinking effort" }, ...[["auto", "Model's default"], ["low", "Low"], ["medium", "Medium"], ["high", "High"]].map(([k, label]) =>
           h("button", { type: "button", "aria-pressed": String((s.effort ?? "auto") === k), text: label, onclick: () => patchSettings({ effort: k }, k === "auto" ? "Thinking models think as they do by default." : `Thinking effort: ${label.toLowerCase()}.`) }))),
