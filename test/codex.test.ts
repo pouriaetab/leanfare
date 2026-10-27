@@ -1,13 +1,15 @@
 // Your ChatGPT plan, through Codex: a plan's reading, drafting and working out parts run on Codex
 // (codex exec, read only) instead of pay per use, once the switch in Settings is on and Codex is
 // signed in; never when you work in Codex itself, nor near the ChatGPT plan's limits. A stand-in
-// codex command plays Codex: it answers --version, login status and exec, writes what it was given
-// to files, and can fail, give nothing, or take long.
+// codex command plays Codex: it answers --version, login status, mcp list and exec, writes what it was
+// given to files, and can fail, give nothing, or take long.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { codexFor, codexPrompt, codexState, forgetCodex, runCodex } from "../src/codex";
+import { codexBin, codexBusy, codexFor, codexPrompt, codexState, forgetCodex, nativeCodex, runCodex } from "../src/codex";
+import { addGrade } from "../src/grades";
+import { forgetShellEnv } from "../src/shellenv";
 import { commonFolder, forgetPlans } from "../src/planner";
 import { forgetLogs } from "../src/plans";
 import { saveSettings } from "../src/settings";
@@ -18,7 +20,11 @@ D="$FAKE_CODEX_DIR"
 echo "$PWD|$*" >> "$D/calls.log"
 case "$1" in
   --version) echo "codex-cli 0.159.0"; exit 0 ;;
-  login) if [ -f "$D/signed-out" ]; then echo "Not logged in" >&2; exit 1; fi; echo "Logged in using ChatGPT"; exit 0 ;;
+  login) if [ -f "$D/signed-out" ]; then echo "Not logged in" >&2; exit 1; fi
+         if [ -f "$D/apikey" ]; then echo "API key configured - sk-proj-***ABCDE" >&2; exit 0; fi
+         echo "Logged in using ChatGPT" >&2; exit 0 ;;
+  mcp) if [ -f "$D/mcp-fail" ]; then echo "error: unexpected argument '--json' found" >&2; exit 2; fi
+       if [ -f "$D/mcp.json" ]; then cat "$D/mcp.json"; else echo "[]"; fi; exit 0 ;;
   exec) ;;
   *) exit 2 ;;
 esac
@@ -51,7 +57,7 @@ afterAll(() => { process.env.LEANFARE_CODEX_BIN = was.bin; if (was.bin === undef
 beforeEach(async () => {
   forgetPlans(); forgetCodex(); forgetLogs();
   await reset({ ticked: ALL_TICKED });
-  for (const f of ["calls.log", "prompts.log", "signed-out", "slow", "fail", "empty"]) rmSync(join(dir, f), { force: true });
+  for (const f of ["calls.log", "prompts.log", "signed-out", "apikey", "slow", "fail", "empty", "mcp-fail", "mcp.json"]) rmSync(join(dir, f), { force: true });
   process.env.LEANFARE_CODEX_BIN = bin;
 });
 
@@ -238,5 +244,190 @@ describe("the pieces", () => {
     expect(t).toContain("Part 3: Map the code\n\nList the modules.");
     expect(t).toContain("The files it reads, from this folder: src/a.ts, src/b.ts");
     expect(codexPrompt({ n: 1, title: "x", task: "y", folder: null, files: [], effort: "low" })).toContain("No files were named for this part");
+  });
+});
+
+describe("only the ChatGPT plan, only while the switch is on", () => {
+  test("signed in with an API key: not the ChatGPT plan, so plans pay per use and say why", async () => {
+    knob("apikey");
+    await keys("openai");
+    saveSettings({ codexPlan: true });
+    expect(await codexState(true)).toMatchObject({ installed: true, signedIn: false, login: "other" });
+    expect((await codexFor("Claude Code")).why).toContain("signed in with an API key or another login, not with ChatGPT");
+    const r = await plan({ task: "Find the errors in these logs and list them", files: [{ name: "logs/app.log", size: 20_000 }] });
+    expect(r.json.parts.some((x: any) => x.where === "codex")).toBe(false);
+    expect(r.json.table).toContain("Codex took no part: Codex is signed in with an API key");
+  });
+  test("the switch turned off after the plan was made: the part does not run on Codex, and says why", async () => {
+    saveSettings({ codexPlan: true });
+    const r = await plan({ task: "Find the errors in these logs and list them", files: [{ name: "logs/app.log", size: 20_000 }] });
+    const part = r.json.parts.find((x: any) => x.where === "codex");
+    saveSettings({ codexPlan: false });
+    await ui(url, "/api/plan/run", { id: r.json.id, paid: false });
+    let v: any = null;
+    for (let i = 0; i < 300 && (!v || v.running); i++) { await Bun.sleep(20); v = (await ui(url, `/api/plan/run?id=${r.json.id}`)).json; }
+    expect(v.parts.find((x: any) => x.n === part.n)).toMatchObject({ status: "failed", error: "This part was to run on Codex, but Codex is off in Settings now. Make the plan again to place it elsewhere." });
+    expect(calls().some((c) => c.includes("|exec "))).toBe(false);
+  });
+});
+
+describe("Codex runs a part without what acts outside its sandbox", () => {
+  const read = () => runCodex({ n: 1, title: "Read", task: "Read it.", folder: null, files: [], effort: "low" }, new AbortController().signal);
+  test("its MCP servers (Leanfare's own among them) are turned off for the part, and so are ChatGPT's apps, plugins, hooks and the browser", async () => {
+    writeFileSync(join(dir, "mcp.json"), JSON.stringify([{ name: "leanfare", enabled: true }, { name: "docs", enabled: false }, { name: "git-hub_2", enabled: true }]));
+    await read();
+    const exec = calls().find((c) => c.includes("|exec "))!;
+    expect(exec).toContain("-c mcp_servers.leanfare.enabled=false");
+    expect(exec).toContain("-c mcp_servers.git-hub_2.enabled=false");
+    expect(exec).not.toContain("mcp_servers.docs"); // already off: a server Codex does not have would break its settings
+    for (const f of ["apps", "plugins", "hooks", "browser_use", "computer_use"]) expect(exec).toContain(`-c features.${f}=false`);
+    const list = calls().findIndex((c) => c.includes("|mcp list --json"));
+    expect(list).toBeGreaterThanOrEqual(0);
+    expect(list).toBeLessThan(calls().findIndex((c) => c.includes("|exec "))); // asked first, in the same folder
+  });
+  test("when Codex cannot say which MCP servers it would start, or one cannot be turned off, the part does not run", async () => {
+    knob("mcp-fail");
+    await expect(read()).rejects.toThrow("Leanfare could not see which MCP servers Codex would start");
+    rmSync(join(dir, "mcp-fail"));
+    writeFileSync(join(dir, "mcp.json"), JSON.stringify([{ name: "my.server", enabled: true }]));
+    await expect(read()).rejects.toThrow('Codex has an MCP server named "my.server"');
+    expect(calls().some((c) => c.includes("|exec "))).toBe(false);
+  });
+});
+
+describe("Stop, the time limit, and two at a time", () => {
+  test("Stop ends the commands Codex started too", async () => {
+    const spawner = join(dir, "codex-spawner");
+    writeFileSync(spawner, `#!/bin/sh\nD="$FAKE_CODEX_DIR"\ncase "$1" in mcp) echo "[]"; exit 0 ;; esac\nsh -c 'echo $$ > "'"$D"'/grandchild.pid"; exec sleep 30' &\ncat > /dev/null\nsleep 20\n`);
+    chmodSync(spawner, 0o755);
+    process.env.LEANFARE_CODEX_BIN = spawner;
+    rmSync(join(dir, "grandchild.pid"), { force: true });
+    const ac = new AbortController();
+    const run = runCodex({ n: 1, title: "Read", task: "Read it.", folder: null, files: [], effort: "low" }, ac.signal).catch((e) => e.message);
+    for (let i = 0; i < 250 && !existsSync(join(dir, "grandchild.pid")); i++) await Bun.sleep(20);
+    const t0 = Date.now();
+    ac.abort();
+    expect(await run).toBe("Stopped.");
+    expect(Date.now() - t0).toBeLessThan(5000); // not the 20 seconds it would sleep
+    const pid = Number(readFileSync(join(dir, "grandchild.pid"), "utf8"));
+    // Gone, or ended and waiting to be collected (a zombie: "Z"), as in a container whose first process collects none.
+    const running = () => { const st = Bun.spawnSync(["ps", "-o", "stat=", "-p", String(pid)]).stdout.toString().trim(); return st !== "" && !st.startsWith("Z"); };
+    for (let i = 0; i < 50 && running(); i++) await Bun.sleep(20);
+    const alive = running();
+    try { process.kill(pid, "SIGKILL"); } catch {}
+    expect(alive).toBe(false);
+  }, 15_000);
+  test("a run stopped while it waits for a slot leaves the line: never more than two at once", async () => {
+    knob("slow", "3");
+    const part = (n: number) => ({ n, title: `P${n}`, task: "Read it.", folder: null, files: [], effort: "low" as const });
+    const s1 = new AbortController(), s2 = new AbortController();
+    const a = runCodex(part(1), s1.signal).catch(() => null);
+    const b = runCodex(part(2), s1.signal).catch(() => null);
+    const until = async (ok: () => boolean) => { for (let i = 0; i < 300 && !ok(); i++) await Bun.sleep(10); };
+    await until(() => codexBusy().running === 2);
+    const c = runCodex(part(3), s2.signal).catch((e) => e.message);
+    const d = runCodex(part(4), s1.signal).catch(() => null);
+    await until(() => codexBusy().waiting === 2);
+    expect(codexBusy()).toEqual({ running: 2, waiting: 2 });
+    s2.abort();
+    expect(await c).toBe("Stopped.");
+    expect(codexBusy()).toEqual({ running: 2, waiting: 1 });
+    await Promise.all([a, b, d]);
+    expect(codexBusy()).toEqual({ running: 0, waiting: 0 });
+  }, 15_000);
+  test("a run that fails before Codex starts gives its slot back", async () => {
+    const was = process.env.TMPDIR;
+    process.env.TMPDIR = join(dir, "gone"); // a temp folder that is not there (or a full disk)
+    try {
+      for (let i = 0; i < 3; i++) await expect(runCodex({ n: i, title: "P", task: "Read it.", folder: null, files: [], effort: "low" }, new AbortController().signal)).rejects.toThrow();
+    } finally { if (was === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = was; }
+    expect(codexBusy()).toEqual({ running: 0, waiting: 0 });
+  });
+});
+
+describe("where Codex is placed", () => {
+  test("a part that waits for one of yours is not put on Codex: your app hands it over with delegate, which cannot run Codex", async () => {
+    await keys("openai");
+    saveSettings({ codexPlan: true });
+    const r = await plan({ task: "Refactor the router module and add tests", files: [{ name: "src/router.ts", size: 20_000 }] });
+    const mine = new Set(r.json.parts.filter((p: any) => p.where === "you").map((p: any) => p.n));
+    expect(mine.size).toBeGreaterThan(0);
+    const waiting = r.json.parts.filter((p: any) => p.where !== "you" && p.needs.some((n: number) => mine.has(n)));
+    expect(waiting.length).toBeGreaterThan(0);
+    expect(waiting.some((p: any) => p.where === "codex")).toBe(false);
+    expect(r.json.next).not.toMatch(/once yours are done, run (it|them) with delegate[^.]*\bcodex/i);
+  });
+  test("Codex moved down for a kind still takes a part no model can take, and leaves a part another can take", async () => {
+    saveSettings({ codexPlan: true });
+    for (let i = 0; i < 3; i++) addGrade({ model: "codex", kind: "reason", effort: "medium", verdict: "wrong", source: "manager" });
+    const none = await plan({ task: "Find the errors in these logs and list them", files: [{ name: "logs/app.log", size: 20_000 }] }); // no keys: no model of Leanfare's is ready
+    const reasoning = none.json.parts.filter((p: any) => p.kind === "reason" && p.where !== "you");
+    expect(reasoning.length).toBeGreaterThan(0);
+    expect(reasoning.every((p: any) => p.where === "codex")).toBe(true);
+    await keys("openai");
+    const some = await plan({ task: "Find the errors in these logs and list them", files: [{ name: "logs/app.log", size: 20_000 }] });
+    expect(some.json.parts.filter((p: any) => p.kind === "reason" && p.where !== "you").every((p: any) => p.where === "paid")).toBe(true);
+  });
+});
+
+describe("finding Codex's own program", () => {
+  test("npm's, Bun's and pnpm's codex is a Node script: Leanfare runs the program it starts (its package for this computer)", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "leanfare-codex-npm-")));
+    try {
+      // npm on a Mac: bin/codex links to lib/node_modules/@openai/codex/bin/codex.js; the program is in the
+      // package for this computer, nested in Codex's own node_modules or next to it.
+      const pkg = join(root, "lib", "node_modules", "@openai", "codex");
+      mkdirSync(join(pkg, "bin"), { recursive: true });
+      writeFileSync(join(pkg, "bin", "codex.js"), "#!/usr/bin/env node\n");
+      mkdirSync(join(root, "bin"));
+      symlinkSync(join(pkg, "bin", "codex.js"), join(root, "bin", "codex"));
+      const nested = join(pkg, "node_modules", "@openai", "codex-darwin-arm64", "vendor", "aarch64-apple-darwin", "bin");
+      mkdirSync(nested, { recursive: true });
+      writeFileSync(join(nested, "codex"), "");
+      expect(nativeCodex(join(root, "bin", "codex"), "darwin", "arm64")).toBe(join(nested, "codex"));
+      const hoisted = join(root, "lib", "node_modules", "@openai", "codex-darwin-x64", "vendor", "x86_64-apple-darwin", "bin");
+      mkdirSync(hoisted, { recursive: true });
+      writeFileSync(join(hoisted, "codex"), "");
+      expect(nativeCodex(join(root, "bin", "codex"), "darwin", "x64")).toBe(join(hoisted, "codex"));
+      // npm on Windows: codex.cmd in npm's folder, the program in node_modules beside it.
+      const win = join(root, "npm");
+      const exe = join(win, "node_modules", "@openai", "codex", "node_modules", "@openai", "codex-win32-x64", "vendor", "x86_64-pc-windows-msvc", "bin");
+      mkdirSync(exe, { recursive: true });
+      writeFileSync(join(exe, "codex.exe"), "");
+      writeFileSync(join(win, "codex.cmd"), "@echo off\r\n");
+      expect(nativeCodex(join(win, "codex.cmd"), "win32", "x64")).toBe(join(exe, "codex.exe"));
+      // A program already (Homebrew's, or a download): as it is.
+      writeFileSync(join(root, "codex-native"), "");
+      expect(nativeCodex(join(root, "codex-native"), "darwin", "arm64")).toBe(join(root, "codex-native"));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  test("on Windows, the codex.cmd npm makes is found", async () => {
+    const npmDir = join(dir, "npm-global");
+    mkdirSync(npmDir, { recursive: true });
+    writeFileSync(join(npmDir, "codex.cmd"), "@echo off\r\n");
+    delete process.env.LEANFARE_CODEX_BIN;
+    const real = process.platform, path = process.env.PATH;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    process.env.PATH = npmDir;
+    let found: string | null = null;
+    try { found = await codexBin(); } finally { Object.defineProperty(process, "platform", { value: real }); process.env.PATH = path; }
+    expect(found).toBe(join(npmDir, "codex.cmd"));
+  });
+  test("found through the login shell's PATH (the Mac app starts without it), Codex runs with that PATH too", async () => {
+    const shellBin = join(dir, "shellbin");
+    mkdirSync(shellBin, { recursive: true });
+    writeFileSync(join(shellBin, "fakenode"), "#!/bin/sh\nexec /bin/sh \"$@\"\n"); chmodSync(join(shellBin, "fakenode"), 0o755);
+    writeFileSync(join(shellBin, "codex"), FAKE.replace("#!/bin/sh", "#!/usr/bin/env fakenode")); chmodSync(join(shellBin, "codex"), 0o755);
+    const shell = join(dir, "fakeshell");
+    writeFileSync(shell, `#!/bin/sh\nPATH="${shellBin}:$PATH"; export PATH\nexec /bin/sh -c "$2"\n`); chmodSync(shell, 0o755);
+    const was = { path: process.env.PATH, shell: process.env.SHELL };
+    delete process.env.LEANFARE_CODEX_BIN;
+    process.env.LEANFARE_SHELL_ENV = "on";
+    process.env.SHELL = shell;
+    process.env.PATH = "/usr/bin:/bin"; // what an app started from the Dock gets
+    forgetShellEnv(); forgetCodex();
+    let st: any;
+    try { st = await codexState(true); } finally { process.env.PATH = was.path; process.env.LEANFARE_SHELL_ENV = "off"; process.env.SHELL = was.shell; forgetShellEnv(); }
+    expect(st).toMatchObject({ installed: true, version: "0.159.0", signedIn: true, login: "chatgpt" });
   });
 });
