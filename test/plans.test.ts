@@ -4,7 +4,8 @@
 import { mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { claudeEntry, forgetLogs, limitsOf, planView, plansBrief, pricedAs, plansView, readCodex } from "../src/plans";
+import { claudeEntry, forgetLogs, limitsOf, planView, plansBrief, pricedAs, plansView, readCodex, windowsNow } from "../src/plans";
+import { saveSnap } from "../src/statusline";
 import { settings, validatePatch } from "../src/settings";
 import { boot, outgoing, reset, ui } from "./app";
 
@@ -15,6 +16,7 @@ const codexRoot = () => process.env.CODEX_HOME!;
 beforeEach(async () => {
   rmSync(claudeRoot(), { recursive: true, force: true });
   rmSync(codexRoot(), { recursive: true, force: true });
+  for (const f of ["limits-last.json", "limits.jsonl"]) rmSync(join(process.env.LEANFARE_DATA_DIR!, f), { force: true }); // no status line windows from another test
   forgetLogs();
   await reset();
 });
@@ -284,7 +286,11 @@ describe("the page's and the menu's numbers", () => {
     expect(r.json.providers.map((p: any) => p.provider)).toEqual(["claude", "chatgpt"]);
     expect(r.json.providers[0]).toMatchObject({ found: true, label: "Claude", logs: "Claude Code" });
     expect(r.json.providers[1]).toMatchObject({ found: false, label: "ChatGPT", logs: "Codex" });
-    expect(r.json.note).toContain("estimate");
+    expect(r.json.note).toContain("never the words");
+    expect(r.json.note).not.toContain("estimate"); // no dollars are shown, so nothing to call an estimate
+    await ui(url, "/api/settings", { showValue: true });
+    expect((await ui(url, "/api/plans")).json.note).toContain("an estimate at the providers' list prices");
+    await ui(url, "/api/settings", { showValue: false });
     const other = await ui(url, "/api/plans?month=2026-09");
     expect(other.json.month).toBe("2026-09");
     expect(other.json.providers[0].tokens).toBe(0);
@@ -304,14 +310,37 @@ describe("the page's and the menu's numbers", () => {
     await ui(url, "/api/settings", { plans: { claude: { name: "Claude Pro", price: 6 } } });
     expect(plansBrief()).toEqual({}); // the first ask never waits for the files
     await plansView(MONTH); // (the background reading, finished)
-    expect(plansBrief()).toEqual({ claude: { plan: "Claude Pro", price: 6, value: 3, ratio: 0.5 } });
-    const s = (await ui(url, "/api/summary")).json;
+    // A plan is told in its tokens and limits; no status line yet, so no windows.
+    expect(plansBrief()).toEqual({ claude: { plan: "Claude Pro", price: 6, tokens: 1_000_000, five: null, week: null, value: null, ratio: null } });
+    let s = (await ui(url, "/api/summary")).json;
+    expect(s.plans.claude).toMatchObject({ plan: "Claude Pro", tokens: 1_000_000, value: null });
+    // Settings can show the value at API prices too
+    await ui(url, "/api/settings", { showValue: true });
+    expect(plansBrief().claude).toMatchObject({ value: 3, ratio: 0.5 });
+    s = (await ui(url, "/api/summary")).json;
     expect(s.plans.claude).toMatchObject({ plan: "Claude Pro", value: 3 });
     // changing the price shows the new one at once, never the old ratio
     await ui(url, "/api/settings", { plans: { claude: { name: "Claude Pro", price: 3 } } });
-    expect(plansBrief().claude).toEqual({ plan: "Claude Pro", price: 3, value: 3, ratio: 1 });
+    expect(plansBrief().claude).toEqual({ plan: "Claude Pro", price: 3, tokens: 1_000_000, five: null, week: null, value: 3, ratio: 1 });
+    await ui(url, "/api/settings", { showValue: false });
     await ui(url, "/api/settings", { plans: { claude: null } });
     expect(plansBrief()).toEqual({}); // a removed plan leaves the menu
+  });
+
+  test("the menu's numbers carry the plan's two windows: Claude's from the status line, ChatGPT's from Codex", async () => {
+    const T = (iso: string) => Date.parse(iso);
+    for (const f of ["limits-last.json", "limits.jsonl"]) rmSync(join(process.env.LEANFARE_DATA_DIR!, f), { force: true });
+    await ui(url, "/api/settings", { plans: { claude: { name: "Claude Max 20x", price: 200 }, chatgpt: { name: "ChatGPT Plus", price: 20 } } });
+    // No log files, but the status line saw both windows: the menu shows them (the five hour one has reset since).
+    saveSnap({ at: T("2026-10-21T09:00:00Z"), five: { used: 48.4, resets: T("2026-10-21T11:00:00Z") }, week: { used: 21, resets: T("2026-10-27T12:00:00Z") } });
+    expect(windowsNow("claude", null)).toEqual({ five: null, week: 21 });
+    expect(plansBrief().claude).toEqual({ plan: "Claude Max 20x", price: 200, tokens: 0, five: null, week: 21, value: null, ratio: null });
+    // ChatGPT: the windows of Codex's last message, once its files were read.
+    await plansView(MONTH); // the readings the menu started in the background, finished
+    codexFile("a", [ctx("gpt-5"), { ...tc("2026-10-21T10:00:00Z", [1000, 0, 10]), payload: { ...tc("2026-10-21T10:00:00Z", [1000, 0, 10]).payload, rate_limits: { primary: { used_percent: 30, window_minutes: 300, resets_at: T("2026-10-21T14:00:00Z") / 1000 }, secondary: { used_percent: 5, window_minutes: 10080, resets_at: T("2026-10-25T00:00:00Z") / 1000 }, plan_type: "plus" } } }]);
+    forgetLogs();
+    await plansView(MONTH, true);
+    expect(plansBrief().chatgpt).toMatchObject({ plan: "ChatGPT Plus", tokens: 1010, five: 30, week: 5, value: null });
   });
 });
 

@@ -36,6 +36,7 @@ export interface Settings {
   custom: CustomProvider[]; // providers you added: a name and an address that speaks OpenAI's format (providers.ts)
   speed: SpeedChoice; // at the same quality: the cheapest, the fastest, or the cheapest expected within N seconds (speed.ts)
   updateCheck: boolean; // ask GitHub once a day whether a newer Leanfare is out (update.ts)
+  showValue: boolean; // Savings: also show what subscription use would cost per use (at API prices); off: tokens and limits only
 }
 
 export const DEFAULTS: Settings = {
@@ -56,6 +57,7 @@ export const DEFAULTS: Settings = {
   custom: [],
   speed: "cheapest",
   updateCheck: true,
+  showValue: false,
 };
 
 export const MAX_INSTRUCTIONS = 20_000; // characters
@@ -114,6 +116,7 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
   if ("atLimit" in p) { if (p.atLimit !== "cheapest" && p.atLimit !== "stop") return { error: "atLimit must be cheapest or stop" }; out.atLimit = p.atLimit; }
   if ("history" in p) out.history = !!p.history;
   if ("updateCheck" in p) out.updateCheck = !!p.updateCheck;
+  if ("showValue" in p) out.showValue = !!p.showValue;
   if ("successors" in p) {
     if (typeof p.successors !== "object" || p.successors === null) return { error: "successors must be an object" };
     out.successors = Object.fromEntries(Object.entries(p.successors).filter(([a, b]) => typeof a === "string" && typeof b === "string")) as Record<string, string>;
