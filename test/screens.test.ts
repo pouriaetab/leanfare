@@ -1022,7 +1022,7 @@ describe("Speed: in Settings and beside the message box", () => {
     type(doc.querySelector("textarea"), "What is the capital of Australia?");
     const est = () => doc.querySelector(".composer .est").textContent;
     await waitFor(() => /about (a second|\d+ s)/.test(est()));
-    expect(est()).toMatch(/^≈ \$[\d.]+ · about (a second|\d+ s) on /);
+    expect(est()).toMatch(/^≈ \$[\d.]+ · about (a second|\d+ s) \(a guess\) on /); // no answers here yet: a rough guess, said so
     box().value = "20";
     box().dispatchEvent(new win.Event("change", { bubbles: true }));
     await waitFor(() => toasts(doc).includes("Speed: within 20 s."));
@@ -1051,7 +1051,7 @@ describe("Speed: in Settings and beside the message box", () => {
     await waitFor(() => !![...doc.querySelectorAll("button")].find((b: any) => b.textContent === "Why this model"));
     [...doc.querySelectorAll("button")].find((b: any) => b.textContent === "Why this model").click();
     await waitFor(() => doc.body.textContent.includes("At the same quality"));
-    expect(doc.body.textContent).toContain("Speed: expected about 29 s. At the same quality: cheapest Grok 4.20 Beta ≈ $");
+    expect(doc.body.textContent).toContain("Speed: expected about 29 s, from this model's answers here. At the same quality: cheapest Grok 4.20 Beta ≈ $");
     expect(doc.body.textContent).toMatch(/fastest Gemini 3\.8 Flash ≈ \$[\d.]+, about a second\./);
     expect(bad(doc)).toBe(false);
   }, 20000);

@@ -98,9 +98,10 @@ async function start() {
   const providers = await import("./providers");
   providers.loadCustomProviders(); // the providers you added, before their keys are read
   await loadKeys({ shell: false });
-  // Keys your login shell exports (for the Mac app, which does not start from a terminal) and the
-  // model apps running on this computer: looked for in the background, so the start never waits.
-  loadKeys().catch(() => {});
+  // Keys your login shell exports, only for a Leanfare that did not start from a terminal (the Mac
+  // app, or an MCP client starting it), which does not get them; and the model apps running on this
+  // computer. Both in the background, so the start never waits.
+  if (!process.stdin.isTTY) loadKeys().catch(() => {});
   providers.refreshLocalServers().catch(() => {});
   const token = crypto.getRandomValues(new Uint8Array(24)).reduce((s, b) => s + b.toString(16).padStart(2, "0"), "");
   try {
@@ -255,7 +256,7 @@ async function trial() {
     const before = (await call("/api/trial")).j;
     if (!before.running) {
       const e = before.estimate;
-      if (!e?.models?.low) { console.error("No model is ready yet. Open Leanfare, add a key and tick a model, then run the trial again."); process.exit(1); }
+      if (!e?.models?.low) { console.error(e?.error ?? "No model is ready yet. Open Leanfare, add a key and tick a model, then run the trial again."); process.exit(1); }
       say(`Leanfare delegate trial: ${e.questions} questions with known answers about files Leanfare makes up, each asked at low, medium and high effort (${e.answers} answers).`);
       say(`${e.estimate === 0 ? "$0 on the models you ticked now (free)" : e.estimate === null ? "On the models you ticked now" : `About ${usd(e.estimate)} on the models you ticked now`}${typeof e.seconds === "number" ? `, about ${Math.max(1, Math.round(e.seconds / 60))} min` : ""}. Nothing of yours is sent. Ctrl+C stops it.\n`);
       await call("/api/trial/start", { method: "POST", json: {} });

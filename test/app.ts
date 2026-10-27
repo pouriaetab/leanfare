@@ -51,6 +51,7 @@ export async function reset(patch: Partial<Settings> = {}) {
   fake.seen.length = 0;
   fake.hooks.answer = null;
   fake.hooks.fail = null;
+  fake.hooks.slow = null;
   Object.assign(fake.oauth, { expireNext: false, deny: false, failExchange: 0, failMessage: "fake failure", badKey: false, credits: true });
   fake.oauth.codes.clear();
   if (Object.keys(patch).length) saveSettings(patch);
