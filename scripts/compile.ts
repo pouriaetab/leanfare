@@ -1,7 +1,8 @@
 // Leanfare as one file per kind of computer: bun build --compile, with the screens and the price
 // list inside (src/assets.ts). Each file is the whole app (Bun itself is inside, so about 60 to
-// 100 MB); nothing else is needed to run it. Then each goes in an archive with the README and the
-// licence, and SHA256SUMS lists the archives' checksums (install.sh checks them).
+// 100 MB); nothing else is needed to run it. Then each goes in an archive with the README, the
+// licence and Bun's licence (licenses/bun.md), and SHA256SUMS lists the archives' checksums
+// (install.sh checks them).
 //
 //   bun scripts/compile.ts              every target, into dist/
 //   bun scripts/compile.ts linux-x64    only the ones named
@@ -12,8 +13,9 @@ import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const DIST = join(ROOT, "dist");
 export const TARGETS: Record<string, string> = {
   "darwin-arm64": "bun-darwin-arm64",
@@ -44,10 +46,11 @@ for (const name of targets) {
   if (!windows) chmodSync(bin, 0o755);
   copyFileSync(join(ROOT, "README.md"), join(stage, "README.md"));
   copyFileSync(join(ROOT, "LICENSE"), join(stage, "LICENSE"));
+  copyFileSync(join(ROOT, "licenses", "bun.md"), join(stage, "LICENSE-bun.md")); // Bun is inside the program
   const archive = join(DIST, `leanfare-${name}.${windows ? "zip" : "tar.gz"}`);
   rmSync(archive, { force: true });
-  if (windows) run(["zip", "-q", "-X", archive, exe, "README.md", "LICENSE"], stage);
-  else run(["tar", "-czf", archive, "-C", stage, exe, "README.md", "LICENSE"]);
+  if (windows) run(["zip", "-q", "-X", archive, exe, "README.md", "LICENSE", "LICENSE-bun.md"], stage);
+  else run(["tar", "-czf", archive, "-C", stage, exe, "README.md", "LICENSE", "LICENSE-bun.md"]);
   console.log(`${archive.slice(ROOT.length)}: ${mb(archive)} (the program itself ${mb(bin)})`);
   rmSync(stage, { recursive: true, force: true });
 }
