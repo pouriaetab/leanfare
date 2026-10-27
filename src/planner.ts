@@ -22,6 +22,8 @@
 //
 // No words are kept: the ledger has the split's model, tokens and cost, as for any answer.
 import { homedir } from "node:os";
+import { dirname, relative, sep } from "node:path";
+import { CODEX_ID, CODEX_LABEL, codexFor, runCodex } from "./codex";
 import { DEFAULT_MAX_OUT, TIER, runDelegate, taskFor, type Effort, type Kind } from "./delegate";
 import { allModels, type Model } from "./data";
 import { chargeOf, plan as route, runChat, usableModels } from "./engine";
@@ -35,7 +37,7 @@ import { now, randomId, secondsText } from "./util";
 
 export type PartKind = "read" | "write" | "reason" | "code" | "search" | "act";
 export type Size = "none" | "small" | "medium" | "large";
-export type Where = "you" | "local" | "free" | "paid";
+export type Where = "you" | "local" | "free" | "paid" | "codex"; // codex: Leanfare runs it through Codex, on your ChatGPT plan (codex.ts)
 export const PART_KINDS: PartKind[] = ["read", "write", "reason", "code", "search", "act"];
 const SIZES: Size[] = ["none", "small", "medium", "large"];
 const EFFORTS: Effort[] = ["low", "medium", "high"];
@@ -58,7 +60,7 @@ export interface Part {
   task: string; // what to hand over, for a model that has not seen the conversation
   files: string[]; // the files it reads, as named
   size: Size;
-  where: Where; // you: the app you work in; local, free, paid: Leanfare, on that kind of model
+  where: Where; // you: the app you work in; local, free, paid: Leanfare, on that kind of model; codex: Leanfare, through Codex
   model: { id: string; label: string } | null; // Leanfare's pick; null when it stays with you
   use: { id: string; label: string; alias: string | null } | null; // for a part that stays with you: the model to pick for it in your app (alias: Claude Code's name for it)
   seconds: number | null; // about how long Leanfare's model takes; null when it stays with you
@@ -76,6 +78,7 @@ export interface PlanResult {
   split: { by: "model" | "rules"; model: { id: string; label: string } | null; cost: number | null; note: string | null };
   limits: { five: number | null; week: number | null } | null; // the person's plan windows, when known (percent used)
   local?: { name: string; size: number; like: string; rating: number; fit: string } | null; // a local model to download that would run reading and drafting free
+  codex?: string | null; // why Codex took no part, when it is turned on in Settings and could not
   table: string; // the table as markdown
   next: string; // what to do now
 }
@@ -267,9 +270,14 @@ export function modelInYourApp(part: { kind: PartKind; effort: Effort; task: str
   return { id: p.model.id, label: p.model.label, alias };
 }
 
-async function place(part: Split, files: PlanFile[], near: string | null, manager: string, signal: AbortSignal): Promise<Part> {
+// A part on Codex: its time is a rough guess (Codex is a whole agent: half a minute to start, then it reads).
+const onCodex = (part: Split, r: { tokens: number }, why: string): Part => ({ ...part, where: "codex", model: { id: CODEX_ID, label: CODEX_LABEL }, use: null, seconds: Math.round(30 + r.tokens / 400), tokens: r.tokens + OUT_LEANFARE, cost: 0, why });
+
+async function place(part: Split, files: PlanFile[], near: string | null, manager: string, signal: AbortSignal, codex = false): Promise<Part> {
   const r = reading(part, files);
   const stay = (why: string): Part => ({ ...part, where: "you", model: null, use: modelInYourApp(part, manager), seconds: null, tokens: r.tokens + OUT_YOU, cost: null, why });
+  // Reading, drafting and working out can run on your ChatGPT plan through Codex, before anything paid.
+  const viaCodex = codex && !!DELEGATE_KIND[part.kind];
   if (part.kind === "code") return stay(`it changes the project, which only ${manager} can do`);
   if (part.kind === "act") return stay(`it needs ${manager}'s own tools`);
   const big = (part.effort === "high" && (part.kind === "reason" || part.kind === "write"));
@@ -284,6 +292,7 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
     const p = await route({ source: "chat", asked: `auto-${TIER[part.effort]}`, messages, tokens: r.tokens, maxOut: null, signal, dry: true, effort: part.effort,
       guess: part.kind === "search" ? { task: "overall", why: "a web search", alt: null } : taskFor(kind, messages), only, onlyWhy: `none of the models you ticked can take this much text (about ${tokText(need)} tokens with the answer)`, ledgerSource: "delegate" });
     const where = whereOf(p.model, p.estimate);
+    if (where === "paid" && viaCodex) return onCodex(part, r, `your ChatGPT plan through Codex, not pay per use${near && big ? ` (your plan is near its limit: ${near})` : ""}; Codex reads ${r.named ? "the files itself" : "what the task says"}, read only`);
     const some = r.taken < r.named ? `; Leanfare hands over ${r.taken} of its ${r.named} files (one hand off takes at most ${DELEGATE_LIMITS.count} files, ${DELEGATE_LIMITS.total / 1048576} MB)`
       : part.kind === "read" && !r.named ? "; no files named, so it works from what the model knows: name the files or folder it reads" : "";
     const why = (near && big ? `your plan is near its limit (${near}), so this goes out too` : where === "local" ? "reading and drafting go out: on this computer, $0"
@@ -291,6 +300,7 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
     return { ...part, where, model: { id: p.model.id, label: p.model.label }, use: null, seconds: p.seconds, tokens: r.tokens + OUT_LEANFARE, cost: p.estimate, why };
   } catch (e: any) {
     if (e?.status === 499) throw e;
+    if (viaCodex) return onCodex(part, r, "your ChatGPT plan through Codex: no model you ticked in Leanfare could take it");
     return stay(e instanceof UserError ? `Leanfare has no model for it now (${e.message.replace(/\.$/, "").slice(0, 160)})` : "Leanfare has no model for it now");
   }
 }
@@ -330,7 +340,7 @@ export const chainSeconds = (parts: Part[]) => chains(parts).now;
 
 export const tokText = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(Math.round(n)));
 const usd = (v: number | null) => (v === null ? "not known" : v === 0 ? "$0" : v < 0.01 ? "under $0.01" : `$${v.toFixed(2)}`);
-const RUNS: Record<Where, string> = { you: "you", local: "Leanfare, on this computer", free: "Leanfare, free model", paid: "Leanfare, pay per use" };
+const RUNS: Record<Where, string> = { you: "you", local: "Leanfare, on this computer", free: "Leanfare, free model", paid: "Leanfare, pay per use", codex: "Leanfare, through Codex" };
 const cell = (s: string) => s.replace(/\|/g, "/").replace(/\n/g, " ");
 
 // How long Leanfare's parts take: the ones that start now, and the ones after yours (from when yours are done).
@@ -344,7 +354,7 @@ export function tableOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
   const rows = r.parts.map((p) => [
     String(p.n), p.title, `${LABEL_KIND[p.kind]}, ${p.effort}`, p.where === "you" ? r.manager === "you" ? "you" : `you (${r.manager})` : RUNS[p.where],
     p.model?.label ?? p.use?.label ?? "your model", p.seconds === null ? "" : secondsText(p.seconds).replace(/^about /, "~"),
-    p.where === "you" ? `~${tokText(p.tokens)} of your plan` : `~${tokText(p.tokens)} kept`, p.where === "you" ? "in your plan" : usd(p.cost),
+    p.where === "you" ? `~${tokText(p.tokens)} of your plan` : `~${tokText(p.tokens)} kept`, p.where === "you" ? "in your plan" : p.where === "codex" ? "in your ChatGPT plan" : usd(p.cost),
     p.needs.length ? `after ${p.needs.join(", ")}` : "now",
   ].map(cell).join(" | "));
   const t = r.totals;
@@ -353,7 +363,7 @@ export function tableOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
     "|---|---|---|---|---|---|---|---|---|",
     ...rows.map((x) => `| ${x} |`),
     "",
-    `${t.out} of ${t.parts} parts go to Leanfare, keeping about ${tokText(t.kept)} tokens out of your plan${t.used ? `; about ${tokText(t.used)} stay in it` : ""}. ${timeLine(t)}Pay per use: ${usd(t.cost)}.${t.out ? "" : ` ${nothingOut(r.parts)}`}${r.local ? ` ${localLine(r.local)}` : ""}`,
+    `${t.out} of ${t.parts} parts go to Leanfare, keeping about ${tokText(t.kept)} tokens out of your plan${t.used ? `; about ${tokText(t.used)} stay in it` : ""}. ${timeLine(t)}Pay per use: ${usd(t.cost)}.${t.out ? "" : ` ${nothingOut(r.parts)}`}${r.codex ? ` Codex took no part: ${r.codex}.` : ""}${r.local ? ` ${localLine(r.local)}` : ""}`,
   ].join("\n");
 }
 
@@ -370,11 +380,13 @@ export function nothingOut(parts: Pick<Part, "kind" | "where" | "files">[]): str
 }
 
 function nextOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
-  const out = r.parts.filter((p) => p.where !== "you");
+  const viaCodex = r.parts.filter((p) => p.where === "codex");
+  const out = r.parts.filter((p) => p.where !== "you" && p.where !== "codex"); // what delegate can run
   const mine = r.parts.filter((p) => p.where === "you");
   const now = out.filter((p) => !p.needs.length).map((p) => p.n);
   const list = (ns: number[]) => (ns.length === 1 ? `part ${ns[0]}` : `parts ${ns.slice(0, -1).join(", ")} and ${ns.at(-1)}`);
   const s: string[] = [];
+  if (viaCodex.length) s.push(`${list(viaCodex.map((p) => p.n)).replace(/^p/, "P")} run${viaCodex.length === 1 ? "s" : ""} on Codex with your ChatGPT plan: start ${viaCodex.length === 1 ? "it" : "them"} with plan_run (delegate cannot run ${viaCodex.length === 1 ? "it" : "them"}).`);
   if (now.length) s.push(`Run ${list(now)} now with delegate${now.length > 1 ? ", all in the same turn (they do not wait for each other)" : ""}: each part's task, kind and effort as in the table, with its files (at most ${DELEGATE_LIMITS.count} to one delegate call).`);
   const yoursFirst = afterYours(r.parts);
   const later = out.filter((p) => p.needs.length && !yoursFirst.has(p.n));
@@ -454,10 +466,11 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
   parts = expand(parts ?? rulesSplit(input.task, shown), shown).map((p) => ({ ...p, files: byRelevance(p.files, `${input.task} ${p.task}`) }));
 
   const limits = await limitsFor(manager);
+  const codex = await codexFor(manager);
   const known = limits.five !== null || limits.week !== null;
   const nearText = [limits.five !== null && limits.five >= NEAR ? `the 5 hours at ${Math.round(limits.five)}%` : "", limits.week !== null && limits.week >= NEAR ? `the week at ${Math.round(limits.week)}%` : ""].filter(Boolean).join(", ") || null;
   const placed: Part[] = [];
-  for (const p of parts) placed.push(await place(p, input.files, nearText, manager, input.signal));
+  for (const p of parts) placed.push(await place(p, input.files, nearText, manager, input.signal, codex.ok));
   const out = placed.filter((p) => p.where !== "you");
   const costs = out.map((p) => p.cost);
   const time = chains(placed);
@@ -472,7 +485,7 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
   const wantsLocal = placed.some((p) => DELEGATE_KIND[p.kind] && (p.where === "paid" || (p.where === "you" && p.why.startsWith("Leanfare has no model"))));
   const sg = wantsLocal ? suggestLocal().suggestion : null;
   const local = sg ? { name: sg.name, size: sg.size, like: sg.like, rating: sg.rating, fit: sg.fit } : null;
-  const base = { task: input.task, manager, parts: placed, totals, split, limits: known ? limits : null, local };
+  const base = { task: input.task, manager, parts: placed, totals, split, limits: known ? limits : null, local, codex: codex.why };
   const result: PlanResult = { id: randomId(), ...base, table: tableOf(base), next: nextOf(base) };
   keep(result, new Map(input.files.filter((f) => f.path).map((f) => [f.name, { path: f.path!, size: f.size }])));
   return result;
@@ -518,6 +531,14 @@ function keep(plan: PlanResult, paths: Map<string, { path: string; size: number 
 }
 
 export function runView(id: string): RunView | null { return runs.get(id)?.view ?? null; }
+
+// The deepest folder that holds every one of these files; null for none, or when only the top folder does.
+export function commonFolder(paths: string[]): string | null {
+  if (!paths.length) return null;
+  let common = dirname(paths[0]);
+  for (const x of paths.slice(1)) while (common && x !== common && !x.startsWith(common.endsWith(sep) ? common : common + sep)) { const up = dirname(common); if (up === common) return null; common = up; }
+  return dirname(common) === common ? null : common;
+}
 
 export function startRun(id: string, opts: { paid?: boolean } = {}): RunView {
   const plan = kept.get(id);
@@ -598,6 +619,14 @@ async function runPart(p: Part, plan: PlanResult, at: (n: number) => RunPart, si
   const before = p.needs.map((n) => { const x = at(n); return `Part ${n} (${x.title}):\n${(x.answer ?? "").slice(0, HANDED)}`; });
   const context = p.task.includes(CONTEXT) ? "" : `\n\n${CONTEXT} ${plan.task.slice(0, 4000)}`; // a part split by rules carries it already
   const task = `${p.task}${before.length ? `\n\nWhat the earlier parts found:\n\n${before.join("\n\n")}` : ""}${context}`;
+  if (p.where === "codex") {
+    // Codex reads the files itself, from the folder that holds them all (none named: an empty folder).
+    const known = wherePaths.get(plan.id) ?? new Map();
+    const paths = p.files.map((n) => known.get(n)?.path).filter((x): x is string => !!x);
+    const folder = commonFolder(paths);
+    const r = await runCodex({ n: p.n, title: p.title, task, folder, files: folder ? paths.map((x) => relative(folder, x)) : paths, effort: p.effort }, signal);
+    return { status: "done", answer: r.answer, receipt: `${CODEX_LABEL}, read only, ${secondsText(r.seconds)}. It counts in your ChatGPT plan's Codex use; nothing to pay here.`, model: CODEX_LABEL, cost: 0, seconds: r.seconds };
+  }
   if (p.kind === "search" && p.model) {
     const r = await runChat([{ role: "user", content: task }], p.model.id, signal, () => {}, `Plan part ${p.n}`, { source: "plan", maxOut: 4096 });
     if (r.status !== "ok") return { status: r.status === "stopped" ? "stopped" : "failed", error: String(r.meta?.error ?? "It failed."), cost: r.meta?.spent ?? r.meta?.cost ?? null, model: r.meta?.model?.label ?? null };

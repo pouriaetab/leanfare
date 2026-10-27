@@ -18,6 +18,7 @@ import { BRIEF, MAX_INSTRUCTIONS, MODES, saveSettings, settings, validatePatch }
 import { budgetState } from "./budget";
 import * as connect from "./connect";
 import * as local from "./local";
+import { codexState } from "./codex";
 import { plansBrief, plansView } from "./plans";
 import { meterViews, setStatusline } from "./meter";
 import { checkDelegate, runDelegate } from "./delegate";
@@ -410,6 +411,7 @@ async function api(req: Request, url: URL): Promise<Response> {
   if (p === "/api/local" && m === "GET") return json(await local.overview());
   if (p === "/api/local/pull" && m === "GET") return json({ pull: local.pullView() });
   if (p === "/api/local/suggest" && m === "GET") return json(local.suggestLocal());
+  if (p === "/api/codex" && m === "GET") return json({ ...(await codexState(url.searchParams.get("fresh") === "1")), on: settings().codexPlan });
   if (p === "/api/local/pull" && m === "POST") { const b = await readBody(req); return json({ pull: await local.startPull(b.name, b.sizeBytes) }); }
   if (p === "/api/local/pull/stop" && m === "POST") { local.stopPull(); return json({ pull: local.pullView() }); }
   if (p === "/api/local/pull/dismiss" && m === "POST") { local.dismissPull(); return json({ pull: null }); }

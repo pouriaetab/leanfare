@@ -59,7 +59,7 @@ export const PLAN_APP_HTML = `<!doctype html>
   const usd = (v) => (v === null || v === undefined ? "not known" : v === 0 ? "$0" : v < 0.01 ? "under $0.01" : "$" + v.toFixed(2));
   const tok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(Math.round(n)));
   const secs = (s) => (s === null || s === undefined ? "" : s < 90 ? "~" + Math.max(1, Math.round(s)) + " s" : "~" + Math.round(s / 60) + " min");
-  const RUNS = { you: "you", local: "Leanfare, this computer", free: "Leanfare, free", paid: "Leanfare, pay per use" };
+  const RUNS = { you: "you", local: "Leanfare, this computer", free: "Leanfare, free", paid: "Leanfare, pay per use", codex: "Leanfare, through Codex" };
   const NOW = { waiting: "waiting", running: "running…", done: "done", failed: "failed", stopped: "stopped", yours: "yours", after_yours: "after yours", blocked: "waits", asks: "waits for a yes" };
   let plan = null, run = null, timer = null;
   // When every part stays with you: what would send some out (as the planner says it).
@@ -82,7 +82,7 @@ export const PLAN_APP_HTML = `<!doctype html>
       el("td", { "data-l": "Model", text: p.model_label || (p.runs_on === "you" ? (p.your_model && p.your_model.label) || "your model" : p.model || "") }),
       el("td", { class: "t", "data-l": "Time", text: secs(p.seconds) }),
       el("td", { "data-l": "Tokens", text: "~" + tok(p.tokens) + (p.runs_on === "you" ? " of your plan" : " kept") }),
-      el("td", { class: "c", "data-l": "Cost", text: p.runs_on === "you" ? "in your plan" : usd(p.cost_usd) }),
+      el("td", { class: "c", "data-l": "Cost", text: p.runs_on === "you" ? "in your plan" : p.runs_on === "codex" ? "in your ChatGPT plan" : usd(p.cost_usd) }),
       run ? el("td", { class: "s " + ((st(p.n) || {}).status === "done" ? "done" : ["failed", "blocked", "asks"].includes((st(p.n) || {}).status) ? "bad" : ""), "data-l": "Now", text: NOW[(st(p.n) || {}).status] || "" }) : null));
     const t = plan.totals;
     const paidParts = plan.parts.filter((p) => p.runs_on === "paid");
