@@ -2199,7 +2199,11 @@
         h("span", { class: "grow" }, h("b", { text: a.name }), h("span", { class: "note", text: ` · ${APP_STATUS[a.status]}` })),
         a.status === "broken" ? null : runButton(a.status === "added" ? "Remove" : a.status === "old" ? "Update" : "Add", (signal) => toggleApp(a, a.status !== "added", signal), a.status === "added" ? "btn small" : "btn small primary")),
       a.note ? h("div", { class: "note", text: a.note }) : null,
-      a.manual && a.status !== "added" ? h("div", { class: "note manual" }, "Or in Terminal: ", h("code", { text: a.manual }), " ", copyBtn(a.manual)) : null);
+      a.manual && a.status !== "added" ? h("div", { class: "note manual" }, "Or in Terminal: ", h("code", { text: a.manual }), " ", copyBtn(a.manual)) : null,
+      // Plan by itself (workers.ts): once Leanfare's tools are in the app.
+      a.auto && a.status === "added" ? h("div", { class: "row auto-row" },
+        h("span", { class: "grow note", text: `${a.auto.what}${a.auto.on ? " · on" : ""}.` }),
+        runButton(a.auto.on ? "Turn off" : "Turn on", (signal) => toggleAuto(a, !a.auto.on, signal), a.auto.on ? "btn small" : "btn small primary")) : null);
     return h("div", { class: "setting apps" }, h("h3", { text: "Use Leanfare in your apps" }),
       h("p", { text: "Adds Leanfare's tools (plan, delegate, ask, spend, models, estimate, trial) to the AI apps you already use, so they work as usual with Leanfare on top. Leanfare changes only its own entry in each app's settings, and keeps a copy of the file as it was." }),
       S.apps?.loading ? h("p", { class: "note", text: "Looking for the AI apps on this computer…" }) : null,
@@ -2207,6 +2211,14 @@
       !S.apps?.loading && !here.length ? h("p", { class: "note", text: "None of the apps Leanfare knows are on this computer yet." }) : null,
       away.length ? h("button", { class: "more-toggle", type: "button", text: S.showAllApps ? "▾ Hide the apps not on this computer" : `▸ ${away.length} more not found on this computer (${away.map((a) => a.name).join(", ")})`, onclick: () => { S.showAllApps = !S.showAllApps; renderSettings(); } }) : null,
       S.showAllApps ? h("div", { class: "away" }, ...away.map(row)) : null);
+  }
+  async function toggleAuto(a, on, signal) {
+    try {
+      const r = await api("/api/apps", { body: { id: a.id, auto: on }, signal });
+      S.apps = { list: r.apps };
+      renderSettings();
+      toast(on ? `${a.name} now plans by itself with Leanfare. ${a.after}` : `${a.name} no longer plans with Leanfare by itself.`, "done");
+    } catch (e) { S.apps = null; loadApps(); throw e; }
   }
   async function toggleApp(a, on, signal) {
     try {

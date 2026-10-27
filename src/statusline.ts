@@ -165,3 +165,15 @@ export function runTheirs(cmd: string, input: string, ms = 2000): Promise<string
     child.stdin!.end(input);
   });
 }
+
+// Claude Code's prompt hook (workers.ts adds it): what Claude is told as each prompt goes, as a fact,
+// numbers only (the prompt is never read), from the status line's last reading.
+export function hookLine(at = clock()): string {
+  const s = lastSnap();
+  const live = (w: { used: number; resets: number | null } | null | undefined) => (w && (w.resets === null || w.resets > at) ? Math.round(w.used) : null);
+  const five = live(s?.five), week = live(s?.week);
+  const parts = [five !== null ? `its 5 hour window is ${five}% used` : "", week !== null ? `its week ${week}% used` : ""].filter(Boolean);
+  const near = (five ?? 0) >= 85 || (week ?? 0) >= 85;
+  return `Leanfare: ${parts.length ? `the Claude plan: ${parts.join(", ")}. ` : ""}Leanfare's plan tool splits a task with several parts across cheaper models${near ? "; near a limit, its delegate and plan_run can do the reading and drafting off the plan" : ""}.`;
+}
+

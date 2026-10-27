@@ -22,6 +22,7 @@ import { plansBrief, plansView } from "./plans";
 import { meterViews, setStatusline } from "./meter";
 import { checkDelegate, runDelegate } from "./delegate";
 import { checkPlan, makePlan, runView, startRun, stopRun } from "./planner";
+import { setAuto } from "./workers";
 import { retirementNotices } from "./retire";
 import { savings } from "./savings";
 import { checkKey, effortLevels, UserError } from "./upstream";
@@ -474,7 +475,10 @@ async function api(req: Request, url: URL): Promise<Response> {
   if (p === "/api/apps" && m === "GET") return json({ apps: appsView() });
   if (p === "/api/apps" && m === "POST") {
     const b = await readBody(req);
-    try { return json({ app: await setApp(String(b.id ?? ""), !!b.on), apps: appsView() }); }
+    try {
+      if (typeof b.auto === "boolean") { setAuto(String(b.id ?? ""), b.auto); return json({ app: appsView().find((a) => a.id === b.id) ?? null, apps: appsView() }); }
+      return json({ app: await setApp(String(b.id ?? ""), !!b.on), apps: appsView() });
+    }
     catch (e: any) { return json({ error: String(e?.message ?? e), apps: appsView() }, 409); }
   }
   // Providers you add: any address that speaks OpenAI's format (see providers.ts).

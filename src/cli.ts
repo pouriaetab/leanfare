@@ -25,6 +25,7 @@ const HELP = `Leanfare ${VERSION}: every top AI model in one app on your own com
   leanfare status     is it running, where, and how old are its prices
   leanfare mcp        Leanfare as an MCP server (stdio), for Claude Desktop and other MCP clients
   leanfare statusline the line for Claude Code's status line: your plan's 5 hour and weekly use (Settings adds it)
+  leanfare hook prompt the line Claude Code's prompt hook adds: your plan's use, and that plan can split a task
   leanfare apps       the AI apps on this computer, and whether Leanfare's tools are in each
   leanfare apps add claude-desktop   add Leanfare's tools to one (claude-desktop, claude-code, cursor, codex,
                       gemini-cli, windsurf, vscode, lm-studio); "leanfare apps remove <app>" takes them out
@@ -284,6 +285,9 @@ else if (command === "stop") await stop();
 else if (command === "status") await status();
 else if (command === "mcp") { const { runMcp } = await import("./mcp"); await runMcp(); }
 else if (command === "statusline") { const { runStatusline } = await import("./statusline"); await runStatusline(args); }
+// Claude Code's prompt hook (Settings, In your apps, Plan by itself): one line of numbers for Claude, never
+// the prompt. It must never get in the way: anything that goes wrong prints nothing.
+else if (command === "hook") { try { const { hookLine } = await import("./statusline"); if (args.includes("prompt")) console.log(hookLine()); } catch {} process.exit(0); }
 else if (command === "apps") await apps();
 else if (command === "trial") await trial();
 else { console.error(`Unknown command "${command}".\n\n${HELP}`); process.exit(2); }
