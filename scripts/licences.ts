@@ -6,8 +6,9 @@
 // using it, find an open replacement, and say so in the release notes.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = new URL("..", import.meta.url).pathname;
+const root = fileURLToPath(new URL("..", import.meta.url));
 const OPEN = new Set(["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "0BSD", "CC0-1.0", "Unlicense", "BlueOak-1.0.0"]);
 const offline = process.argv.includes("--offline");
 const rows: { what: string; needs: string; found: string; ok: boolean }[] = [];
@@ -65,9 +66,15 @@ if (!offline) {
     const lic = JSON.parse(t).cardData?.license;
     return lic === "cc-by-4.0" ? "cc-by-4.0" : null;
   });
-  await check("Bun (you install it yourself)", "MIT", "https://raw.githubusercontent.com/oven-sh/bun/main/LICENSE.md", (t) =>
-    /Bun itself is MIT-licensed/.test(t) ? "MIT (its built-in JavaScriptCore is LGPL-2; Leanfare does not ship Bun)" : null);
+  await check("Bun (inside the one-file builds)", "MIT, with its LGPL-2 JavaScriptCore notice shipped", "https://raw.githubusercontent.com/oven-sh/bun/main/LICENSE.md", (t) =>
+    /Bun itself is MIT-licensed/.test(t) && /LGPL/.test(t) ? "MIT; it links JavaScriptCore (LGPL-2), whose notice and source link go in every archive (licenses/bun.md)" : null);
+  await check("models.dev (prices of providers you add)", "MIT", "https://raw.githubusercontent.com/sst/models.dev/dev/LICENSE", (t) => (/^MIT License/m.test(t) ? "MIT" : null));
+  await check("gitleaks (key shapes for Paste any key)", "MIT", "https://raw.githubusercontent.com/gitleaks/gitleaks/master/LICENSE", (t) => (/^MIT License/m.test(t) ? "MIT" : null));
+  await check("betterleaks (key shapes for Paste any key)", "MIT", "https://raw.githubusercontent.com/betterleaks/betterleaks/main/LICENSE", (t) => (/^MIT License/m.test(t) ? "MIT" : null));
 }
+// Bun's notice travels with Leanfare (scripts/compile.ts puts it in every archive).
+const bunNotice = existsSync(join(root, "licenses/bun.md")) ? readFileSync(join(root, "licenses/bun.md"), "utf8") : "";
+add("Bun's notice for the one-file builds", "licenses/bun.md with the LGPL-2 terms and the JavaScriptCore source", bunNotice ? "present" : "missing", /LGPL/.test(bunNotice) && /oven-sh\/webkit/i.test(bunNotice));
 add("OpenRouter model list", "read at run time only", "fetched on your computer for your own costs; not shipped in releases", true);
 
 const w = Math.max(...rows.map((r) => r.what.length));
