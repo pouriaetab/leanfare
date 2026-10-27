@@ -5,8 +5,10 @@
 // sites unless you allowed them in Settings.
 import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { BUN_TESTED, DATA_ID, HOST, PORT, PROVIDERS, UI_DIR, VERSION, baseOf, paths, provider, runtime, type ProviderId } from "./config";
-import { TASKS, allModels, getModel, isRetired, refreshCatalog, refreshOllama, refreshOpenRouter, retiresWithin, store, type Model } from "./data";
+import { BUN_TESTED, DATA_ID, HOST, PORT, UI_DIR, VERSION, allProviders, baseOf, paths, provider, runtime, type ProviderId } from "./config";
+import { TASKS, allModels, getModel, isRetired, refreshCatalog, refreshOllama, refreshOpenRouter, retiresWithin, served, store, type Model } from "./data";
+import * as extra from "./providers";
+import { findKeys, readFound, recognize } from "./findkeys";
 import { db, lastRepair } from "./db";
 import { allKeys, getKey, keyWhere, keychainNote, removeKey, saveKey, storeName } from "./keys";
 import { MAX_INSTRUCTIONS, MODES, saveSettings, settings, validatePatch } from "./settings";
@@ -68,7 +70,7 @@ export function state() {
   const s = settings();
   const day = localDay();
   const ticked = new Set(s.ticked);
-  const models = allModels().filter((m) => !isRetired(m, day) || ticked.has(m.id));
+  const models = allModels().filter((m) => (!isRetired(m, day) || ticked.has(m.id)) && served(m));
   const byProvider: Record<string, any[]> = {};
   for (const m of models) (byProvider[m.provider] ??= []).push(modelView(m, ticked, day));
   for (const list of Object.values(byProvider)) list.sort((a, b) => (b.rating ?? -1) - (a.rating ?? -1) || a.label.localeCompare(b.label));
@@ -88,7 +90,7 @@ export function state() {
   const ds = store.status.data;
   const ageDays = Math.floor((now().getTime() - Date.parse(store.catalog.built)) / 86_400_000);
   if (ageDays >= 3) notices.push({ kind: "data", level: "warn", text: `Prices are ${ageDays} days old${ds.state === "failed" ? ` (the daily update failed: ${ds.error})` : ""}.` });
-  const ready = PROVIDERS.filter((p) => providerReady(p.id));
+  const ready = allProviders().filter((p) => providerReady(p.id));
   return {
     version: VERSION,
     bun: Bun.version,
@@ -97,8 +99,9 @@ export function state() {
     settings: s,
     modes: MODES,
     tasks: TASKS,
-    providers: PROVIDERS.map((p) => ({
+    providers: allProviders().map((p) => ({
       id: p.id, name: p.name, needsKey: p.needsKey, keyUrl: p.keyUrl, note: p.note ?? null,
+      local: !!p.local, custom: !!p.custom, more: !!p.more,
       ready: providerReady(p.id), on: s.providers[p.id]?.on !== false, free: !!s.providers[p.id]?.free,
       key: p.needsKey ? { saved: !!getKey(p.id), where: keyWhere(p.id), hint: keyHint(p.id), canUndo: (removedKeys.get(p.id)?.until ?? 0) > Date.now() } : null,
       list: p.id === "openrouter" ? store.status.openrouter : p.id === "ollama" ? store.status.ollama : null,
@@ -117,6 +120,7 @@ export function state() {
       litellmCommit: store.catalog.litellmCommit, credits: store.catalog.credits, status: store.status.data, url: store.status.data.tried,
       modelCount: store.catalog.models.length,
     },
+    extra: extra.extraView(),
     pause: pauseState(),
     running: runningList(),
     local: { pull: local.pullView() },
@@ -334,8 +338,9 @@ function tickTop(pid: ProviderId) {
 
 // A key was saved, pasted or by signing in: switch the provider on, load
 // OpenRouter's list and balance, and tick the provider's short list.
-async function keySaved(id: ProviderId, signal?: AbortSignal) {
+async function keySaved(id: ProviderId, signal?: AbortSignal, liveModels?: string[] | null) {
   removedKeys.delete(id);
+  if (liveModels && provider(id)?.more) store.live.set(id, new Set(liveModels));
   saveSettings({ providers: { ...settings().providers, [id]: { ...(settings().providers[id] ?? {}), on: true } } });
   if (id === "openrouter") {
     await refreshOpenRouter(signal);
@@ -376,7 +381,7 @@ async function api(req: Request, url: URL): Promise<Response> {
     const check = await checkKey(def.id, key, req.signal);
     if (!check.ok) return json({ ok: false, message: redact(check.message, [key]), state: state() }, 200);
     const where = await saveKey(def.id, key);
-    await keySaved(def.id, req.signal);
+    await keySaved(def.id, req.signal, check.models);
     return json({ ok: true, message: `${check.message} Saved in ${where === "keychain" ? "the macOS Keychain" : "a file only you can read"}.`, state: state() });
   }
   // Sign in with OpenRouter instead of pasting a key (see connect.ts). The page
@@ -399,7 +404,75 @@ async function api(req: Request, url: URL): Promise<Response> {
     const r = await local.remove(typeof b.name === "string" ? b.name : "");
     return json({ ok: true, ...r, state: state() });
   }
-  const keyMatch = /^\/api\/keys\/([a-z]+)(\/restore)?$/.exec(p);
+  // Paste any key: Leanfare finds its provider by how it looks, tests it there, and saves it.
+  if (p === "/api/keys/recognize" && m === "POST") {
+    const b = await readBody(req);
+    const key = String(b.key ?? "").trim();
+    if (key.length < 8 || /\s/.test(key)) return fail(400, "That does not look like a key: it should be one word with no spaces.");
+    const r = recognize(key);
+    if (r.refuse) return json({ ok: false, message: r.refuse, state: state() });
+    if (!r.providers.length) return json({ ok: false, unknown: true, message: "Leanfare does not recognize this key's provider. If it speaks OpenAI's format, add it under Add a provider with its address.", state: state() });
+    const tried: string[] = [];
+    for (const id of r.providers) {
+      const def = provider(id)!;
+      const check = await checkKey(id, key, req.signal);
+      if (!check.ok) { tried.push(`${def.name}: ${redact(check.message, [key])}`); if (check.status === 0) break; continue; }
+      const where = await saveKey(id, key);
+      await keySaved(id, req.signal, check.models);
+      return json({ ok: true, provider: id, message: `A ${def.name} key. ${check.message} Saved in ${where === "keychain" ? "the macOS Keychain" : "a file only you can read"}.`, state: state() });
+    }
+    return json({ ok: false, message: `It looks like a ${r.providers.map((id) => provider(id)!.name).join(" or ")} key, but it did not work. ${tried.join(" ")}`, state: state() });
+  }
+  // Find my keys: what is already on this computer (see findkeys.ts). Only names, places and the
+  // last four characters come to the screen; importing reads the key again where it was found.
+  if (p === "/api/keys/found" && m === "GET") return json({ keys: await findKeys() });
+  if (p === "/api/keys/import" && m === "POST") {
+    const b = await readBody(req);
+    const refs: string[] = Array.isArray(b.refs) ? b.refs.filter((x: unknown) => typeof x === "string").slice(0, 40) : [];
+    const found = await findKeys();
+    const results: { ref: string; ok: boolean; message: string }[] = [];
+    for (const ref of refs) {
+      const f = found.find((x) => x.ref === ref);
+      const key = f ? await readFound(ref) : null;
+      if (!f || !key) { results.push({ ref, ok: false, message: "That key is not there any more." }); continue; }
+      if (f.provider) {
+        const check = await checkKey(f.provider, key, req.signal);
+        if (!check.ok) { results.push({ ref, ok: false, message: `${f.label}: ${redact(check.message, [key])}` }); continue; }
+        await saveKey(f.provider, key);
+        await keySaved(f.provider, req.signal, check.models);
+        results.push({ ref, ok: true, message: `${f.label}: ${check.message}` });
+      } else if (f.registry) {
+        const added = await extra.addCustomProvider({ name: f.registry.name, base: f.registry.api, key, registry: f.registry.id });
+        if (!added.ok) { results.push({ ref, ok: false, message: `${f.label}: ${redact(added.message, [key])}` }); continue; }
+        await saveKey(added.id, key);
+        await keySaved(added.id, req.signal);
+        results.push({ ref, ok: true, message: `${f.label}: added, ${added.models} models.` });
+      }
+    }
+    return json({ results, state: state() });
+  }
+  // Providers you add: any address that speaks OpenAI's format (see providers.ts).
+  if (p === "/api/providers/registry" && m === "GET") {
+    const r = await extra.registry();
+    return json({ choices: r ? extra.registryChoices(r) : [], from: "models.dev", ok: !!r });
+  }
+  if (p === "/api/providers/custom" && m === "POST") {
+    const v = extra.checkCustomInput(await readBody(req));
+    if (typeof v === "string") return fail(400, v);
+    const added = await extra.addCustomProvider(v);
+    if (!added.ok) return json({ ok: false, message: v.key ? redact(added.message, [v.key]) : added.message, state: state() });
+    if (v.key) await saveKey(added.id, v.key);
+    await keySaved(added.id, req.signal);
+    return json({ ok: true, id: added.id, message: `${v.name} added: ${added.models} model${added.models === 1 ? "" : "s"}.`, state: state() });
+  }
+  if (p === "/api/providers/custom/remove" && m === "POST") {
+    const b = await readBody(req);
+    const id = String(b.id ?? "");
+    if (!extra.removeCustomProvider(id)) return fail(404, "No provider you added has that id.");
+    await removeKey(id);
+    return json({ ok: true, state: state() });
+  }
+  const keyMatch = /^\/api\/keys\/([a-z0-9-]+)(\/restore)?$/.exec(p);
   if (keyMatch) {
     const def = provider(keyMatch[1]);
     if (!def || !def.needsKey) return fail(404, "Unknown provider.");
@@ -419,7 +492,7 @@ async function api(req: Request, url: URL): Promise<Response> {
       return json({ ok: true, env, state: state() });
     }
   }
-  const provMatch = /^\/api\/providers\/([a-z]+)$/.exec(p);
+  const provMatch = /^\/api\/providers\/([a-z0-9-]+)$/.exec(p);
   if (provMatch && m === "POST") {
     const def = provider(provMatch[1]);
     if (!def) return fail(404, "Unknown provider.");
@@ -533,6 +606,8 @@ async function api(req: Request, url: URL): Promise<Response> {
   }
   if (p === "/api/refresh" && m === "POST") {
     const b = await readBody(req);
+    if (b.what === "local") { await extra.refreshLocalServers(); await refreshOllama(); return json({ status: { state: "ok", error: null }, state: state() }); }
+    if (b.what === "custom") { await extra.refreshCustom(); return json({ status: { state: "ok", error: null }, state: state() }); }
     const what = b.what === "openrouter" ? "openrouter" : b.what === "ollama" ? "ollama" : "data";
     refreshing[what]?.abort();
     const ac = new AbortController();
