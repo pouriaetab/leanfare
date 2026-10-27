@@ -27,10 +27,10 @@ const OWN = "(Leanfare wrote this file. Take it out in Leanfare's Settings, In y
 
 const RULE_CLAUDE = `## Leanfare
 
-For a task with several parts (a feature, a fix across files, research across many files), call Leanfare's plan tool first and follow its table: run the parts it gives to Leanfare with delegate (several in the same turn) or with the leanfare-worker subagent (one per part, at once), or call plan_run to run them in the background and plan_status for their answers. Do the parts it leaves to you yourself. Leanfare's parts run on local, free or cheap models, so your Claude plan lasts longer.`;
+For a task with several parts (a feature, a fix across files, research across many files), call Leanfare's plan tool first and follow its table: run the parts it gives to Leanfare with delegate (several in the same turn) or with the leanfare-worker subagent (one per part, at once), or call plan_run to run them in the background and plan_status for their answers. Do the parts it leaves to you yourself. Once you have used an answer of Leanfare's, grade it with Leanfare's grade tool (good, partly or wrong), so the models that do badly are moved down. Leanfare's parts run on local, free or cheap models, so your Claude plan lasts longer.`;
 const RULE_OTHER = `## Leanfare
 
-For a task with several parts (a feature, a fix across files, research across many files), call Leanfare's plan tool first and follow its table: run the parts it gives to Leanfare with delegate (several in the same turn), or call plan_run to run them in the background and plan_status for their answers. Do the parts it leaves to you yourself.`;
+For a task with several parts (a feature, a fix across files, research across many files), call Leanfare's plan tool first and follow its table: run the parts it gives to Leanfare with delegate (several in the same turn), or call plan_run to run them in the background and plan_status for their answers. Do the parts it leaves to you yourself. Once you have used an answer of Leanfare's, grade it with Leanfare's grade tool (good, partly or wrong), so the models that do badly are moved down.`;
 
 export const WORKER = `---
 name: leanfare-worker

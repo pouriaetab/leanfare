@@ -1,7 +1,7 @@
 // The manager's grades: the app you work in (or you, in the Plan tab) grades the answer of a part
 // Leanfare ran: good, partly or wrong. The grade goes with the model and the kind of part, never the
 // words. A model graded below good too often for a kind (3 or more of its last 20, under half good,
-// partly counting half) is moved down: Auto, plans and the delegate skip it for that kind while another
+// partly counting half) is moved down: plans and the delegate skip it for that kind while another
 // model can take it, until it gets another chance.
 import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { store, type Model } from "../src/data";
@@ -46,7 +46,7 @@ describe("the standing of a model for a kind", () => {
     grade("deepseek/deepseek-v4-flash", "read", "good", "wrong", "wrong");
     grade("openai/gpt-5-mini", "read", "good");
     const st = standing("deepseek/deepseek-v4-flash", "read");
-    expect(standingText(st)).toBe("DeepSeek V4 Flash for reading: 1 good, 2 wrong of its last 3. Moved down: Auto, plans and the delegate skip it for this kind while another model can take it (Settings, How the models did for you, gives it another chance).");
+    expect(standingText(st)).toBe("DeepSeek V4 Flash for reading: 1 good, 2 wrong of its last 3. Moved down: plans and the delegate skip it for this kind while another model can take it (Settings, How the models did for you, gives it another chance).");
     expect(standingText(standing("openai/gpt-5-mini", "read"))).toBe("GPT-5 mini for reading: 1 good of its last 1 (it moves down below half good, from 3 grades on).");
     expect(standings().map((s) => [s.model, s.down])).toEqual([["deepseek/deepseek-v4-flash", true], ["openai/gpt-5-mini", false]]);
   });

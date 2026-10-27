@@ -2,7 +2,7 @@
 // models gave for a part, it says how good it was: good, partly or wrong (you can too, in the Plan tab).
 // Leanfare keeps the grade with the model and the kind of part (reading, drafting, working things out,
 // searching), never the words. A model graded too often below good for a kind (at least 3 of its last 20
-// grades, under half good, partly counting half) is moved down: Auto, plans and the delegate stop picking
+// grades, under half good, partly counting half) is moved down: plans and the delegate stop picking
 // it for that kind, while another model can take it, until you give it another chance in Settings.
 import { CODEX_ID, CODEX_LABEL } from "./codex";
 import { getModel } from "./data";
@@ -70,5 +70,5 @@ export function giveAnotherChance(model: string, kind: string): number {
 
 export function standingText(s: Standing): string {
   const parts = [s.good ? `${s.good} good` : "", s.partly ? `${s.partly} partly` : "", s.wrong ? `${s.wrong} wrong` : ""].filter(Boolean).join(", ");
-  return `${s.label} for ${KIND_WORD[s.kind]}: ${parts} of its last ${s.n}${s.down ? ". Moved down: Auto, plans and the delegate skip it for this kind while another model can take it (Settings, How the models did for you, gives it another chance)" : s.n < MIN_GRADES ? ` (it moves down below half good, from ${MIN_GRADES} grades on)` : ""}.`;
+  return `${s.label} for ${KIND_WORD[s.kind]}: ${parts} of its last ${s.n}${s.down ? ". Moved down: plans and the delegate skip it for this kind while another model can take it (Settings, How the models did for you, gives it another chance)" : s.n < MIN_GRADES ? ` (it moves down below half good, from ${MIN_GRADES} grades on)` : ""}.`;
 }

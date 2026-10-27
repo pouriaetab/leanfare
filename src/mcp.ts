@@ -85,7 +85,7 @@ const TOOLS = [
   {
     name: "grade",
     title: "Grade an answer",
-    description: "After you used the answer of a part Leanfare ran (plan_status) or of delegate, say how good it was: good, partly or wrong. Leanfare keeps only the grade, with the model that answered and the kind of part, never the words. A model graded below good too often for a kind is moved down, so Auto, plans and delegate stop picking it for that kind. Grade a plan's part with id and part; a delegate answer with model (from its receipt) and kind.",
+    description: "After you used the answer of a part Leanfare ran (plan_status) or of delegate, say how good it was: good, partly or wrong. Leanfare keeps only the grade, with the model that answered and the kind of part, never the words. A model graded below good too often for a kind is moved down, so plans and delegate stop picking it for that kind. Grade a plan's part with id and part; a delegate answer with model (from its receipt) and kind.",
     inputSchema: {
       type: "object",
       properties: {
