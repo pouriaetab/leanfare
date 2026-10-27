@@ -4,7 +4,8 @@ import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chainSeconds, checkPlan, forgetPlans, makePlan, readSplit, rulesSplit, runView, SIZE_TOKENS, SPLIT_SYSTEM, startRun, stopRun, tableOf, type Part } from "../src/planner";
+import { chainSeconds, checkPlan, forgetPlans, keptPlan, makePlan, paidOf, readSplit, rulesSplit, runView, SIZE_TOKENS, SPLIT_SYSTEM, startRun, stopRun, tableOf, type Part } from "../src/planner";
+import { saveSettings } from "../src/settings";
 import { saveSnap } from "../src/statusline";
 import { ALL_TICKED, boot, fake, keys, ledger, reset, ui } from "./app";
 
@@ -182,7 +183,7 @@ describe("running a plan here (the Plan tab)", () => {
       return prompt.includes("List the modules") ? "MODULES: proxy, router, cost." : null;
     };
     const plan = await makePlan({ task: "Reverse engineer LiteLLM", files: [], manager: "Claude Code", signal: signal() });
-    const v = startRun(plan.id);
+    const v = startRun(plan.id, { paid: true });
     expect(v.running).toBe(true);
     expect(startRun(plan.id)).toBe(v); // asked again while it runs: the same run
     await until(() => !runView(plan.id)!.running);
@@ -209,7 +210,7 @@ describe("running a plan here (the Plan tab)", () => {
     fake.hooks.answer = (prompt) => { prompts.push(prompt); return null; };
     const plan = await makePlan({ ...v, signal: signal() });
     expect(plan.parts[0].files.length).toBe(1);
-    startRun(plan.id);
+    startRun(plan.id, { paid: true });
     await until(() => !runView(plan.id)!.running);
     expect(runView(plan.id)!.parts[0].status).toBe("done");
     expect(prompts.some((x) => x.includes("def pick(deployments):") && x.includes("router.py"))).toBe(true);
@@ -223,7 +224,7 @@ describe("running a plan here (the Plan tab)", () => {
     fake.hooks.slow = (prompt) => (prompt.includes("List the modules") ? 3000 : 0);
     try {
       const plan = await makePlan({ task: "Reverse engineer LiteLLM", files: [], manager: "Claude Code", signal: signal() });
-      startRun(plan.id);
+      startRun(plan.id, { paid: true });
       await until(() => runView(plan.id)!.parts[0].status === "running");
       stopRun(plan.id);
       await until(() => !runView(plan.id)!.running);
@@ -238,5 +239,61 @@ describe("running a plan here (the Plan tab)", () => {
     expect((await ui(url, "/api/plan/run", { id: "nope" })).status).toBe(404);
     expect((await ui(url, "/api/plan/run?id=nope")).status).toBe(404);
     expect((await ui(url, "/api/plan/stop", { id: "nope" })).status).toBe(404);
+  });
+});
+
+describe("paid parts: within the cap they run, above it they wait for a yes", () => {
+  test("over the cap (0: always ask), the paid parts wait and the parts after them never start; a yes runs them, keeping what was done", async () => {
+    await keys("openai", "google", "deepseek");
+    fake.hooks.answer = (prompt) => (prompt.includes("The person works in") ? SPLIT : null);
+    const plan = await makePlan({ task: "Reverse engineer LiteLLM", files: [], manager: "Claude Code", signal: signal() });
+    const paid = paidOf(plan);
+    expect(paid.parts).toEqual([1, 2, 5]); // on these keys every Leanfare part is pay per use
+    const v = startRun(plan.id);
+    await until(() => !runView(plan.id)!.running);
+    expect(runView(plan.id)!.parts.map((p) => p.status)).toEqual(["asks", "asks", "yours", "yours", "asks"]);
+    expect(runView(plan.id)!.asks).toMatchObject({ parts: [1, 2, 5], cap: 0 });
+    expect(ledger().filter((x: any) => x.source === "delegate").length).toBe(0); // nothing paid went out
+    startRun(plan.id, { paid: true });
+    await until(() => !runView(plan.id)!.running);
+    expect(runView(plan.id)!.parts.map((p) => p.status)).toEqual(["done", "done", "yours", "yours", "blocked"]);
+    expect(runView(plan.id)!.asks).toBeNull();
+    expect(v.id).toBe(plan.id);
+  });
+
+  test("within the cap set in Settings, they run without asking", async () => {
+    await keys("openai", "google", "deepseek");
+    fake.hooks.answer = (prompt) => (prompt.includes("The person works in") ? SPLIT : null);
+    const plan = await makePlan({ task: "Reverse engineer LiteLLM", files: [], manager: "Claude Code", signal: signal() });
+    saveSettings({ planAuto: Math.ceil((paidOf(plan).estimate ?? 0) * 100) / 100 + 0.01 });
+    startRun(plan.id);
+    await until(() => !runView(plan.id)!.running);
+    expect(runView(plan.id)!.parts[0].status).toBe("done");
+    expect(runView(plan.id)!.asks).toBeNull();
+  });
+
+  test("a yes while the free parts run: the paid ones join that run", async () => {
+    await keys("openai", "google", "deepseek");
+    fake.hooks.answer = (prompt) => (prompt.includes("The person works in") ? SPLIT : null);
+    fake.hooks.slow = (prompt) => (prompt.includes("List the modules") ? 1500 : 0);
+    try {
+      const plan = await makePlan({ task: "Reverse engineer LiteLLM", files: [], manager: "Claude Code", signal: signal() });
+      const kept = keptPlan(plan.id)!;
+      Object.assign(kept.parts[0], { where: "free", cost: 0 }); // part 1 free, part 2 (after it) paid
+      startRun(plan.id);
+      await until(() => runView(plan.id)!.parts[0].status === "running");
+      expect(runView(plan.id)!.parts[1].status).toBe("asks");
+      startRun(plan.id, { paid: true });
+      expect(runView(plan.id)!.parts[1].status).toBe("waiting");
+      await until(() => !runView(plan.id)!.running);
+      expect(runView(plan.id)!.parts.slice(0, 2).map((p) => p.status)).toEqual(["done", "done"]);
+    } finally { fake.hooks.slow = null; }
+  });
+
+  test("the cap is a dollar amount from 0 to 1,000", async () => {
+    const { validatePatch } = await import("../src/settings");
+    expect(validatePatch({ planAuto: "0.25" })).toEqual({ patch: { planAuto: 0.25 } });
+    expect(validatePatch({ planAuto: "" })).toEqual({ patch: { planAuto: 0 } });
+    expect(validatePatch({ planAuto: -1 })).toEqual({ error: "planAuto must be a dollar amount from 0 to 1,000" });
   });
 });

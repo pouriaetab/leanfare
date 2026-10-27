@@ -42,6 +42,7 @@ export interface Settings {
   updateCheck: boolean; // ask GitHub once a day whether a newer Leanfare is out (update.ts)
   showValue: boolean; // Savings: also show what subscription use would cost per use (at API prices); off: tokens and limits only
   brief: boolean; // the chat screen's answers: short (the answer first, a table or a short list), more only when asked
+  planAuto: number; // a plan's paid parts run without asking while their estimate is at most this many US dollars (0: always ask)
 }
 
 export const DEFAULTS: Settings = {
@@ -64,6 +65,7 @@ export const DEFAULTS: Settings = {
   updateCheck: true,
   showValue: false,
   brief: true,
+  planAuto: 0,
 };
 
 // What a short answer is, given to the chat screen's models before the chat's own instructions
@@ -136,6 +138,11 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
   if ("updateCheck" in p) out.updateCheck = !!p.updateCheck;
   if ("showValue" in p) out.showValue = !!p.showValue;
   if ("brief" in p) out.brief = !!p.brief;
+  if ("planAuto" in p) {
+    const v = p.planAuto === null || p.planAuto === "" ? 0 : Number(p.planAuto);
+    if (!Number.isFinite(v) || v < 0 || v > 1000) return { error: "planAuto must be a dollar amount from 0 to 1,000" };
+    out.planAuto = Math.round(v * 100) / 100;
+  }
   if ("successors" in p) {
     if (typeof p.successors !== "object" || p.successors === null) return { error: "successors must be an object" };
     out.successors = Object.fromEntries(Object.entries(p.successors).filter(([a, b]) => typeof a === "string" && typeof b === "string")) as Record<string, string>;
