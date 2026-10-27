@@ -1117,6 +1117,26 @@ describe("Use Leanfare in your apps (Settings)", () => {
   }, 30000);
 });
 
+describe("Plan by itself for tools another copy of Leanfare added", () => {
+  async function waitFor(ok: () => boolean, ms = 8000) { for (let i = 0; i < ms / 50 && !ok(); i++) await Bun.sleep(50); }
+  test("the Plan by itself line shows for them too", async () => {
+    const { mkdirSync, rmSync, writeFileSync } = require("node:fs") as typeof import("node:fs");
+    const codex = process.env.CODEX_HOME!;
+    rmSync(codex, { recursive: true, force: true });
+    mkdirSync(codex, { recursive: true });
+    const { join } = require("node:path") as typeof import("node:path");
+    writeFileSync(join(codex, "config.toml"), `[mcp_servers.leanfare]\ncommand = "/old/bun"\nargs = ["mcp"]\n`); // put there by another copy (the Mac app's, say)
+    await reset({ ticked: ALL_TICKED });
+    const doc = await openApp();
+    doc.querySelector('.tabs button[data-tab="settings"]').click();
+    const row = () => [...doc.querySelectorAll(".apps .app-row")].find((r: any) => r.textContent.includes("Codex CLI")) as any;
+    await waitFor(() => !!row()?.querySelector(".auto-row"));
+    expect(row().textContent).toContain("added from another copy of Leanfare");
+    expect(row().querySelector(".auto-row").textContent).toContain("Plan by itself: a line in AGENTS.md");
+    rmSync(codex, { recursive: true, force: true });
+  }, 20000);
+});
+
 describe("Subscriptions on Savings and in Settings", () => {
   const { mkdirSync, rmSync, writeFileSync } = require("node:fs") as typeof import("node:fs");
   const { join } = require("node:path") as typeof import("node:path");
