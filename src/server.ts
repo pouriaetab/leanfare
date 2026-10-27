@@ -5,9 +5,10 @@
 // sites unless you allowed them in Settings.
 import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { BUN_TESTED, DATA_ID, HOST, PORT, UI_DIR, VERSION, allProviders, baseOf, paths, provider, runtime, type ProviderId } from "./config";
+import { BUN_TESTED, DATA_ID, HOST, PORT, VERSION, allProviders, baseOf, paths, provider, runtime, type ProviderId } from "./config";
 import { TASKS, allModels, getModel, isRetired, refreshCatalog, refreshOllama, refreshOpenRouter, retiresWithin, served, store, type Model } from "./data";
 import * as extra from "./providers";
+import { UI_FILES } from "./assets";
 import { findKeys, readFound, recognize } from "./findkeys";
 import { appsView, setApp } from "./apps";
 import { SUBSCRIPTIONS } from "./subscriptions";
@@ -31,6 +32,7 @@ import { chargeOf, errorResponse, handleAnthropic, handleOpenAI, idle, pauseStat
 import { guessTask } from "./router";
 import { parseSpeed } from "./speed";
 import { startTrial, stopTrial, trialView } from "./trial";
+import { updateNotice } from "./update";
 import { dollars, localDay, now, randomId, redact } from "./util";
 
 const EFFORTS = ["auto", "low", "medium", "high"];
@@ -94,6 +96,8 @@ export function state() {
   const ds = store.status.data;
   const ageDays = Math.floor((now().getTime() - Date.parse(store.catalog.built)) / 86_400_000);
   if (ageDays >= 3) notices.push({ kind: "data", level: "warn", text: `Prices are ${ageDays} days old${ds.state === "failed" ? ` (the daily update failed: ${ds.error})` : ""}.` });
+  const up = updateNotice(s.updateCheck);
+  if (up) notices.push(up);
   const ready = allProviders().filter((p) => providerReady(p.id));
   return {
     version: VERSION,
@@ -719,7 +723,7 @@ export async function handle(req: Request, server: { timeout(r: Request, s: numb
 
   const file = STATIC[url.pathname];
   if (file && req.method === "GET") {
-    const f = Bun.file(join(UI_DIR, file[0]));
+    const f = Bun.file(UI_FILES[file[0]]);
     if (await f.exists()) {
       return new Response(f, { headers: { "content-type": file[1], "cache-control": "no-cache", "content-security-policy": CSP, "x-content-type-options": "nosniff", "referrer-policy": "no-referrer" } });
     }

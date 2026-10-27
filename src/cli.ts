@@ -161,6 +161,10 @@ async function start() {
   ollama();
   dailyBackup(paths.db);
   setInterval(() => dailyBackup(paths.db), 3600_000);
+  const { checkUpdate } = await import("./update");
+  const askGitHub = () => { if (settings().updateCheck) checkUpdate(); };
+  setTimeout(askGitHub, 20_000); // after the app is up and the prices are in
+  setInterval(askGitHub, day);
 }
 
 async function stop() {

@@ -1,0 +1,100 @@
+name: release
+
+# When a release is published, build Leanfare as one file for each kind of computer, check that the
+# builds start and serve their screens on Linux, macOS and Windows, and attach the archives and
+# their checksums to the release (install.sh and install.ps1 download them from there).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The release to build and attach to, for example v0.4.0"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/compile.ts --check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+  check-mac:
+    needs: build
+    runs-on: macos-15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: The Apple silicon build starts and serves its page
+        run: |
+          mkdir m && tar -xzf dist/leanfare-darwin-arm64.tar.gz -C m
+          codesign --verify m/leanfare && echo "Signed (ad hoc)."
+          m/leanfare --version | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$'
+          LEANFARE_DATA_DIR="$PWD/data" LEANFARE_NO_OPEN=1 LEANFARE_KEYSTORE=file LEANFARE_PORT=4791 m/leanfare --no-open &
+          for i in $(seq 1 100); do curl -fs http://127.0.0.1:4791/healthz >/dev/null && break; sleep 0.2; done
+          curl -fs http://127.0.0.1:4791/ | grep -q "<title>Leanfare"
+          kill %1
+
+  check-windows:
+    needs: build
+    runs-on: windows-latest
+    continue-on-error: true # Windows builds are new: a failure here keeps only the Windows file off the release
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: The Windows build starts and serves its page
+        id: check
+        shell: pwsh
+        run: |
+          Expand-Archive dist/leanfare-windows-x64.zip -DestinationPath w
+          $v = & .\w\leanfare.exe --version
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "--version said $v" }
+          $env:LEANFARE_DATA_DIR = "$PWD\data"; $env:LEANFARE_NO_OPEN = "1"; $env:LEANFARE_KEYSTORE = "file"; $env:LEANFARE_PORT = "4791"
+          $p = Start-Process -FilePath .\w\leanfare.exe -ArgumentList "--no-open" -PassThru
+          $up = $false
+          for ($i = 0; $i -lt 100 -and -not $up; $i++) { try { $up = (Invoke-WebRequest http://127.0.0.1:4791/healthz -UseBasicParsing).StatusCode -eq 200 } catch { Start-Sleep -Milliseconds 200 } }
+          if (-not $up) { throw "it did not start" }
+          if ((Invoke-WebRequest http://127.0.0.1:4791/ -UseBasicParsing).Content -notmatch "<title>Leanfare") { throw "no page" }
+          Stop-Process -Id $p.Id
+          "ok=true" >> $env:GITHUB_OUTPUT
+
+  publish:
+    needs: [build, check-mac, check-windows]
+    if: ${{ always() && needs.build.result == 'success' && needs.check-mac.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINDOWS_OK: ${{ needs.check-windows.outputs.ok }}
+        run: |
+          files="dist/leanfare-darwin-arm64.tar.gz dist/leanfare-darwin-x64.tar.gz dist/leanfare-linux-x64.tar.gz dist/leanfare-linux-arm64.tar.gz dist/SHA256SUMS"
+          if [ "$WINDOWS_OK" = true ]; then files="$files dist/leanfare-windows-x64.zip"; else echo "The Windows check failed: its file stays off this release."; fi
+          gh release upload "$TAG" $files --clobber --repo "$GITHUB_REPOSITORY"

@@ -412,7 +412,8 @@
     for (const x of st.notices) {
       list.push(h("div", { class: "notice " + x.level }, h("span", { class: "grow", text: x.text }),
         x.kind === "retire" ? h("button", { class: "btn small", text: "Settings", onclick: () => setTab("settings") }) : null,
-        x.kind === "budget" ? h("button", { class: "btn small", text: "Budget", onclick: () => setTab("settings") }) : null));
+        x.kind === "budget" ? h("button", { class: "btn small", text: "Budget", onclick: () => setTab("settings") }) : null,
+        x.kind === "update" && x.url ? h("a", { class: "btn small", href: x.url, target: "_blank", rel: "noopener noreferrer", text: "What changed" }) : null));
     }
     n.replaceChildren(...list);
   }
@@ -2127,6 +2128,9 @@
           h("label", { class: "btn", title: "Leanfare's export, or the .zip (or conversations.json) ChatGPT or Claude emails you" }, "Import chats",
             h("input", { type: "file", hidden: true, accept: ".json,.zip,application/json,application/zip", onchange: (e) => { importFile(e.target.files[0]); e.target.value = ""; } }))),
         h("p", { text: "Export saves every chat, with its files, as one file. Import reads that file, or the export ChatGPT or Claude emails you (the .zip, or the conversations.json inside it). The cost ledger never keeps what you wrote, only token counts and costs." })),
+      h("div", { class: "setting" }, h("h3", { text: "New versions" }),
+        h("label", { class: "check" }, h("input", { type: "checkbox", checked: s.updateCheck !== false, onchange: (e) => patchSettings({ updateCheck: e.target.checked }, e.target.checked ? "Leanfare will say when a new version is out." : "Leanfare will not look for new versions.") }), "Tell me when a new version is out"),
+        h("p", { text: `You have Leanfare ${st.version}. Once a day it asks GitHub's public list of releases whether there is a newer one; nothing about you or your use is sent.` })),
       h("div", { class: "setting" }, h("h3", { text: "Use Leanfare from your other apps" }),
         h("p", { text: `Point any app or script that speaks OpenAI's or Anthropic's format here. ${lock.on ? "Use the access key below as its API key." : "Any API key works."} Model: auto, auto-save, auto-best, or a model id such as google/gemini-3.8-flash.` }),
         h("div", { class: "addr" }, h("span", { class: "grow", text: `OpenAI address: ${addr}/v1` }), copyBtn(`${addr}/v1`)),
