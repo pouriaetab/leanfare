@@ -1251,6 +1251,7 @@
       if (S.plans && S.plans.month !== S.savings.month) S.plans = null; // another month: never show this one's numbers under it
       renderSavings();
       if (!S.plans) loadPlans(false).catch(() => {}); // the log files can take a moment: the rest of the page does not wait
+      loadTrial();
     } catch (e) { failed(e); }
   }
 
@@ -1367,6 +1368,85 @@
       d.weighted !== null && d.passed + d.failed >= 5 ? h("p", { class: "fine", text: `Weighted by each answer's chance of being checked, about ${pct(d.weighted)} of all handed over answers would pass.` }) : null);
   }
 
+  // ---- the delegate trial (trial.ts) ------------------------------------------------------------
+  // Before Claude hands work over on its own: questions with known answers, at three efforts.
+  async function loadTrial() {
+    try { S.trial = await api("/api/trial"); } catch { return; }
+    const old = $("#trialCard");
+    if (old) old.replaceWith(trialCardEl());
+    if (S.trial.running) pollTrial();
+  }
+  let trialTimer = null;
+  function pollTrial() {
+    clearTimeout(trialTimer);
+    trialTimer = setTimeout(async () => {
+      const was = S.trial?.running;
+      await loadTrial();
+      if (was && S.trial && !S.trial.running) { toast("The trial is done.", "done"); loadSavings(); }
+    }, 2000);
+  }
+  const secsShort = (x) => (x === null || x === undefined ? "—" : x < 1.5 ? "about a second" : x < 90 ? `${Math.round(x)} s` : `${(x / 60).toFixed(1)} min`);
+  function trialCardEl() {
+    const t = S.trial;
+    const card = h("div", { class: "card trial", id: "trialCard" }, h("h3", {}, "Try the delegate first", h("span", { class: "grow" }), h("small", { text: "the trial" })));
+    if (!t) { card.append(h("p", { class: "fine", text: "Loading…" })); return card; }
+    const r = t.report;
+    const e = t.estimate;
+    const about = "10 questions with known answers about files Leanfare makes up (a log, a settings file, orders, code, notes, a long access log), each asked at low, medium and high effort the way Claude asks. Nothing of yours is sent.";
+    if (t.running && r) {
+      card.append(h("p", { text: `Answer ${r.done} of ${r.total}…` }), trialTable(r),
+        runButton("Stop the trial", async () => { S.trial = await api("/api/trial/stop", { body: {} }); toast("Trial stopped.", "done"); loadTrial(); }, "btn small"));
+      return card;
+    }
+    const startBtn = (label) => runButton(label, async () => {
+      S.trial = await api("/api/trial/start", { body: {} });
+      const old = $("#trialCard");
+      if (old) old.replaceWith(trialCardEl());
+      pollTrial();
+    }, "btn small primary");
+    const estText = !e ? "" : !e.models.low ? "Add a key and tick a model first: the trial asks the models you ticked."
+      : `${e.estimate === 0 ? "$0 on the models you ticked now (free)" : e.estimate === null ? "On the models you ticked now" : `About ${money(e.estimate)} on the models you ticked now`}${typeof e.seconds === "number" ? `, about ${Math.max(1, Math.round(e.seconds / 60))} min` : ""}: ${["low", "medium", "high"].map((k) => `${k} ${labelOf(e.models[k])}`).join(", ")}.`;
+    if (!r) {
+      card.append(h("p", { text: `Before Claude hands work to Leanfare on its own, see how your models do. ${about}` }), estText ? h("p", { class: "fine", text: estText }) : null,
+        e?.models.low ? startBtn("Run the trial") : null);
+      return card;
+    }
+    card.append(h("p", { class: "fine", text: `${r.status === "done" ? "Last run" : `Last run, ${r.status} after ${r.done} of ${r.total} answers`}: ${ago(r.finished ?? r.started)}, Leanfare ${r.version}.` }), trialTable(r));
+    const c = r.checks;
+    if (c.passed + c.failed + c.other > 0) card.append(h("p", { class: "fine", text: `Checks at high effort: ${c.passed} passed, ${c.failed} failed${c.failed ? ` (right after asking again: ${c.fixed})` : ""}; wrong answers the check passed: ${c.missed}${c.other ? `; not checked or unclear: ${c.other}` : ""}.` }));
+    if (r.lowest) card.append(h("div", { class: "trial-verdict" },
+      h("p", { text: `${cap(r.lowest)} effort passes (at most one miss): Claude can hand reading work to Leanfare at effort ${r.lowest}. For Claude Code to do it on its own, add this line to CLAUDE.md:` }),
+      h("code", { text: r.claudeLine }),
+      h("button", { class: "btn small", type: "button", text: "Copy the line", onclick: () => copyText(r.claudeLine) })));
+    else if (r.status === "done") card.append(h("p", { text: "No effort passed (at most one miss): keep checking what the delegate hands back, or tick stronger models and run the trial again." }));
+    if (r.misses.length) card.append(h("details", {}, h("summary", { text: `Wrong answers (${r.misses.length})` }),
+      h("ul", {}, ...r.misses.map((m) => h("li", { text: `${m.effort} · ${m.what}: said "${m.said}", known ${m.known}` })))));
+    if (r.errors.length) card.append(h("details", {}, h("summary", { text: `No answer (${r.errors.length})` }),
+      h("ul", {}, ...r.errors.map((x) => h("li", { text: `${x.effort} · ${x.q}: ${x.error}` })))));
+    card.append(h("div", { class: "row trial-share" },
+      h("a", { class: "btn small", href: r.share.url, target: "_blank", rel: "noopener noreferrer", text: "Share on GitHub" }),
+      h("button", { class: "btn small", type: "button", text: "Copy the results", onclick: () => copyText(`${r.share.title}\n\n${r.share.body}`) }),
+      h("span", { class: "grow" }),
+      e?.models.low ? startBtn("Run again") : null),
+      h("p", { class: "fine", text: "Share opens a GitHub issue with these numbers filled in; you read it and press Submit yourself. Nothing is sent on its own." }),
+      estText && e?.models.low ? h("p", { class: "fine", text: `Again: ${estText.charAt(0).toLowerCase()}${estText.slice(1)}` }) : null);
+    return card;
+  }
+  const cap = (x) => x.charAt(0).toUpperCase() + x.slice(1);
+  const labelOf = (id) => { for (const ms of Object.values(S.st?.models ?? {})) { const m = ms.find((x) => x.id === id); if (m) return m.label; } return id ?? "none"; };
+  function trialTable(r) {
+    const V = { passes: "passes", "does not pass": "does not pass", "not decided": "" };
+    return h("table", { class: "trial-table" },
+      h("thead", {}, h("tr", {}, ...["Effort", "Right", "Half took under", "Cost", "Models", ""].map((x) => h("th", { text: x })))),
+      h("tbody", {}, ...r.arms.map((a) => h("tr", {},
+        h("td", { text: a.label }),
+        h("td", { text: a.asked ? `${a.right} of ${a.answered}${a.answered < a.asked ? ` (${a.asked - a.answered} no answer)` : ""}` : "—" }),
+        h("td", { text: secsShort(a.medianSeconds) }),
+        h("td", { text: a.asked ? money(a.cost) : "—" }),
+        h("td", { text: a.models.map((m) => `${m.label}${a.models.length > 1 ? ` ×${m.count}` : ""}`).join(", ") || "—" }),
+        h("td", { class: a.verdict === "passes" ? "good" : a.verdict === "does not pass" ? "bad" : "", text: a.asked ? V[a.verdict] : "" })))));
+  }
+
   function stat(key, label, value, sub, cls = "") {
     const def = S.savings.definitions[key];
     return h("div", { class: "stat" },
@@ -1427,7 +1507,7 @@
     const notes = [];
     if (v.unpriced) notes.push(`${num(v.unpriced)} answer${v.unpriced === 1 ? " has" : "s have"} no listed price and count as $0 here.`);
     if (v.estimated) notes.push(`Token counts were estimated for ${num(v.estimated)} answer${v.estimated === 1 ? "" : "s"} (the provider did not report them).`);
-    const SOURCES = { chat: "Chat", openai: "Apps (OpenAI address)", anthropic: "Apps (Anthropic address)", delegate: "Delegated", check: "Checks" };
+    const SOURCES = { chat: "Chat", openai: "Apps (OpenAI address)", anthropic: "Apps (Anthropic address)", delegate: "Delegated", check: "Checks", trial: "Trial" };
     const src = v.bySource.map((s) => `${SOURCES[s.source] ?? s.source}: ${num(s.answers)}`).join(" · ");
     el.replaceChildren(
       h("div", { class: "sv-head" }, h("h2", { text: title }), h("span", { class: "grow" }), pickMonth, runButton("Refresh", async (signal) => { await loadSavings(); await loadPlans(true, signal); toast("Up to date.", "done"); })),
@@ -1435,6 +1515,7 @@
       h("div", { class: "section-title", text: "Pay per use: what your keys and credits spent through Leanfare" }),
       cards,
       delegateCardEl(v.delegate),
+      trialCardEl(),
       h("div", { class: "sv-grid" },
         h("div", { class: "card" }, h("h3", {}, "By model", h("span", { class: "grow" }), h("small", { text: src })), h("div", { class: "scroll" }, byModel)),
         h("div", { class: "card" }, h("h3", { text: "By task" }), h("div", { class: "scroll" }, byTask)),

@@ -436,3 +436,17 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
 .apps .app-row { border-top: 1px solid var(--line); padding: 8px 0 2px; }
 .apps .app-row:first-of-type { border-top: 0; }
 .apps .manual code { word-break: break-all; }
+
+/* The delegate trial (Savings) */
+.trial-table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 6px 0 10px; }
+.trial-table th, .trial-table td { text-align: left; padding: 5px 8px 5px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+.trial-table th { color: var(--muted); font-weight: 600; font-size: 12px; }
+.trial-table td.good { color: var(--good); font-weight: 600; }
+.trial-table td.bad { color: var(--bad); }
+.trial-verdict { background: var(--good-soft); border-radius: var(--radius-sm); padding: 8px 12px; margin: 8px 0; }
+.trial-verdict p { margin: 0 0 6px; }
+.trial-verdict code { display: block; font-family: var(--mono); font-size: 12px; margin: 0 0 8px; white-space: pre-wrap; word-break: break-word; }
+.trial details { margin: 6px 0; font-size: 13px; }
+.trial details ul { margin: 6px 0 0 18px; padding: 0; }
+.trial-share { gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+@media (max-width: 720px) { .trial-table { display: block; overflow-x: auto; } }

@@ -1056,3 +1056,42 @@ describe("Speed: in Settings and beside the message box", () => {
     expect(bad(doc)).toBe(false);
   }, 20000);
 });
+
+describe("The delegate trial on Savings", () => {
+  const { QUESTIONS, REPO_ISSUES, timing, truths } = require("../src/trial") as typeof import("../src/trial");
+  const bad = (doc: any) => /\bnull\b|\bundefined\b|NaN|\[object Object\]/.test(doc.body.textContent);
+  async function waitFor(ok: () => boolean, ms = 15000) { for (let i = 0; i < ms / 50 && !ok(); i++) await Bun.sleep(50); }
+  beforeEach(async () => { await reset({ ticked: ALL_TICKED }); timing.pause = 0; });
+  afterEach(() => { timing.pause = 2000; });
+
+  test("Run the trial: its estimate first, then the table, the verdict, the line to copy and Share", async () => {
+    await keys("openai", "anthropic", "google", "deepseek", "xai", "mistral");
+    const T = truths();
+    fake.hooks.answer = (prompt, provider) => {
+      const i = QUESTIONS.findIndex((q) => prompt.includes(q.task));
+      if (i < 0 || prompt.includes("You check another model's work")) return prompt.includes("You check another model's work") ? "PASS" : null;
+      if (provider === "deepseek" && QUESTIONS[i].id === "csv-refunds") return "2400.00";
+      return Array.isArray(T[i]) ? (T[i] as string[]).join(", ") : String(T[i]);
+    };
+    const doc = await openApp();
+    doc.querySelector('.tabs button[data-tab="savings"]').click();
+    const card = () => doc.querySelector("#trialCard");
+    await waitFor(() => !!card() && card().textContent.includes("Run the trial"));
+    expect(card().textContent).toContain("Try the delegate first");
+    expect(card().textContent).toMatch(/About \$[\d.]+ on the models you ticked now, about \d+ min: low DeepSeek V4 Flash, medium Gemini 3\.8 Flash, high Gemini 3\.8 Flash\./);
+    [...card().querySelectorAll("button")].find((b: any) => b.textContent === "Run the trial").click();
+    await waitFor(() => !!card()?.querySelector(".trial-verdict"));
+    expect(card().textContent).toContain("Low effort passes (at most one miss): Claude can hand reading work to Leanfare at effort low.");
+    expect(card().querySelector(".trial-verdict code").textContent).toBe("To read large files or logs, use the leanfare delegate tool with effort low, and work from its answer.");
+    const cells = [...card().querySelectorAll(".trial-table tbody tr")].map((tr: any) => [...tr.querySelectorAll("td")].map((td: any) => td.textContent));
+    expect(cells.map((c) => [c[0], c[1], c[5]])).toEqual([["low, no check", "9 of 10", "passes"], ["medium, no check", "10 of 10", "passes"], ["high, checked", "10 of 10", "passes"]]);
+    expect(card().textContent).toContain("Wrong answers (1)");
+    const share = [...card().querySelectorAll("a")].find((a: any) => a.textContent === "Share on GitHub");
+    expect(share.getAttribute("href")).toStartWith(`${REPO_ISSUES}?title=`);
+    expect(share.getAttribute("target")).toBe("_blank");
+    expect([...card().querySelectorAll("button")].map((b: any) => b.textContent)).toEqual(expect.arrayContaining(["Copy the line", "Copy the results", "Run again"]));
+    await waitFor(() => doc.querySelector("#tab-savings").textContent.includes("Trial: 30")); // Savings reloads just after the verdict shows
+    expect(doc.querySelector("#tab-savings").textContent).toContain("Trial: 30"); // the ledger's sources, under By model
+    expect(bad(doc)).toBe(false);
+  }, 30000);
+});
