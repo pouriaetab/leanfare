@@ -4,7 +4,7 @@ import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chainSeconds, checkPlan, forgetPlans, keptPlan, makePlan, paidOf, readSplit, rulesSplit, runView, SIZE_TOKENS, SPLIT_SYSTEM, splitView, startRun, stopRun, tableOf, type Part } from "../src/planner";
+import { chainSeconds, checkPlan, forgetPlans, keptPlan, makePlan, modelInYourApp, nothingOut, paidOf, readSplit, rulesSplit, runView, SIZE_TOKENS, SPLIT_SYSTEM, splitView, startRun, stopRun, tableOf, type Part } from "../src/planner";
 import { saveSettings } from "../src/settings";
 import { saveSnap } from "../src/statusline";
 import { ALL_TICKED, boot, fake, keys, ledger, reset, ui } from "./app";
@@ -93,7 +93,7 @@ describe("where each part runs", () => {
     expect(r.table).toContain("you (Claude Code)");
     expect(r.table).toContain("after 3");
     expect(r.next).toContain("Run part 1 now with delegate");
-    expect(r.next).toContain("Do parts 3 and 4 yourself.");
+    expect(r.next).toContain("Do these yourself: part 3 on Claude Sonnet 4.6, part 4 on Claude Sonnet 4.6");
     // The split itself is one answer in the ledger, as "plan", with no words.
     const rows = ledger().filter((x: any) => x.source === "plan");
     expect(rows.length).toBe(1);
@@ -155,12 +155,12 @@ describe("where each part runs", () => {
 
   test("the table says how much of the plan each part keeps out or takes, and the totals", () => {
     const parts = [
-      { n: 1, title: "Read | the logs", kind: "read", effort: "low", needs: [], task: "", files: [], size: "large", where: "local", model: { id: "ollama/qwen", label: "Qwen" }, seconds: 40, tokens: SIZE_TOKENS.large, cost: 0, why: "" },
-      { n: 2, title: "Fix it", kind: "code", effort: "high", needs: [1], task: "", files: [], size: "small", where: "you", model: null, seconds: null, tokens: 5000, cost: null, why: "" },
+      { n: 1, title: "Read | the logs", kind: "read", effort: "low", needs: [], task: "", files: [], size: "large", where: "local", model: { id: "ollama/qwen", label: "Qwen" }, use: null, seconds: 40, tokens: SIZE_TOKENS.large, cost: 0, why: "" },
+      { n: 2, title: "Fix it", kind: "code", effort: "high", needs: [1], task: "", files: [], size: "small", where: "you", model: null, use: { id: "anthropic/claude-sonnet-4-6", label: "Claude Sonnet 4.6", alias: "sonnet" }, seconds: null, tokens: 5000, cost: null, why: "" },
     ] as Part[];
     const t = tableOf({ task: "x", manager: "Claude Code", parts, totals: { parts: 2, out: 1, later: 0, kept: SIZE_TOKENS.large, used: 5000, seconds: 40, after: null, cost: 0 }, split: { by: "rules", model: null, cost: null, note: null }, limits: null });
     expect(t).toContain("| 1 | Read / the logs | read, low | Leanfare, on this computer | Qwen | ~40 s | ~150k kept | $0 | now |");
-    expect(t).toContain("| 2 | Fix it | code, high | you (Claude Code) | your model |  | ~5k of your plan | in your plan | after 1 |");
+    expect(t).toContain("| 2 | Fix it | code, high | you (Claude Code) | Claude Sonnet 4.6 |  | ~5k of your plan | in your plan | after 1 |"); // the model to pick in your app
     expect(t).toContain("1 of 2 parts go to Leanfare, keeping about 150k tokens out of your plan; about 5k stay in it.");
   });
 
@@ -335,5 +335,48 @@ describe("folders and searches", () => {
     expect(first.status).toBe("failed");
     expect(first.error).toBeTruthy();
     expect(second.status).toBe("blocked"); // it needs the sources
+  });
+});
+
+describe("the model to pick in your app", () => {
+  test("a part that stays with you names the model to pick there: the cheapest of that app's maker rated well enough", () => {
+    const part = (kind: string, effort: string) => ({ kind, effort, task: "Fix the parser" } as any);
+    expect(modelInYourApp(part("code", "high"), "Claude Code")).toEqual({ id: "anthropic/claude-sonnet-4-6", label: "Claude Sonnet 4.6", alias: "sonnet" });
+    expect(modelInYourApp(part("code", "low"), "Claude Code")).toEqual({ id: "anthropic/claude-haiku-4-5", label: "Claude Haiku 4.5", alias: "haiku" }); // light work, the light model
+    expect(modelInYourApp(part("code", "medium"), "Codex")).toEqual({ id: "openai/gpt-5-mini", label: "GPT-5 mini", alias: null }); // never a retired or unrated one
+    expect(modelInYourApp(part("reason", "high"), "you")).toBeNull(); // no app, no names
+    expect(modelInYourApp(part("reason", "high"), "Perplexity")).toBeNull();
+  });
+
+  test("the plan names it in the table and the next steps; with nothing going out, it says what would send some out", async () => {
+    await keys("openai", "google", "deepseek");
+    fake.hooks.answer = (p) => (p.includes("The person works in") ? JSON.stringify({ parts: [
+      { title: "Look up how its router works", kind: "search", effort: "medium", needs: [], size: "none", task: "Find how LiteLLM's router picks a deployment." },
+      { title: "Design a smaller router", kind: "reason", effort: "high", needs: [1], size: "small", task: "Design it." },
+      { title: "Build it", kind: "code", effort: "high", needs: [2], size: "medium", task: "Build it with tests." },
+    ] }) : null);
+    const plan = await makePlan({ task: "Reverse engineer LiteLLM's router and build a smaller one", files: [], manager: "Claude Code", signal: signal() });
+    expect(plan.parts.map((p) => p.where)).toEqual(["you", "you", "you"]);
+    expect(plan.parts.map((p) => p.use?.label)).toEqual(["Claude Sonnet 4.6", "Claude Sonnet 4.6", "Claude Sonnet 4.6"]);
+    expect(plan.parts[0].why).toContain("which Claude Code can do; no model you ticked in Leanfare does (tick Perplexity Sonar to send searches out)");
+    expect(plan.table).toContain("| 1 | Look up how its router works | search, medium | you (Claude Code) | Claude Sonnet 4.6 |");
+    expect(plan.table).not.toContain("your model");
+    expect(plan.table).toContain("Nothing goes to Leanfare: tick Perplexity Sonar in Leanfare and the searches go out; name the files or folder it is about and the reading goes out.");
+    expect(plan.next).toContain("Do these yourself: part 1 on Claude Sonnet 4.6, part 2 on Claude Sonnet 4.6, part 3 on Claude Sonnet 4.6. For a part on another model than the one you run on, use a subagent with that model (model: opus, sonnet or haiku).");
+    expect(nothingOut([{ kind: "code", where: "you", files: ["a.ts"] }])).toBe("Nothing goes to Leanfare: every part changes the project or needs the hardest judgement.");
+  });
+
+  test("a reading part with no files named says it works from what the model knows", async () => {
+    await keys("openai", "google", "deepseek");
+    const plan = await makePlan({ task: "Fix the failing tests in the parser", files: [], manager: "Claude Code", split: "rules", signal: signal() });
+    expect(plan.parts[0].where).not.toBe("you");
+    expect(plan.parts[0].use).toBeNull(); // Leanfare runs it: its model is in model
+    expect(plan.parts[0].why).toContain("no files named, so it works from what the model knows: name the files or folder it reads");
+  });
+
+  test("the split asks for code to be read, not searched for, and for a review after a change", () => {
+    expect(SPLIT_SYSTEM).toContain("search is for facts on the web");
+    expect(SPLIT_SYSTEM).toContain("the first part gets it (kind act: clone or download it)");
+    expect(SPLIT_SYSTEM).toContain("ends with a part that reviews the change");
   });
 });

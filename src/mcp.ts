@@ -298,7 +298,9 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
     const runNote = j.totals.out - (j.totals.later ?? 0) > 0 ? `\n\nOr call plan_run with id ${j.id} to run Leanfare's parts in the background, then plan_status for their answers.${saved ? ` The plan is saved in ${saved}/plan.md.` : ""}` : "";
     return text(`${j.table}\n\n${j.next}${runNote}${note}`, {
       id: j.id, saved_in: saved,
-      parts: j.parts.map((p: any) => ({ n: p.n, title: p.title, kind: p.kind, effort: p.effort, needs: p.needs, runs_on: p.where, model: p.model?.id ?? null, model_label: p.model?.label ?? null, seconds: p.seconds, tokens: p.tokens, cost_usd: p.cost,
+      parts: j.parts.map((p: any) => ({ n: p.n, title: p.title, kind: p.kind, effort: p.effort, needs: p.needs, runs_on: p.where, model: p.model?.id ?? null, model_label: p.model?.label ?? null,
+        your_model: p.use ?? null, // a part that stays with you: the model to pick for it in your app (alias: Claude Code's name for it)
+        seconds: p.seconds, tokens: p.tokens, cost_usd: p.cost,
         files: p.files.slice(0, 50), more_files: Math.max(0, p.files.length - 50), task: p.task })),
       totals: j.totals, split: j.split, limits: j.limits,
     });
