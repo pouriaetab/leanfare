@@ -24,6 +24,8 @@ for (const k of Object.keys(process.env)) if (k.endsWith("_API_KEY")) delete pro
 process.env.HOME = mkdtempSync(join(tmpdir(), "leanfare-test-home-"));
 // The apps Savings finds (found.ts) are looked for only in the tests' own Applications folder.
 process.env.LEANFARE_APP_FOLDERS = join(process.env.HOME, "Applications");
+// A project of the tests' own: plan_status saves the answers in .leanfare/ of the folder it runs in, never this repo's.
+process.chdir(mkdtempSync(join(tmpdir(), "leanfare-test-project-")));
 
 const fake = startFake();
 fake.pointEnv();

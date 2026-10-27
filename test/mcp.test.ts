@@ -1,7 +1,7 @@
 // leanfare mcp, the real command over stdio, against the test server: both eras
 // of the protocol, and every tool.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ALL_TICKED, boot, fake, keys, ledger, reset } from "./app";
@@ -13,6 +13,8 @@ let child: ReturnType<typeof Bun.spawn> | null = null;
 let buffer = "";
 const waiting = new Map<number | string, (m: any) => void>();
 let nextId = 1;
+// Questions the door asks this client (elicitation/create): answered by the test that expects one.
+let onRequest: ((msg: any) => void) | null = null;
 
 beforeAll(async () => {
   url = (await boot()).url;
@@ -28,6 +30,7 @@ beforeAll(async () => {
       while ((i = buffer.indexOf("\n")) >= 0) {
         const line = buffer.slice(0, i); buffer = buffer.slice(i + 1);
         const msg = JSON.parse(line);
+        if (msg.method) { onRequest?.(msg); continue; }
         waiting.get(msg.id)?.(msg);
         waiting.delete(msg.id);
       }
@@ -55,7 +58,7 @@ describe("the protocol", () => {
     const unknown = await rpc("initialize", { protocolVersion: "2019-01-01", capabilities: {} });
     expect(unknown.result.protocolVersion).toBe("2025-11-25");
     const list = await rpc("tools/list", {});
-    expect(list.result.tools.map((t: any) => t.name)).toEqual(["plan", "ask", "delegate", "spend", "models", "estimate", "trial"]);
+    expect(list.result.tools.map((t: any) => t.name)).toEqual(["plan", "plan_run", "plan_status", "ask", "delegate", "spend", "models", "estimate", "trial"]);
     expect(list.result.resultType).toBeUndefined();
   });
 
@@ -65,7 +68,7 @@ describe("the protocol", () => {
     expect(d.result._meta["io.modelcontextprotocol/serverInfo"].name).toBe("leanfare");
     const list = await rpc("tools/list", modern());
     expect(list.result.resultType).toBe("complete");
-    expect(list.result.tools).toHaveLength(7);
+    expect(list.result.tools).toHaveLength(9);
     for (const t of list.result.tools) expect(t.inputSchema.type).toBe("object");
   });
 
@@ -109,6 +112,44 @@ describe("the tools", () => {
     expect(named.result.isError).toBe(true);
     expect(named.result.content[0].text).toContain("was not counted");
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("plan_run and plan_status: Leanfare's parts in the background, the answers saved in the project; paid parts ask the user here first", async () => {
+    await keys("openai", "google", "deepseek");
+    const dir = mkdtempSync(join(tmpdir(), "plan-shared-"));
+    fake.hooks.answer = (prompt) => (prompt.includes("The person works in") ? JSON.stringify({ parts: [
+      { title: "Read the logs", kind: "read", effort: "low", needs: [], size: "small", task: "Find the errors in the logs." },
+      { title: "Fix the cause", kind: "code", effort: "high", needs: [1], size: "small", task: "Fix it." },
+    ] }) : prompt.includes("Find the errors") ? "Three timeouts at 10:02." : null);
+    try {
+      // A client that can show questions (elicitation), saying yes to the paid part.
+      await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: { elicitation: {} }, clientInfo: { name: "claude-code", version: "2.1" } });
+      const questions: any[] = [];
+      onRequest = (msg) => { questions.push(msg); write({ jsonrpc: "2.0", id: msg.id, result: { action: "accept", content: { run: true } } }); };
+      const plan = await rpc("tools/call", { name: "plan", arguments: { task: "The nightly job fails: find out why and fix it", folder: dir } });
+      const id = plan.result.structuredContent.id;
+      expect(plan.result.content[0].text).toContain(`plan_run with id ${id}`);
+      expect(readFileSync(join(dir, ".leanfare", "plans", id, "plan.md"), "utf8")).toContain("| # | Part |");
+      expect(readFileSync(join(dir, ".leanfare", ".gitignore"), "utf8")).toContain("*"); // git leaves the folder out
+      const run = await rpc("tools/call", { name: "plan_run", arguments: { id } });
+      expect(questions.length).toBe(1);
+      expect(questions[0].method).toBe("elicitation/create");
+      expect(questions[0].params.message).toContain("paid parts (part 1)");
+      expect(run.result.structuredContent.asks).toBeNull(); // the yes came: nothing waits for one
+      const st = await rpc("tools/call", { name: "plan_status", arguments: { id, wait: 10, folder: dir } });
+      const t = st.result.content[0].text;
+      expect(t).toContain("| 1 | Read the logs | done |");
+      expect(t).toContain("| 2 | Fix the cause | yours to do |");
+      expect(t).toContain("Three timeouts at 10:02.");
+      expect(st.result.structuredContent.saved_in).toBe(`.leanfare/plans/${id}`);
+      expect(readFileSync(join(dir, ".leanfare", "plans", id, "part-1.md"), "utf8")).toContain("Three timeouts at 10:02.");
+      // No yes: the paid part waits, and the tool says to ask the user.
+      onRequest = (msg) => write({ jsonrpc: "2.0", id: msg.id, result: { action: "decline" } });
+      const again = await rpc("tools/call", { name: "plan", arguments: { task: "The nightly job fails again: find out why", folder: dir } });
+      const r2 = await rpc("tools/call", { name: "plan_run", arguments: { id: again.result.structuredContent.id } });
+      expect(r2.result.content[0].text).toContain("wait for the user's yes");
+      expect(r2.result.structuredContent.asks.parts).toEqual([1]);
+    } finally { onRequest = null; fake.hooks.answer = null; rmSync(dir, { recursive: true, force: true }); }
   });
 
   test("ask: the answer, the model, the cost, and it counts in the ledger", async () => {
@@ -226,6 +267,6 @@ describe("the end of the input", () => {
     expect((await run('{"jsonrpc":"2.0","id":1,"method":"ping"}')).map((m) => m.id)).toEqual([1]);
     const two = await run('{"jsonrpc":"2.0","id":1,"method":"ping"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}');
     expect(two.map((m) => m.id)).toEqual([1, 2]);
-    expect(two[1].result.tools).toHaveLength(7);
+    expect(two[1].result.tools).toHaveLength(9);
   }, 20000);
 });
