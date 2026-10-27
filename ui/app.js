@@ -2260,7 +2260,7 @@
     if (S.grades === undefined) { S.grades = null; loadGrades(); }
     const list = S.grades ?? [];
     return h("div", { class: "setting", id: "gradesCard" }, h("h3", { text: "How the models did for you" }),
-      h("p", { text: "When the app you work in uses an answer one of Leanfare's models gave for a part, it grades it: good, partly or wrong (you can too, in the Plan tab). Leanfare keeps only the grade, never the words. A model graded below good too often for a kind (at least 3 of its last 20 grades, under half good) is moved down: Auto, plans and the delegate skip it for that kind while another model can take it." }),
+      h("p", { text: "When the app you work in uses an answer one of Leanfare's models gave for a part, it grades it: good, partly or wrong (you can too, in the Plan tab). Leanfare keeps only the grade, never the words. A model graded below good too often for a kind (at least 3 of its last 20 grades, under half good) is moved down: plans and the delegate skip it for that kind while another model can take it." }),
       !list.length ? h("p", { class: "note", text: S.grades === null ? "Reading the grades…" : "No grades yet." })
         : h("div", { class: "lmodels" }, ...list.map((g) => h("div", { class: "lrow" + (g.down ? " down" : "") },
           h("span", { class: "nm", title: g.model, text: `${g.label} · ${GRADE_KIND[g.kind] ?? g.kind}` }),

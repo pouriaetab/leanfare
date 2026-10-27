@@ -9,7 +9,9 @@ Every top AI model in one app on your own computer, and on top of the AI apps yo
 - **The cost and the time of every answer.** An estimate before you send, with its time, and the exact cost after. At the same quality, choose the cheapest, the cheapest within a time, or the fastest.
 - **Automatic model choice.** Leanfare guesses the task (coding, math, writing, long documents and more) and picks the cheapest model you ticked that rates well for it. Every answer says which model wrote it and why.
 - **Claude hands work to cheaper models.** Through the `delegate` tool, Claude passes reading heavy work to the cheapest model that is good enough, and a stronger model checks a sample of the answers. **The trial** measures how well that goes on your own models before you rely on it.
-- **Plan a task across models.** Write what you want done, and Leanfare splits it into parts with the model for each: what changes your project or needs the hardest judgement stays with the app you work in, on your plan; reading and drafting go to local, free or cheap models, at once where they can. Claude Desktop and Cowork show the plan as a table in the chat, and Claude Code, Codex and Gemini CLI can plan on their own.
+- **Plan a task across models.** Write what you want done, and Leanfare splits it into parts with the model for each: what changes your project or needs the hardest judgement stays with the app you work in, on your plan; reading and drafting go to local, free or cheap models, or to your ChatGPT plan through Codex, at once where they can. Claude Desktop and Cowork show the plan as a table in the chat, and Claude Code, Codex and Gemini CLI can plan on their own.
+- **Models graded by how they did for you.** The app you work in grades each answer of Leanfare's it used: good, partly or wrong. A model graded below good too often for a kind of work is moved down, so the picks get better as you use them. Only the grade is kept, never the words.
+- **A free model that fits your computer.** Leanfare suggests the best rated open model (Apache 2.0) that runs in your computer's memory and fits on its disk, and has Ollama download it when you say yes. Auto and plans use models on your computer at the rating of the same model in the cloud, a little lower.
 - **A budget that holds.** Each request reserves the most it can cost before it goes out. A warning at 80%; at 100%, keep going on the cheapest model or stop.
 - **A chat that does the everyday things.** Short answers by default. Attach images, PDFs and text files. Edit a question, ask again, or ask another model and see both costs. Per chat instructions, readable thinking, search, export, and import from ChatGPT or Claude.
 - **Light and private.** One program, one SQLite file, no telemetry, no runtime dependencies. Keys stay in your system's keychain, or a file only you can read. Leanfare reads usage numbers, never your words (see [Privacy](#privacy)).
@@ -41,7 +43,7 @@ Paste one key, or start free:
 | Free way to start | How |
 |---|---|
 | Google Gemini | Make a free key at [Google AI Studio](https://aistudio.google.com/apikey) and paste it. On Google's free plan, Google may use your messages to improve its products. Tick "free plan" so its answers count as $0. |
-| Local models | Install [Ollama](https://ollama.com/download) and pull a model (`ollama pull llama3.2`), or load one in [LM Studio](https://lmstudio.ai) and start its local server. Leanfare finds them on its own. |
+| Local models | Install [Ollama](https://ollama.com/download): Settings, Local models, then suggests the best open model for this computer and downloads it when you say yes. Or load a model in [LM Studio](https://lmstudio.ai) and start its local server. Leanfare finds them on its own. |
 | OpenRouter | Press **Connect OpenRouter** and sign in on OpenRouter's page: Leanfare gets a key with nothing to copy. Models whose name ends in `:free` cost nothing. |
 | Groq | A free plan with daily limits: make a key at [console.groq.com](https://console.groq.com/keys) and paste it. |
 
@@ -71,6 +73,8 @@ The tools (an MCP server, `leanfare mcp`, which starts Leanfare when it is not r
 - **trial** runs the trial (below) and reports on it.
 - **plan** splits a task into parts, each with where it runs and its model, as a table (see [Plan a task](#plan-a-task)).
 - **plan_run**, **plan_status** and **plan_stop** run Leanfare's parts of a plan in the background, give their answers, and stop them.
+- **grade** says how good the answer of a plan's part or of `delegate` was: good, partly or wrong (see [Grades](#grades)).
+- **local_model** suggests the best open model for this computer, has Ollama download it after the user's yes, and says how the download goes.
 
 To add it by hand, the command is the `leanfare` program with the argument `mcp`, for example in Claude Desktop's settings file (Settings, Developer, Edit Config):
 
@@ -122,8 +126,16 @@ Write what you want done in the **Plan** tab, or let Claude call the `plan` tool
 - **Running it.** Parts that do not wait for each other run at once, and each part gets the answers of the parts it needs. In the Plan tab, press **Run Leanfare's parts**. In your app, Claude runs them with `delegate`, with Claude Code's `leanfare-worker` subagent (one per part, at once), or in the background with `plan_run`, then `plan_status` for the answers. The answers are also saved in the project, in `.leanfare/plans/<id>/`, a folder git ignores, where you and every app can read them. A part that waits for one of yours is yours to hand over once yours is done.
 - **Files.** Name files or folders and Leanfare measures them. Files that hold secrets are never read, and a folder's dotfiles and links are left out. One hand off takes at most 50 files and 4 MB; past that, the files whose names hold the task's words go first, and the table says how many go.
 - **Paid parts.** Parts on local and free models run on their own, and so do their checks. Paid parts run only with your yes: **Run** in the Plan tab or on the plan's page in the chat, or a question in apps that can ask (Claude Code). Settings can let a plan's paid parts run without asking up to an amount. Your monthly budget holds either way.
+- **Your ChatGPT plan, through Codex.** Turn it on in Settings, Your ChatGPT plan through Codex. Reading, drafting and working out parts then run on Codex (`codex exec`) before any pay per use model: read only, in the folder of their files, without your MCP servers, apps or plugins (they act outside its sandbox), two at a time, each for at most 15 minutes. They count toward your ChatGPT plan's Codex limits, and Leanfare pays nothing for them. Only when Codex is signed in with ChatGPT (an API key would be billed per use), not when you work in Codex itself (those parts are yours already), and not while your ChatGPT plan is at 85% of its 5 hours or its week, checked again when each part runs. Codex decides what it reads there, as when you use it.
+- **A local model.** When a part would be paid, or no model you ticked can take it, and a free open model fits this computer, the plan says which. Settings, Local models (or the `local_model` tool) downloads it on a yes.
 - **In the chat.** Claude Desktop and Cowork show the plan as a page in the chat (an MCP App): the table, Run and Stop, the answers as they come, and a button that hands them back to Claude.
 - **Plan by itself.** In Settings, In your apps, **Plan by itself** adds a few lines to Claude Code's `CLAUDE.md`, Codex's `AGENTS.md` or Gemini CLI's `GEMINI.md`, so the app calls the plan for a task with several parts. In Claude Code it also adds the `leanfare-worker` subagent (on Haiku) and a prompt hook that says how much of your plan is left. Leanfare changes only its own lines, and **Turn off** takes them out.
+
+### Grades
+
+Once the app you work in has used the answer of a part Leanfare ran, or of `delegate`, it grades it with the `grade` tool: good (used as it was), partly (fixed or redone in part) or wrong (not used). In the Plan tab you can grade too, under each answer. The grade goes with the model that answered and the kind of work: reading, drafting, working things out or searching.
+
+A model graded below good too often for a kind (at least 3 of its last 20 grades, under half good, partly counting half) is moved down: plans and the delegate skip it for that kind while another model can take it. Settings, How the models did for you, lists the grades of each model and gives one that was moved down another chance. Leanfare keeps only the model, the kind, the effort, the grade, who gave it and when, and only each model's last 20 grades for a kind.
 
 ## Set up without typing
 
@@ -192,6 +204,9 @@ Leanfare reads usage numbers, never your words.
 - **Find my keys** reads only the files named above, only when you press it; a key goes only to its own provider, to test it. **Your login shell's settings** are asked for key variables only (names ending in `_KEY`), and only by a Leanfare that did not start from a terminal.
 - **Your chats in Leanfare** stay on your computer and go only to the AI company you pick. The cost ledger, the delegate's and the trial's records keep models, token counts, times and costs, never what you wrote.
 - **A plan** goes to the model that splits it (or to none, by rules), and each part goes only to the model the table names for it. The answers are saved in your project's `.leanfare` folder, nowhere else.
+- **A part on Codex** goes to OpenAI through your own Codex command, as any Codex task does, and Codex reads what it needs, as when you use it. Leanfare asks Codex only how it is signed in, and never reads its sign in.
+- **Grades** keep the model, the kind of work and the grade, never the question or the answer.
+- **A local model** is downloaded by Ollama, from its library, only after your yes.
 - **The apps on this computer** are found by dates only: Spotlight's, and the times of their own folders and files (when each came and when it was last used). No file of theirs is opened.
 - **No telemetry.** Leanfare talks to the AI companies you use; to llmledger's price list once a day; to models.dev's list of providers when you add a provider or look for keys (kept for a day); to OpenRouter when you use it; and to GitHub's list of releases once a day to see whether a new version is out (Settings can turn this off). Nothing else, and nothing about you or your use.
 
@@ -224,6 +239,8 @@ Everything lives in `~/.leanfare`: the database (settings, cost ledger, chats an
 | Work left | What is left of a limit times how much work 1% holds, measured window by window from your own use (the 80th percentile of your windows, with a 90% range from 500 bootstrap draws); a starting estimate until three windows of your own. |
 | Pass rate | Checked answers that passed, out of those that passed or failed, with Wilson's 90% range. |
 | Trial pass | An effort passes when it gets at least 9 of the 10 trial questions right. |
+| Grade score | A model's grades for one kind of work, good 1, partly 0.5, wrong 0, averaged over its last 20. Under 0.5, from 3 grades on, it is moved down. |
+| Local rating | A model on your computer takes the Arena rating of the same model in the cloud (the same family and size), 15 points lower for the lighter copy. |
 
 ## Data and credits
 
@@ -240,7 +257,9 @@ Leanfare is not affiliated with any AI provider.
 - Subscriptions without usage numbers on your computer (Perplexity, Google AI, Copilot, Cursor) show their limits, not your use.
 - Your plans and what is left are estimates from the log files on this computer: work done elsewhere is not in them.
 - The delegate reads text files only (no PDFs or images yet).
-- A plan's parts run on models you have keys or local apps for. Your ChatGPT, Gemini or Claude subscription is not used for Leanfare's parts; the parts that stay with you use your own app's plan.
+- A plan's parts run on models you have keys or local apps for, and on your ChatGPT plan through Codex when you turn that on. Your Gemini or Claude subscription is not used for Leanfare's parts; the parts that stay with you use your own app's plan.
+- Grades come from the app you work in (or from you, in the Plan tab). An app that does not grade leaves every model as it is.
+- Models on your computer get at most 16k tokens of context, so Auto sends them only prompts that fit, and no request with tools or a response format (Ollama runs those at 4,096 tokens). A model Leanfare cannot match to a rated model in the cloud is not picked by Auto: choose it by name.
 - Tools with Claude models work through `/v1/messages`, not through the OpenAI address. There is no `/v1/responses` address yet.
 - The Windows build is new and less tested. The Mac app is built on your Mac from the code; a signed download comes later.
 
