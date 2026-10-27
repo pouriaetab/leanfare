@@ -25,7 +25,7 @@ import { homedir } from "node:os";
 import { dirname, relative, sep } from "node:path";
 import { CODEX_ID, CODEX_LABEL, codexFor, runCodex } from "./codex";
 import { DEFAULT_MAX_OUT, TIER, runDelegate, taskFor, type Effort, type Kind } from "./delegate";
-import { allModels, type Model } from "./data";
+import { LOCAL_CONTEXT, allModels, fitsText, localNeed, type Model } from "./data";
 import { chargeOf, plan as route, runChat, usableModels } from "./engine";
 import { addGrade, movedDown, standing, standingText, type GradedKind, type Verdict } from "./grades";
 import { gb, suggestLocal } from "./local";
@@ -285,7 +285,7 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
   const big = (part.effort === "high" && (part.kind === "reason" || part.kind === "write"));
   if (big && !near) return stay(`high effort judgement: your strongest model, in your plan`);
   const need = Math.ceil((r.tokens * 4) / 3) + DEFAULT_MAX_OUT; // as delegate counts it: three characters a token, and the answer
-  const fits = (m: Model) => m.context === null || m.context >= need;
+  const fits = (m: Model) => fitsText(m, r.tokens * 4, DEFAULT_MAX_OUT);
   const kindOk = part.kind === "search" ? (m: Model) => m.provider === "perplexity" && fits(m) : fits; // a search goes to a model that searches the web
   // A model the manager's grades moved down for this kind is skipped, while another can take the part.
   const graded = (m: Model) => kindOk(m) && !movedDown(m.id, part.kind);
@@ -486,8 +486,11 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
     cost: costs.some((c) => c === null) ? null : costs.reduce<number>((a, b) => a + (b ?? 0), 0),
   };
   // A part that goes to pay per use, or stays with you only because Leanfare had no model for it, could
-  // run free on this computer: the plan names a local model to download, when one fits.
-  const wantsLocal = placed.some((p) => DELEGATE_KIND[p.kind] && (p.where === "paid" || (p.where === "you" && p.why.startsWith("Leanfare has no model"))));
+  // run free on this computer, if a local model can take it (its context: at most 16k tokens, with room
+  // for the delegate's answer): the plan names a local model to download, when one fits.
+  const read = (p: Part) => p.tokens - (p.where === "you" ? OUT_YOU : OUT_LEANFARE);
+  const localTakes = (p: Part) => localNeed(read(p) * 4, DEFAULT_MAX_OUT) <= LOCAL_CONTEXT;
+  const wantsLocal = placed.some((p) => DELEGATE_KIND[p.kind] && localTakes(p) && (p.where === "paid" || (p.where === "you" && p.why.startsWith("Leanfare has no model"))));
   const sg = wantsLocal ? suggestLocal().suggestion : null;
   const local = sg ? { name: sg.name, size: sg.size, like: sg.like, rating: sg.rating, fit: sg.fit } : null;
   const base = { task: input.task, manager, parts: placed, totals, split, limits: known ? limits : null, local, codex: codex.why };

@@ -2,9 +2,9 @@
 // the same steps: wait while paused, choose the model, reserve the budget,
 // send, count the tokens, record the cost.
 import { baseOf, provider, runtime, type ProviderId } from "./config";
-import { getModel, isRetired, served, store, type Model } from "./data";
+import { LOCAL_CONTEXT, getModel, isRetired, localNeed, served, store, type Model } from "./data";
 import { isLocalFound } from "./providers";
-import { ZERO, costOf, fromAnthropicUsage, fromOpenAIUsage, mediaIn, promptMax, promptTokens, type Usage } from "./cost";
+import { ZERO, costOf, fromAnthropicUsage, fromOpenAIUsage, mediaIn, promptChars, promptMax, promptTokens, type Usage } from "./cost";
 import { db } from "./db";
 import { getKey } from "./keys";
 import { MODES, settings, type Mode } from "./settings";
@@ -44,7 +44,8 @@ export function usableModels(only?: (m: Model) => boolean): Model[] {
 export function usualModel(): Model | null {
   const s = settings();
   if (s.usual) { const m = getModel(s.usual); if (m) return m; }
-  const rated = usableModels().filter((m) => m.ratings.overall !== undefined && m.input !== null);
+  // A model on this computer or a free one costs nothing, so it is never the one savings are measured against.
+  const rated = usableModels().filter((m) => m.ratings.overall !== undefined && m.input !== null && !m.local && !m.free);
   return rated.sort((a, b) => b.ratings.overall - a.ratings.overall)[0] ?? null;
 }
 
@@ -133,6 +134,7 @@ export interface PlanInput {
   dry?: boolean; // an estimate for the screen: no waiting, nothing reserved
   tools?: unknown; // tool definitions: counted in the budget reservation
   hasTools?: boolean; // the request uses tools (Claude takes those only through /v1/messages)
+  plain?: boolean; // false: tools, functions or a response format (Ollama's models take such a request only at its 4,096 tokens)
   effort?: string | null; // thinking effort asked for (the chat screen); sent only to models that take it
   copies?: number; // answers asked for at once (OpenAI's n): each is billed
   guess?: Guess; // the task, when the caller knows it (the delegate): used instead of the guess
@@ -228,13 +230,17 @@ export async function plan(input: PlanInput): Promise<Plan> {
   // Images and PDFs go only to models that take them.
   const media = mediaIn(input.messages as any);
   const takes = (m: Model) => (!media.images || takesImages(m)) && (!media.pdfs || takesPdfs(m));
+  // A model in Ollama runs with the context Leanfare asks of it (at most 16k tokens), so Auto sends it only
+  // a plain request whose prompt fits there with room for the answer (data.ts: localNeed). A request with
+  // tools or a response format goes to Ollama's OpenAI address, at its 4,096 tokens: Auto leaves those out.
   const inTok = input.tokens ?? promptTokens(input.messages as any, input.system);
-  // A model on this computer runs with the context Leanfare asks of it (at most 16k tokens), so Auto sends
-  // it only what fits there with room for the answer.
-  const roomy = (m: Model) => !m.local || m.context === null || m.context >= inTok + (input.maxOut ?? 1024);
-  const base = (m: Model) => (!byAddress || byAddress(m)) && (!(media.images || media.pdfs) || takes(m)) && roomy(m);
+  const inChars = input.tokens !== undefined ? input.tokens * 4 : promptChars(input.messages as any, input.system);
+  const need = localNeed(inChars, input.maxOut);
+  const plainAsk = input.plain !== false && !input.hasTools;
+  const roomy = (m: Model) => m.provider !== "ollama" || (plainAsk && (m.context === null || m.context >= need));
+  const base = (m: Model) => (!byAddress || byAddress(m)) && (!(media.images || media.pdfs) || takes(m));
   const extra = input.only;
-  const only = extra ? (m: Model) => (!base || base(m)) && extra(m) : base;
+  const only = (m: Model) => base(m) && roomy(m) && (!extra || extra(m));
   const mediaWords = [media.images ? "images" : "", media.pdfs ? "PDFs" : ""].filter(Boolean).join(" and ");
   const amode = autoMode(input.asked, input.mode ?? s.mode);
   const mode = amode ?? input.mode ?? s.mode;
@@ -250,6 +256,11 @@ export async function plan(input: PlanInput): Promise<Plan> {
   if (amode) {
     const usable = usableModels(only);
     if (!usable.length && extra && usableModels(base).length) throw new UserError(400, input.onlyWhy ?? "None of the models you ticked can take this request.", "no_model_fits");
+    if (!usable.length && usableModels(base).length) {
+      throw new UserError(400, plainAsk
+        ? `This is too long for the models on this computer you ticked: they run with at most ${LOCAL_CONTEXT.toLocaleString("en-US")} tokens of context here. Tick a model in the cloud for it.`
+        : "A request with tools or a response format goes to Ollama's models at only 4,096 tokens of context, so Auto does not send it there. Tick a model in the cloud for it.", "no_model_fits");
+    }
     if (!usable.length && mediaWords && usableModels(byAddress).length) {
       throw new UserError(400, `None of the models you ticked takes ${mediaWords} through Leanfare. In Settings, tick one that does: ${media.pdfs ? "a Claude or GPT model reads PDFs" : "most Claude, GPT and Gemini models see images"}.`, "unsupported_attachment");
     }
@@ -288,6 +299,11 @@ export async function plan(input: PlanInput): Promise<Plan> {
       throw new UserError(400, `${m.label} ${what}. Pick Auto, or a model that does${media.pdfs ? " (a Claude or GPT model reads PDFs)" : ""}.`, "unsupported_attachment");
     }
     model = m; guess = input.guess ?? guessTask(input.messages); reason = "You chose this model."; candidates = [m];
+    // A model in Ollama you chose by name: say when the start of a long prompt will be left out.
+    if (m.provider === "ollama") {
+      const most = plainAsk ? Math.min(m.context ?? LOCAL_CONTEXT, LOCAL_CONTEXT) : 4096;
+      if (need > most) notes.push(`${m.label} runs here with ${most.toLocaleString("en-US")} tokens of context${plainAsk ? "" : " (a request with tools or a response format)"}, so Ollama leaves out the start of a prompt this long.`);
+    }
   }
 
   // A retired model is replaced by its successor.
@@ -624,7 +640,7 @@ export async function handleOpenAI(req: Request, body: any): Promise<Response> {
   let p: Plan;
   try {
     const hasTools = !!(body.tools || body.functions || body.tool_choice || body.messages.some((m: any) => m?.role === "tool" || m?.role === "function" || m?.tool_calls));
-    p = await plan({ source: "openai", asked: typeof body.model === "string" ? body.model : null, messages: body.messages, tools: body.tools ?? body.functions, hasTools, maxOut: toNum(body.max_completion_tokens ?? body.max_tokens), mode: headerMode(req), speed: headerSpeed(req), signal: ac.signal, copies: toNum(body.n) ?? 1 });
+    p = await plan({ source: "openai", asked: typeof body.model === "string" ? body.model : null, messages: body.messages, tools: body.tools ?? body.functions, hasTools, plain: ollamaPlain(body), maxOut: toNum(body.max_completion_tokens ?? body.max_tokens), mode: headerMode(req), speed: headerSpeed(req), signal: ac.signal, copies: toNum(body.n) ?? 1 });
   } catch (e) { return errorResponse(e); }
   const rid = register("openai", p.model.label, ac);
   let sent: { res: Response; model: Model; t0: number };

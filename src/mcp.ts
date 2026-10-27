@@ -183,7 +183,7 @@ const TOOLS = [
       type: "object",
       properties: {
         action: { type: "string", enum: ["suggest", "download", "status"], description: "suggest (the default), download or status." },
-        yes: { type: "string", enum: ["yes", "no"], description: "For download, where your app cannot ask the user itself: yes only once the user agreed to the download." },
+        yes: { type: "string", enum: ["yes", "no"], description: "For download, only where your app cannot show Leanfare's question: yes once the user agreed to the download in the chat. An app that can show it gets the question from Leanfare itself." },
       },
       additionalProperties: false,
     },
@@ -309,8 +309,10 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
     if (action === "suggest") return text(s.suggestion ? `${s.why}\n\nTo download it: local_model with action download (the user is asked first).` : s.why, s);
     if (!s.suggestion) return failure(s.why);
     const sg = s.suggestion;
-    let yes = args?.yes === "yes";
-    if (!yes && canAsk) {
+    // An app that can show Leanfare's question always gets it (a yes from the model is not the user's);
+    // one that cannot says yes only once the user agreed in the chat.
+    let yes = !canAsk && args?.yes === "yes";
+    if (canAsk) {
       const a = await askUser({
         message: `Download ${sg.name} (${gbText(sg.size)}) with Ollama? It runs free, on this computer, and Leanfare's Auto and plans can then use it for reading and drafting. ${sg.license}: free to use for work.`,
         requestedSchema: { type: "object", properties: { download: { type: "boolean", title: `Download ${sg.name}`, description: `${gbText(sg.size)} of disk.`, default: false } }, required: ["download"] },

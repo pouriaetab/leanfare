@@ -314,6 +314,17 @@ export function buildOpenRouter(list: any, ratingsFrom: Catalog, asOf = now()): 
 // little lower for the lighter 4-bit copy Ollama runs. A name Leanfare cannot match stays unrated.
 export const LOCAL_PENALTY = 15;
 export const LOCAL_CONTEXT = 16_384; // the most context Leanfare asks of a local model (every token of it takes memory)
+// The room kept for the answer in a local model's context: its limit, at most this much. A longer answer
+// stops at the end of the context and says it was cut; a prompt longer than the context would be cut
+// at its start without a word, so a prompt must fit with this room to spare.
+export const LOCAL_ANSWER = 4_096;
+// The context a request needs of a model on this computer: its prompt at three characters a token (code
+// and other languages take more tokens than English), the answer's room, and a little more.
+export const localNeed = (promptChars: number, out: number | null) => Math.ceil(promptChars / 3) + Math.min(out ?? LOCAL_ANSWER, LOCAL_ANSWER) + 256;
+// Whether a model takes a prompt of this many characters and an answer of up to `out` tokens: a model in
+// Ollama by the rule above, any other with room for the whole answer.
+export const fitsText = (m: Pick<Model, "provider" | "context">, chars: number, out: number) =>
+  m.context === null || m.context >= (m.provider === "ollama" ? localNeed(chars, out) : Math.ceil(chars / 3) + out);
 const LOCAL_UNKNOWN = 8_192; // a local model whose context Ollama did not say
 const SIZE_TOKEN = /^e?\d+(\.\d+)?b$/; // 27b, 1.5b, e2b (Gemma's "effective" sizes)
 const PLAIN_EXTRA = /^(it|instruct|chat|preview|latest|qat|gguf|mlx|ud|gptq|awq|int[48]|a\d+(\.\d+)?b|fp\d+|bf16|q\d[\w.]*|iq\d\w*|k|m|s|l|xs|xxs|nl|\d{4}|\d{6,8})$/; // words that do not make it another model (quantizations like Q4_K_M)

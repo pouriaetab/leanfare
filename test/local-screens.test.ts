@@ -1,6 +1,9 @@
 // The suggested local model on the screens: Settings' Local models card shows it with Download, and a
 // plan whose reading goes to pay per use names it with Download it. Pressing either is the yes.
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { store, type Model } from "../src/data";
 import { probe, SUGGESTED } from "../src/local";
 import { ALL_TICKED, boot, fake, keys, reset, ui } from "./app";
@@ -63,10 +66,15 @@ describe("the suggested local model", () => {
 
   test("the Plan tab: a plan whose reading goes to pay per use names it, and Download it downloads it", async () => {
     await keys("openai");
+    // A log small enough for a model on this computer (16k tokens of context at most).
+    const project = realpathSync(mkdtempSync(join(tmpdir(), "leanfare-local-screens-")));
+    mkdirSync(join(project, "logs"));
+    writeFileSync(join(project, "logs", "app.log"), "10:01 error: the nightly job timed out\n".repeat(500));
     const doc = await open(url);
     doc.querySelector('.tabs button[data-tab="plan"]').click();
     await waitFor(() => !!doc.querySelector("#tab-plan textarea"));
     doc.querySelector("#tab-plan textarea[aria-label='What do you want to do?']").value = "Find out why the nightly job fails and fix it";
+    doc.querySelector("#tab-plan textarea[aria-label='Files or folders']").value = join(project, "logs");
     doc.querySelector("#tab-plan input[aria-label='Split by rules']").checked = true;
     doc.querySelector("#planGo").click();
     await waitFor(() => !!doc.querySelector("#planResult .plan-local"));
@@ -77,5 +85,6 @@ describe("the suggested local model", () => {
     expect(toasts(doc)).toContain("Downloading gemma4:31b-it-qat: Settings, Local models shows how it goes.");
     expect(pulled()).toEqual(["gemma4:31b-it-qat"]);
     expect(bad(doc)).toBe(false);
+    rmSync(project, { recursive: true, force: true });
   }, 30000);
 });

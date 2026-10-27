@@ -18,7 +18,7 @@
 // so pass rates can be weighted back to every task. No words are kept there or in the
 // ledger: only models, verdicts, token counts and costs.
 import { parseSpeed, secondsText, type SpeedChoice } from "./speed";
-import { TASKS, getModel, isRetired, type Model } from "./data";
+import { TASKS, fitsText, getModel, isRetired, type Model } from "./data";
 import { db } from "./db";
 import { movedDown } from "./grades";
 import { plan, runChat, usableModels, type ChatOptions } from "./engine";
@@ -251,7 +251,8 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   const day = localDay();
   // A model whose context holds the request: its text at three characters a token (code
   // packs tighter than prose), plus the answer limit. A model with no known context is let through.
-  const fit = (chars: number, out: number) => { const need = Math.ceil(chars / 3) + out; return { need, ok: (m: Model) => m.context === null || m.context >= need }; };
+  // need: what the message says; a model in Ollama keeps less room for the answer (data.ts: fitsText).
+  const fit = (chars: number, out: number) => ({ need: Math.ceil(chars / 3) + out, ok: (m: Model) => fitsText(m, chars, out) });
   const tooMuch = (need: number) => `None of the models you ticked can take this much text (about ${num(need)} tokens with the answer). Hand over fewer or shorter files, or tick a model with a longer context.`;
   // Rated above the model that answered, for this task.
   const ratedAbove = (doer: Model) => {

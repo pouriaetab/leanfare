@@ -173,6 +173,59 @@ describe("in Leanfare", () => {
     expect(ledger().at(-1)).toMatchObject({ model: ID, status: "error" });
   });
 
+  test("no answer limit asked: none is sent to Ollama, and the whole answer comes", async () => {
+    const r = await post(`${url}/v1/chat/completions`, { model: ID, messages: [{ role: "user", content: "Write the whole chapter. [usage 40 5000]" }] });
+    const j = await r.json() as any;
+    const sent = fake.seen.filter((s) => s.path === "/ollama/api/chat").at(-1)!;
+    expect(sent.body.options.num_predict).toBeUndefined();
+    expect({ finish: j.choices[0].finish_reason, out: j.usage.completion_tokens }).toEqual({ finish: "stop", out: 5000 });
+  });
+
+  test("the room Auto checks is the room the request asks for: a prompt that fits is sent with all of it", async () => {
+    const text = "const total = values[index] + offsets[index] * 2;\n".repeat(600).slice(0, 30_000); // code: three characters a token
+    const r = await post(`${url}/v1/chat/completions`, { model: "auto", messages: [{ role: "user", content: text }] });
+    expect(r.headers.get("x-leanfare-model")).toBe(ID);
+    const o = fake.seen.filter((s) => s.path === "/ollama/api/chat").at(-1)!.body.options;
+    expect(o.num_ctx).toBeGreaterThanOrEqual(Math.ceil((text.length + 16) / 3) + 4096 + 256);
+    const longer = "const total = values[index] + offsets[index] * 2;\n".repeat(1000).slice(0, 50_000); // 16,672 tokens by that count: more than 16k
+    const r2 = await post(`${url}/v1/chat/completions`, { model: "auto", messages: [{ role: "user", content: longer }] });
+    expect(r2.headers.get("x-leanfare-model")).not.toBe(ID);
+  });
+
+  test("Auto leaves the local model out of a request with tools or a response format (Ollama runs those at 4,096 tokens)", async () => {
+    const tools = [{ type: "function", function: { name: "read_file", parameters: { type: "object", properties: { path: { type: "string" } } } } }];
+    const t = await post(`${url}/v1/chat/completions`, { model: "auto", tools, messages: [{ role: "user", content: `Fix the bug in this file:\n${"let a = b + c; // step\n".repeat(1300)}` }] });
+    expect(t.headers.get("x-leanfare-model")).not.toBe(ID);
+    const j = await post(`${url}/v1/chat/completions`, { model: "auto", response_format: { type: "json_object" }, messages: [{ role: "user", content: "Summarize this page as JSON." }] });
+    expect(j.headers.get("x-leanfare-model")).not.toBe(ID);
+    expect(fake.seen.some((s) => s.path === "/ollama/api/chat" || s.path === "/ollama/v1/chat/completions")).toBe(false);
+  });
+
+  test("with only the local model ticked, a prompt too long for it, or with tools, says so", async () => {
+    await reset({ ticked: [ID] });
+    await ui(url, "/api/refresh", { what: "ollama" });
+    const long = await (await post(`${url}/v1/chat/completions`, { model: "auto", messages: [{ role: "user", content: "word ".repeat(14_000) }] })).json() as any;
+    expect(long.error.message).toBe("This is too long for the models on this computer you ticked: they run with at most 16,384 tokens of context here. Tick a model in the cloud for it.");
+    const tools = [{ type: "function", function: { name: "f", parameters: { type: "object", properties: {} } } }];
+    const withTools = await (await post(`${url}/v1/chat/completions`, { model: "auto", tools, messages: [{ role: "user", content: "Hi" }] })).json() as any;
+    expect(withTools.error.message).toContain("A request with tools or a response format goes to Ollama's models at only 4,096 tokens of context");
+    const d = await ui(url, "/api/delegate", { task: "List the errors.", files: [{ name: "app.log", text: "10:01 error: disk full\n".repeat(2600) }], kind: "read", effort: "low", check: "never" });
+    expect(d.json.error).toContain("can take this much text");
+  });
+
+  test("a local model chosen by name, with a prompt longer than its context, says the start is left out", async () => {
+    const r = await post(`${url}/v1/chat/completions`, { model: ID, messages: [{ role: "user", content: "word ".repeat(14_000) }] });
+    expect(decodeURIComponent(r.headers.get("x-leanfare-reason") ?? "")).toContain("runs here with 16,384 tokens of context, so Ollama leaves out the start of a prompt this long.");
+  });
+
+  test("a model on this computer is never the usual model savings are measured against", async () => {
+    await reset({ ticked: ["anthropic/claude-haiku-4-5", ID] });
+    await keys("anthropic");
+    await ui(url, "/api/refresh", { what: "ollama" });
+    const { usualModel } = await import("../src/engine");
+    expect(usualModel()?.id).toBe("anthropic/claude-haiku-4-5");
+  });
+
   test("a request with tools to a local model keeps the OpenAI-style address", async () => {
     await post(`${url}/v1/chat/completions`, { model: ID, messages: [{ role: "user", content: "Weather?" }], tools: [{ type: "function", function: { name: "weather", parameters: { type: "object", properties: {} } } }] });
     expect(fake.seen.some((s) => s.path === "/ollama/v1/chat/completions")).toBe(true);

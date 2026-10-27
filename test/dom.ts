@@ -6,16 +6,23 @@ export const appJs = await Bun.file(new URL("../ui/app.js", import.meta.url)).te
 const html = await Bun.file(new URL("../ui/index.html", import.meta.url)).text();
 export let win: any = null;
 
+// One page at a time, and a closed page stays quiet: a page left open kept asking the server every
+// few seconds (on Settings it asks what Ollama has), and those requests landed in later tests' counts.
+// The page leaves win at once, so a close that ends late never closes the next test's page.
 export async function closeApp() {
-  try { await win?.happyDOM?.abort(); win?.close(); } catch {}
+  const w = win;
   win = null;
+  try { await w?.happyDOM?.abort(); } catch {} // ends the page's timers (window.close() does not)
 }
 
 export async function openApp(url: string) {
-  win = new Window({ url: url + "/", width: 1440, height: 800 });
-  const doc = win.document;
+  await closeApp();
+  const w: any = new Window({ url: url + "/", width: 1440, height: 800 });
+  win = w;
+  const doc = w.document;
   doc.write(html.replace(/<script[^>]*><\/script>/, ""));
-  const f = (path: string, opts: any = {}) => fetch(new URL(path, url), opts);
+  // A closed page sends nothing more: its next request never leaves, and nothing waits on it.
+  const f = (path: string, opts: any = {}) => (win === w ? fetch(new URL(path, url), opts) : new Promise<Response>(() => {}));
   const run = new Function("window", "document", "localStorage", "fetch", "matchMedia", "requestAnimationFrame", "navigator", "location", "Event", "AbortController", "TextDecoder", "Element", "DocumentFragment", "Node", "setTimeout", "setInterval", "clearTimeout", appJs);
   run(win, doc, win.localStorage, f, win.matchMedia.bind(win), (cb: any) => setTimeout(() => cb(Date.now()), 16), win.navigator, win.location, win.Event, AbortController, TextDecoder, win.Element, win.DocumentFragment, win.Node, win.setTimeout.bind(win), win.setInterval.bind(win), win.clearTimeout.bind(win));
   for (let i = 0; i < 100 && !doc.querySelector("textarea"); i++) await Bun.sleep(30);

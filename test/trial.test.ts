@@ -182,11 +182,12 @@ describe("a run", () => {
       await ui(url, "/api/trial/start", {});
       for (let i = 0; i < 100 && ledger().length === 0; i++) await Bun.sleep(20);
       await Bun.sleep(100); // now waiting out the limit
-      const sent = fake.seen.length;
+      const asks = () => fake.seen.filter((s) => s.method === "POST" && /\/chat\/completions$|\/v1\/messages$/.test(s.path)).length; // the trial's own requests
+      const sent = asks();
       const v = (await ui(url, "/api/trial/stop", {})).json;
       expect(v.report.status).toBe("stopped");
       await Bun.sleep(150);
-      expect(fake.seen.length).toBe(sent);
+      expect(asks()).toBe(sent);
       expect(ledger().filter((x) => x.status === "stopped")).toEqual([]);
     } finally { timing.rateWait = 400; }
   }, 60_000);
