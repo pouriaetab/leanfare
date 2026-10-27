@@ -14,6 +14,7 @@ process.env.LEANFARE_KEYSTORE = "file";
 process.env.LEANFARE_NO_OPEN = "1";
 process.env.LEANFARE_SHELL_ENV = "off"; // tests never read your login shell's variables (shellenv.test.ts uses a fake shell)
 process.env.LEANFARE_LOCAL_PORTS = "none"; // nor look for model apps on this computer's ports (providers.test.ts points at fakes)
+process.env.LEANFARE_UPDATE_CHECK = "off"; // nor ask GitHub for new versions (update.test.ts uses a stand in)
 process.env.LEANFARE_NOW = "2026-10-21T12:00:00Z";
 for (const k of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "XAI_API_KEY", "MISTRAL_API_KEY"]) delete process.env[k];
 
