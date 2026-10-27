@@ -54,7 +54,9 @@ export async function reset(patch: Partial<Settings> = {}) {
   fake.hooks.slow = null;
   Object.assign(fake.oauth, { expireNext: false, deny: false, failExchange: 0, failMessage: "fake failure", badKey: false, credits: true });
   fake.oauth.codes.clear();
-  if (Object.keys(patch).length) saveSettings(patch);
+  // Short answers (on by default) add an instruction to every chat request; the tests that check
+  // what a provider gets turn it off, and chat.test.ts checks it on its own.
+  saveSettings({ brief: false, ...patch });
 }
 
 export async function keys(...ids: string[]) {

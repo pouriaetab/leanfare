@@ -2262,6 +2262,9 @@
       h("div", { class: "setting" }, h("h3", { text: "How Auto picks" }), modeSeg,
         h("p", { text: `${st.modes[s.mode].label}: ${st.modes[s.mode].blurb}, for the task Leanfare guesses from your message (coding, math, writing, long prompts and more). Ratings come from the Arena leaderboard.` })),
       speedSettingEl(s),
+      h("div", { class: "setting" }, h("h3", { text: "Answers in the chat" }),
+        h("label", { class: "check" }, h("input", { type: "checkbox", checked: s.brief !== false, onchange: (e) => patchSettings({ brief: e.target.checked }, e.target.checked ? "Answers will be short: the answer first, a table or a short list." : "Answers will be as long as each model likes.") }), "Short answers: the answer first, a table or a short list, more only when you ask"),
+        h("p", { text: "For the chat screen only: other apps get their own instructions as they send them. A chat's own instructions still apply, after this. For a task with several parts, the Plan tab answers with a table of the parts and their models." })),
       h("div", { class: "setting" }, h("h3", { text: "Thinking effort" }),
         h("div", { class: "seg", role: "group", "aria-label": "Thinking effort" }, ...[["auto", "Model's default"], ["low", "Low"], ["medium", "Medium"], ["high", "High"]].map(([k, label]) =>
           h("button", { type: "button", "aria-pressed": String((s.effort ?? "auto") === k), text: label, onclick: () => patchSettings({ effort: k }, k === "auto" ? "Thinking models think as they do by default." : `Thinking effort: ${label.toLowerCase()}.`) }))),

@@ -41,6 +41,7 @@ export interface Settings {
   speed: SpeedChoice; // at the same quality: the cheapest, the fastest, or the cheapest expected within N seconds (speed.ts)
   updateCheck: boolean; // ask GitHub once a day whether a newer Leanfare is out (update.ts)
   showValue: boolean; // Savings: also show what subscription use would cost per use (at API prices); off: tokens and limits only
+  brief: boolean; // the chat screen's answers: short (the answer first, a table or a short list), more only when asked
 }
 
 export const DEFAULTS: Settings = {
@@ -62,7 +63,12 @@ export const DEFAULTS: Settings = {
   speed: "cheapest",
   updateCheck: true,
   showValue: false,
+  brief: true,
 };
+
+// What a short answer is, given to the chat screen's models before the chat's own instructions
+// (26 Oct: the chat "went on explaining too much").
+export const BRIEF = "Answer briefly. Lead with the answer itself. When it has parts, steps or options, give a short table or a numbered list instead of paragraphs. Keep it under about 150 words unless the person asks for more, for detail, or for a long piece of writing. No preamble, no restating the question, no offer at the end.";
 
 export const MAX_INSTRUCTIONS = 20_000; // characters
 
@@ -129,6 +135,7 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
   if ("history" in p) out.history = !!p.history;
   if ("updateCheck" in p) out.updateCheck = !!p.updateCheck;
   if ("showValue" in p) out.showValue = !!p.showValue;
+  if ("brief" in p) out.brief = !!p.brief;
   if ("successors" in p) {
     if (typeof p.successors !== "object" || p.successors === null) return { error: "successors must be an object" };
     out.successors = Object.fromEntries(Object.entries(p.successors).filter(([a, b]) => typeof a === "string" && typeof b === "string")) as Record<string, string>;
