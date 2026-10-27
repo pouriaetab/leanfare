@@ -445,7 +445,7 @@
   const planBox = { ta: null, rules: null };
   const PLAN_APPS = [["Claude Code", "Claude Code"], ["Claude", "Claude Desktop or Cowork"], ["Codex", "Codex"], ["Gemini CLI", "Gemini CLI"], ["Cursor", "Cursor"], ["you", "No app (just you)"]];
   let planTimer = null;
-  const RUNS_ON = { you: "you", local: "Leanfare, on this computer", free: "Leanfare, free model", paid: "Leanfare, pay per use" };
+  const RUNS_ON = { you: "you", local: "Leanfare, on this computer", free: "Leanfare, free model", paid: "Leanfare, pay per use", codex: "Leanfare, through Codex" };
   const STATUS = { waiting: "waiting", running: "running…", done: "done", failed: "failed", stopped: "stopped", yours: "yours to do", after_yours: "after yours", blocked: "waits for a part that is not done", asks: "paid: waits for a yes" };
   function renderPlan() {
     const el = $("#tab-plan");
@@ -505,7 +505,7 @@
         td("Model", { text: p.model?.label ?? p.use?.label ?? "your model" }),
         td("Time", { text: p.seconds === null ? "—" : secsShort(p.seconds) }),
         td("Tokens", { text: p.where === "you" ? `~${tokShort(p.tokens)} of your plan` : `~${tokShort(p.tokens)} kept` }),
-        td("Cost", { text: p.where === "you" ? "in your plan" : p.cost === null ? "not known" : money(p.cost) }),
+        td("Cost", { text: p.where === "you" ? "in your plan" : p.where === "codex" ? "in your ChatGPT plan" : p.cost === null ? "not known" : money(p.cost) }),
         td("When", { text: p.needs.length ? `after ${p.needs.join(", ")}` : "now" }),
         run ? td("Now", { class: "st " + (r?.status ?? ""), text: STATUS[r?.status] ?? "" }) : null);
     });
@@ -2220,6 +2220,28 @@
       h("p", { text: `When Claude Code or another app runs Leanfare's parts of a plan (plan_run), parts on local and free models run at once. Paid parts run without asking while they come to at most ${money(s.planAuto || 0)} a plan; above that, Leanfare asks you first (in Claude Code, a question in Claude Code). Your monthly budget holds either way.` }));
   }
 
+  // ---- Your ChatGPT plan, through Codex (Settings) ------------------------------------------------
+  // A plan's reading, drafting and working out parts on Codex (codex.ts), once you turn it on here.
+  async function loadCodex(fresh) {
+    try { S.codex = await api(`/api/codex${fresh ? "?fresh=1" : ""}`); } catch { S.codex = { installed: false, signedIn: false, version: null }; }
+    renderSettings();
+  }
+  function codexSettingEl(s) {
+    if (S.codex === undefined) { S.codex = null; loadCodex(false); }
+    const c = S.codex;
+    const v = c?.version ? ` ${c.version}` : "";
+    const status = !c ? "Looking for Codex…"
+      : !c.installed ? "Codex is not on this computer. To get it, in Terminal: npm install -g @openai/codex, then codex login (sign in with ChatGPT)."
+      : !c.signedIn ? `Codex${v} is here, but not signed in. In Terminal: codex login (sign in with ChatGPT).`
+      : `Codex${v} is here and signed in.`;
+    return h("div", { class: "setting", id: "codexCard" }, h("h3", { text: "Your ChatGPT plan, through Codex" }),
+      h("p", { class: "note", text: status }),
+      h("label", { class: "check" }, h("input", { type: "checkbox", checked: !!s.codexPlan, onchange: (e) => patchSettings({ codexPlan: e.target.checked }, e.target.checked ? "Plans can run reading and drafting on Codex now." : "Plans no longer use Codex.") }),
+        " Let plans run their reading, drafting and working out on Codex, before pay per use"),
+      h("p", { text: "Codex runs those parts read only, in the folder of their files, and they count toward your ChatGPT plan's Codex limits; Leanfare pays nothing for them. Parts that change your project stay with the app you work in. Near 85% of your ChatGPT plan's 5 hours or week, Leanfare leaves Codex alone." }),
+      runButton("Look again", () => loadCodex(true), "btn small quiet"));
+  }
+
   function speedSettingEl(s) {
     const sel = h("select", { "aria-label": "Speed", onchange: (e) => patchSettings({ speed: speedValue(e.target.value) }, `Speed: ${e.target.selectedOptions[0].textContent.toLowerCase()}.`) },
       ...speedOptions(s.speed ?? "cheapest", 1));
@@ -2340,7 +2362,7 @@
         h("div", { class: "seg", role: "group", "aria-label": "Thinking effort" }, ...[["auto", "Model's default"], ["low", "Low"], ["medium", "Medium"], ["high", "High"]].map(([k, label]) =>
           h("button", { type: "button", "aria-pressed": String((s.effort ?? "auto") === k), text: label, onclick: () => patchSettings({ effort: k }, k === "auto" ? "Thinking models think as they do by default." : `Thinking effort: ${label.toLowerCase()}.`) }))),
         h("p", { text: "For models that think before they answer, at the levels each one takes. Thinking is billed as output, so a higher effort costs more and takes longer; the estimate learns from your answers at each level." })),
-      planCapSettingEl(s),
+      planCapSettingEl(s), codexSettingEl(s),
       h("div", { class: "setting" }, h("h3", { text: "Your usual model" }), usualSel,
         h("p", { text: "The model you would use without Leanfare. Savings are measured against it." })),
       h("div", { class: "setting" }, h("h3", { text: "Monthly budget" }),
