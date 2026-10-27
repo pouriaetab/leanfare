@@ -28,19 +28,31 @@ function Install-Leanfare {
     $Got = (Get-FileHash (Join-Path $Tmp "$Name.zip") -Algorithm SHA256).Hash.ToLower()
     if ($Got -ne $Want) { throw "the download does not match the release's checksum, so nothing was changed." }
     Expand-Archive (Join-Path $Tmp "$Name.zip") -DestinationPath (Join-Path $Tmp "x") -Force
+    $New = Join-Path $Tmp "x\leanfare.exe"
+    # It must start here before it replaces anything: a copy you have stays until the new one works.
+    $Installed = try { & $New --version } catch { $null }
+    if (-not $Installed) { throw "the downloaded Leanfare did not start on this computer, so nothing was changed." }
     New-Item -ItemType Directory -Path $Dir -Force | Out-Null
-    if (Test-Path $Exe) { & $Exe stop *> $null } # a running Leanfare holds its file open
-    Copy-Item (Join-Path $Tmp "x\leanfare.exe") $Exe -Force
+    Get-ChildItem -Path $Dir -Filter "leanfare.exe.old-*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    if (Test-Path $Exe) {
+      & $Exe stop *> $null
+      # Apps using Leanfare's tools (Claude Desktop, Cursor) keep it running; a running file can be renamed, not replaced.
+      Move-Item $Exe "$Exe.old-$([Guid]::NewGuid().ToString('N'))" -Force
+    }
+    Copy-Item $New $Exe -Force
   } finally {
     Remove-Item $Tmp -Recurse -Force -ErrorAction SilentlyContinue
   }
-  $Installed = & $Exe --version
-  if (-not $Installed) { throw "the downloaded Leanfare did not start on this computer." }
   Write-Host "Installed Leanfare $Installed in $Dir."
-  $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
-  if (-not (($UserPath -split ";") -contains $Dir)) {
-    [Environment]::SetEnvironmentVariable("Path", (@($Dir) + ($UserPath -split ";" | Where-Object { $_ })) -join ";", "User")
-    Write-Host "Added $Dir to your PATH. Open a new terminal window for the leanfare command to work there."
+  if ([Environment]::OSVersion.Platform -eq "Win32NT") {
+    # The user's Path in the registry, read and written as it is kept (entries like %USERPROFILE%\bin stay as they are).
+    $Key = Get-Item -Path "HKCU:\Environment"
+    $Old = $Key.GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    if (-not (($Old -split ";") -contains $Dir)) {
+      $Value = if ($Old) { "$Dir;$Old" } else { $Dir }
+      Set-ItemProperty -Path "HKCU:\Environment" -Name "Path" -Value $Value -Type ExpandString
+      Write-Host "Added $Dir to your PATH. Open a new terminal window for the leanfare command to work there."
+    }
   }
   Write-Host ""
   Write-Host "Start it:            leanfare        (it opens http://127.0.0.1:4747 in your browser)"

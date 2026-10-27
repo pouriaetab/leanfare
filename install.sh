@@ -55,15 +55,16 @@ fi
 [ "$got" = "$want" ] || fail "the download does not match the release's checksum, so nothing was changed."
 
 tar -xzf "$tmp/$name.tar.gz" -C "$tmp" leanfare || fail "the download could not be unpacked."
-mkdir -p "$DIR"
-mv -f "$tmp/leanfare" "$DIR/leanfare"
-chmod 755 "$DIR/leanfare"
+chmod 755 "$tmp/leanfare"
 if [ "$os" = darwin ]; then
   # Downloaded with curl it has no quarantine flag; these make sure, and give it a fresh local signature.
-  xattr -d com.apple.quarantine "$DIR/leanfare" 2>/dev/null || true
-  codesign --force --sign - "$DIR/leanfare" >/dev/null 2>&1 || true
+  xattr -d com.apple.quarantine "$tmp/leanfare" 2>/dev/null || true
+  codesign --force --sign - "$tmp/leanfare" >/dev/null 2>&1 || true
 fi
-installed="$("$DIR/leanfare" --version 2>/dev/null)" || fail "the downloaded Leanfare did not start on this computer."
+# It must start here before it replaces anything: a copy you have stays until the new one works.
+installed="$("$tmp/leanfare" --version 2>/dev/null)" || fail "the downloaded Leanfare did not start on this computer, so nothing was changed."
+mkdir -p "$DIR"
+mv -f "$tmp/leanfare" "$DIR/leanfare"
 say "Installed Leanfare $installed in $DIR."
 
 # The PATH line, once, in the file your shell reads at start.
@@ -72,7 +73,14 @@ case ":$PATH:" in *":$DIR:"*) on_path=1 ;; esac
 if [ "$on_path" = 0 ] && [ "${LEANFARE_NO_PATH:-}" != 1 ]; then
   case "$(basename "${SHELL:-sh}")" in
     zsh) rc="${ZDOTDIR:-$HOME}/.zshrc"; line="export PATH=\"$DIR:\$PATH\"" ;;
-    bash) if [ "$os" = darwin ]; then rc="$HOME/.bash_profile"; else rc="$HOME/.bashrc"; fi; line="export PATH=\"$DIR:\$PATH\"" ;;
+    bash)
+      line="export PATH=\"$DIR:\$PATH\""
+      if [ "$os" = darwin ]; then
+        # A login shell reads the first of these it finds: a new .bash_profile would hide a .profile.
+        rc="$HOME/.bash_profile"
+        for f in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do if [ -f "$f" ]; then rc="$f"; break; fi; done
+      else rc="$HOME/.bashrc"
+      fi ;;
     fish) rc="$HOME/.config/fish/config.fish"; line="fish_add_path \"$DIR\"" ;;
     *) rc="$HOME/.profile"; line="export PATH=\"$DIR:\$PATH\"" ;;
   esac

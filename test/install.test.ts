@@ -83,3 +83,44 @@ describe("install.sh", () => {
     expect(gone.out).toContain("Leanfare was not installed: could not download");
   });
 });
+
+describe("install.sh, when something is off", () => {
+  // A release whose program does not start on this computer (here: not a program at all).
+  function brokenRelease() {
+    const dir = mkdtempSync(join(tmpdir(), "leanfare-broken-"));
+    const stage = mkdtempSync(join(tmpdir(), "leanfare-stage-"));
+    writeFileSync(join(stage, "leanfare"), "this is not a program");
+    chmodSync(join(stage, "leanfare"), 0o755);
+    let list = "";
+    for (const name of ["leanfare-linux-x64", "leanfare-linux-arm64", "leanfare-darwin-arm64", "leanfare-darwin-x64"]) {
+      Bun.spawnSync(["tar", "-czf", join(dir, `${name}.tar.gz`), "-C", stage, "leanfare"]);
+      list += `${createHash("sha256").update(readFileSync(join(dir, `${name}.tar.gz`))).digest("hex")}  ${name}.tar.gz\n`;
+    }
+    writeFileSync(join(dir, "SHA256SUMS"), list);
+    return Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(req) { const f = join(dir, new URL(req.url).pathname.slice(1)); return existsSync(f) ? new Response(Bun.file(f)) : new Response("no", { status: 404 }); } });
+  }
+  test("a new download that does not start leaves the working copy as it was", async () => {
+    const first = await install("/bin/bash", { LEANFARE_NO_PATH: "1" });
+    const bin = join(first.home, ".leanfare", "bin", "leanfare");
+    const before = readFileSync(bin, "utf8");
+    const bad = brokenRelease();
+    try {
+      const r = await install("/bin/bash", { HOME: first.home, LEANFARE_NO_PATH: "1", LEANFARE_DOWNLOAD_BASE: `http://127.0.0.1:${bad.port}` });
+      expect(r.code).toBe(1);
+      expect(r.out).toContain("the downloaded Leanfare did not start on this computer, so nothing was changed.");
+      expect(readFileSync(bin, "utf8")).toBe(before);
+    } finally { bad.stop(true); }
+  });
+  test("on a Mac with bash, the PATH line goes in the file bash reads: an existing .profile is not hidden", async () => {
+    // A stand in uname that says Darwin, so the Mac branch runs here.
+    const bin = mkdtempSync(join(tmpdir(), "leanfare-uname-"));
+    writeFileSync(join(bin, "uname"), "#!/bin/sh\ncase \"$1\" in -s) echo Darwin ;; -m) echo arm64 ;; esac\n");
+    chmodSync(join(bin, "uname"), 0o755);
+    const home = mkdtempSync(join(tmpdir(), "leanfare-home-"));
+    writeFileSync(join(home, ".profile"), "export FROM_PROFILE=yes\n");
+    const r = await install("/bin/bash", { HOME: home, PATH: `${bin}:${process.env.PATH}` });
+    expect(r.code).toBe(0);
+    expect(existsSync(join(home, ".bash_profile"))).toBe(false);
+    expect(readFileSync(join(home, ".profile"), "utf8")).toBe(`export FROM_PROFILE=yes\n\n# Leanfare\nexport PATH="${join(home, ".leanfare", "bin")}:$PATH"\n`);
+  });
+});
