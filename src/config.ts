@@ -16,11 +16,15 @@ export const DATA_DIR = process.env.LEANFARE_DATA_DIR ?? join(homedir(), ".leanf
 export const DATA_URL = process.env.LEANFARE_DATA_URL ?? "https://pouriaetab.github.io/llmledger/data.json";
 export const BUILT_IN_CATALOG = CATALOG_FILE; // the price list this release ships with (assets.ts)
 
-mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+// A data folder that cannot be made is said where it matters (starting Leanfare), not at every import:
+// the quick commands Claude Code runs (the status line, the prompt hook) must never fail out loud.
+export let DATA_DIR_PROBLEM: string | null = null;
+try { mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 }); } catch (e: any) { DATA_DIR_PROBLEM = `Leanfare cannot make its data folder ${DATA_DIR} (${String(e?.code ?? e?.message ?? e)}).`; }
 
 // A short fingerprint of the data folder (never its path), on /healthz: a command that finds a Leanfare
 // at a port acts on it only when it uses this folder (leanfare stop, status, a second start).
-export const DATA_ID = createHash("sha256").update(realpathSync(DATA_DIR)).digest("hex").slice(0, 12);
+const realDir = () => { try { return realpathSync(DATA_DIR); } catch { return DATA_DIR; } };
+export const DATA_ID = createHash("sha256").update(realDir()).digest("hex").slice(0, 12);
 
 export const paths = {
   db: join(DATA_DIR, "leanfare.db"),

@@ -6,7 +6,7 @@
 // Exit codes: 0 done, 1 failed, 2 wrong command, 3 not running (status),
 // 4 the port is taken by another program.
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { BUN_TESTED, DATA_ID, PORT, VERSION, paths } from "./config";
+import { BUN_TESTED, DATA_DIR_PROBLEM, DATA_ID, PORT, VERSION, paths } from "./config";
 
 const args = process.argv.slice(2);
 const flag = (name: string) => args.includes(`--${name}`);
@@ -75,6 +75,7 @@ function versionLine() {
 }
 
 async function start() {
+  if (DATA_DIR_PROBLEM) { console.error(`${DATA_DIR_PROBLEM} Set LEANFARE_DATA_DIR to a folder it can write in.`); process.exit(1); }
   const existing = readPid();
   if (existing) {
     const h = await health(existing.port);
