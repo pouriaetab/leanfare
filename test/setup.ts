@@ -22,6 +22,8 @@ for (const k of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGL
 for (const k of Object.keys(process.env)) if (k.endsWith("_API_KEY")) delete process.env[k];
 // A home of the tests' own: Find my keys and Use in your apps never read or write your real files.
 process.env.HOME = mkdtempSync(join(tmpdir(), "leanfare-test-home-"));
+// The apps Savings finds (found.ts) are looked for only in the tests' own Applications folder.
+process.env.LEANFARE_APP_FOLDERS = join(process.env.HOME, "Applications");
 
 const fake = startFake();
 fake.pointEnv();
