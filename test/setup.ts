@@ -12,12 +12,15 @@ process.env.CLAUDE_CONFIG_DIR = join(process.env.LEANFARE_DATA_DIR, "claude-logs
 process.env.CODEX_HOME = join(process.env.LEANFARE_DATA_DIR, "codex-logs");
 process.env.LEANFARE_KEYSTORE = "file";
 process.env.LEANFARE_NO_OPEN = "1";
+process.env.LEANFARE_SHELL_ENV = "off"; // tests never read your login shell's variables (shellenv.test.ts uses a fake shell)
+process.env.LEANFARE_LOCAL_PORTS = "none"; // nor look for model apps on this computer's ports (providers.test.ts points at fakes)
 process.env.LEANFARE_NOW = "2026-10-21T12:00:00Z";
 for (const k of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "XAI_API_KEY", "MISTRAL_API_KEY"]) delete process.env[k];
 
 const fake = startFake();
 fake.pointEnv();
 process.env.LEANFARE_DATA_URL = `${fake.base}/data.json`;
+process.env.LEANFARE_MODELSDEV_URL = `${fake.base}/models-dev/api.json`; // never the real models.dev
 (globalThis as any).__fake = fake;
 
 // Every address Leanfare reaches is written down, for the privacy test.

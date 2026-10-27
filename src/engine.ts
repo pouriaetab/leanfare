@@ -2,7 +2,8 @@
 // the same steps: wait while paused, choose the model, reserve the budget,
 // send, count the tokens, record the cost.
 import { baseOf, provider, runtime, type ProviderId } from "./config";
-import { getModel, isRetired, store, type Model } from "./data";
+import { getModel, isRetired, served, store, type Model } from "./data";
+import { isLocalFound } from "./providers";
 import { ZERO, costOf, fromAnthropicUsage, fromOpenAIUsage, mediaIn, promptMax, promptTokens, type Usage } from "./cost";
 import { db } from "./db";
 import { getKey } from "./keys";
@@ -17,20 +18,25 @@ import { takesImages, takesPdfs } from "./files";
 // ---- which models can be used right now ---------------------------------------
 
 export function providerReady(id: ProviderId): boolean {
+  const def = provider(id);
+  if (!def) return false;
   if (settings().providers[id]?.on === false) return false;
   if (id === "ollama") return store.ollamaFound;
-  return !!getKey(id);
+  if (def.local) return isLocalFound(id);
+  return def.needsKey ? !!getKey(id) : true;
 }
 
 export function notReadyMessage(id: ProviderId): string {
-  const def = provider(id)!;
+  const def = provider(id);
+  if (!def) return `Leanfare does not know the provider ${id} any more. Pick another model.`;
   if (settings().providers[id]?.on === false) return `${def.name} is switched off in Leanfare's Settings.`;
   if (id === "ollama") return `Ollama is not running on this computer (Leanfare tried ${baseOf("ollama").replace(/\/v1$/, "")}). Open the Ollama app, then try again.`;
+  if (def.local) return `${def.name} is not running on this computer any more. Open it and start its server, then press Look again in Settings.`;
   return `There is no ${def.name} key in Leanfare yet. Add one in Settings at http://127.0.0.1:${runtime.port}.`;
 }
 
 export function usableModels(only?: (m: Model) => boolean): Model[] {
-  return settings().ticked.map((id) => getModel(id)).filter((m): m is Model => !!m && providerReady(m.provider) && (!only || only(m)));
+  return settings().ticked.map((id) => getModel(id)).filter((m): m is Model => !!m && providerReady(m.provider) && served(m) && (!only || only(m)));
 }
 
 // The "usual model" savings are measured against: your choice, or the best rated model you ticked.
@@ -448,6 +454,15 @@ async function* openaiChunks(res: Response, m: Model, modelName: string): AsyncG
   }
 }
 
+// The cost a provider reports itself: OpenRouter's usage.cost (a number), Perplexity's
+// usage.cost.total_cost (its search fee included).
+export function reportedCost(usage: any): number | null {
+  const c = usage?.cost;
+  if (typeof c === "number" && Number.isFinite(c) && c >= 0) return c;
+  if (c && typeof c === "object" && typeof c.total_cost === "number" && Number.isFinite(c.total_cost) && c.total_cost >= 0) return c.total_cost;
+  return null;
+}
+
 // What a chunk adds: text, token counts, a provider-reported cost, an error.
 // Thinking arrives as reasoning_content (DeepSeek, Grok, Claude through
 // Leanfare), reasoning (OpenRouter, Ollama), or as "thinking" parts of the
@@ -471,7 +486,7 @@ function readChunk(j: any) {
   return {
     text, thinking,
     usage: j?.usage ? fromOpenAIUsage(j.usage) : null,
-    cost: typeof j?.usage?.cost === "number" ? j.usage.cost : null,
+    cost: reportedCost(j?.usage),
     error: j?.error ? providerMessage(JSON.stringify(j)) : null,
     usageOnly: !!j?.usage && (!Array.isArray(j?.choices) || j.choices.length === 0),
     finish: (j?.choices?.[0]?.finish_reason ?? null) as string | null,
@@ -557,7 +572,7 @@ export async function handleOpenAI(req: Request, body: any): Promise<Response> {
         const answer = typeof msg.content === "string" ? msg.content : "";
         const empty = !answer.trim() && !msg.tool_calls?.length && !msg.function_call && oj.choices?.[0]?.finish_reason !== "content_filter";
         const usage = def.kind === "anthropic" ? fromAnthropicUsage(j.usage) : fromOpenAIUsage(j.usage);
-        return { out: def.kind === "anthropic" ? JSON.stringify(oj) : text, answer, empty, usage, reported: typeof j.usage?.cost === "number" ? j.usage.cost : null, t };
+        return { out: def.kind === "anthropic" ? JSON.stringify(oj) : text, answer, empty, usage, reported: reportedCost(j.usage), t };
       };
       let a = await read(res, t0);
       if (a.empty && !ac.signal.aborted) {

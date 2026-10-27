@@ -89,7 +89,13 @@ async function start() {
   const { settings } = await import("./settings");
   openDb(paths.db);
   data.loadCatalog();
-  await loadKeys();
+  const providers = await import("./providers");
+  providers.loadCustomProviders(); // the providers you added, before their keys are read
+  await loadKeys({ shell: false });
+  // Keys your login shell exports (for the Mac app, which does not start from a terminal) and the
+  // model apps running on this computer: looked for in the background, so the start never waits.
+  loadKeys().catch(() => {});
+  providers.refreshLocalServers().catch(() => {});
   const token = crypto.getRandomValues(new Uint8Array(24)).reduce((s, b) => s + b.toString(16).padStart(2, "0"), "");
   try {
     startServer(port, token);

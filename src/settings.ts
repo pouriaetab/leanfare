@@ -2,6 +2,7 @@
 // subscription price to compare against. Stored as one row in the database.
 import type { ProviderId } from "./config";
 import { getSetting, putSetting } from "./db";
+import type { CustomProvider } from "./providers";
 
 export type Mode = "save" | "balanced" | "best";
 export type Effort = "auto" | "low" | "medium" | "high"; // auto: each model's own default
@@ -30,6 +31,7 @@ export interface Settings {
   instructions: string; // given to every new chat as its instructions (a system prompt); empty: none
   effort: Effort; // how hard thinking models think on the chat screen
   accessKey: string | null; // when set, other apps must send it (see lock.ts); null: no key needed
+  custom: CustomProvider[]; // providers you added: a name and an address that speaks OpenAI's format (providers.ts)
 }
 
 export const DEFAULTS: Settings = {
@@ -47,6 +49,7 @@ export const DEFAULTS: Settings = {
   instructions: "",
   effort: "auto",
   accessKey: null,
+  custom: [],
 };
 
 export const MAX_INSTRUCTIONS = 20_000; // characters
