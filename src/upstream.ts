@@ -234,6 +234,7 @@ export function networkError(def: ProviderDef, e: any): string {
 export async function checkKey(id: ProviderId, key: string | null, signal?: AbortSignal): Promise<KeyCheck> {
   const def = provider(id)!;
   const base = baseOf(id);
+  if (def.noModelList) return checkByAsking(def, base, key, signal);
   let url = `${base}/models`;
   if (id === "anthropic") url = `${base}/v1/models?limit=1000`;
   if (id === "openrouter") url = `${base}/key`;
@@ -250,6 +251,23 @@ export async function checkKey(id: ProviderId, key: string | null, signal?: Abor
     } catch {}
     const message = id === "openrouter" ? "OpenRouter accepted the key." : models ? `${def.name} accepted the key: ${models.length} models available to it.` : `${def.name} accepted the key.`;
     return { ok: true, status: res.status, message, models };
+  } catch (e: any) {
+    return { ok: false, status: 0, message: networkError(def, e), models: null };
+  }
+}
+
+// A provider with no model list (Perplexity): a request naming a model that does not exist costs
+// nothing, and the answer tells a good key (400 or 404: the model is wrong) from a bad one (401, 403).
+async function checkByAsking(def: ProviderDef, base: string, key: string | null, signal?: AbortSignal): Promise<KeyCheck> {
+  try {
+    const res = await fetch(`${base}/chat/completions`, {
+      method: "POST", headers: headersFor(def, key), body: JSON.stringify({ model: "leanfare-key-check", messages: [{ role: "user", content: "." }], max_tokens: 1 }),
+      signal: AbortSignal.any([AbortSignal.timeout(15_000), ...(signal ? [signal] : [])]),
+    });
+    const text = await res.text();
+    if (res.status === 401 || res.status === 403) return { ok: false, status: res.status, message: plainError(def, res.status, text, key), models: null };
+    if (res.status >= 500 || res.status === 429) return { ok: false, status: res.status, message: plainError(def, res.status, text, key), models: null };
+    return { ok: true, status: res.status, message: `${def.name} accepted the key.`, models: null };
   } catch (e: any) {
     return { ok: false, status: 0, message: networkError(def, e), models: null };
   }

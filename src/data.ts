@@ -189,7 +189,9 @@ export function buildCatalog(raw: any, asOf = now()): Catalog {
     // Some models are listed twice, with and without the provider prefix; both
     // give the same id and the duplicate is dropped below.
     const apiId = def.prefix && r.key.startsWith(def.prefix) ? r.key.slice(def.prefix.length) : r.key;
-    if (!apiId || apiId.includes(" ") || apiId.startsWith("ft:") || apiId.includes("/")) continue;
+    if (!apiId || apiId.includes(" ") || apiId.startsWith("ft:") || (apiId.includes("/") && !def.slashIds)) continue;
+    if (def.only && !def.only.test(apiId)) continue; // a provider that keeps rows for models it no longer serves
+    if (def.skip && (def.skip.test(apiId) || def.skip.test(r.name))) continue;
     if (NOT_CHAT.test(r.name)) continue;
     const input = num(r.input), output = num(r.output);
     if (input === null && output === null) continue;
@@ -343,6 +345,10 @@ export const store = {
   openrouter: [] as Model[],
   ollama: [] as Model[],
   ollamaFound: false,
+  extra: [] as Model[], // models of the apps found on this computer and of the providers you added (providers.ts)
+  // The models a provider says it serves today, from its own list, for the providers whose
+  // catalogue rows can outlive the model (llmledger keeps a row until LiteLLM drops it).
+  live: new Map<ProviderId, Set<string>>(),
   status: {
     data: { state: "never", at: null, error: null, tried: null } as SourceStatus,
     openrouter: { state: "never", at: null, error: null, tried: null } as SourceStatus,
@@ -353,7 +359,16 @@ export const store = {
 
 function reindex() {
   store.index = new Map();
-  for (const m of [...store.catalog.models, ...store.openrouter, ...store.ollama]) store.index.set(m.id, m);
+  for (const m of [...store.catalog.models, ...store.openrouter, ...store.ollama, ...store.extra]) store.index.set(m.id, m);
+}
+export function setExtraModels(models: Model[], providers: Set<ProviderId>) {
+  store.extra = [...store.extra.filter((m) => !providers.has(m.provider)), ...models];
+  reindex();
+}
+// Whether a provider still serves a model, by its own list when Leanfare keeps one for it.
+export function served(m: Model): boolean {
+  const s = store.live.get(m.provider);
+  return !s || s.has(m.apiId);
 }
 export const allModels = (): Model[] => [...store.index.values()];
 export const getModel = (id: string) => store.index.get(id);

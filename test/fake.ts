@@ -27,6 +27,15 @@ export const OAUTH_KEY = "sk-or-test-oauth";
 export const KEYS: Record<string, string> = {
   openai: "sk-test-openai-0001", anthropic: "sk-ant-test-0002", google: "AIzaTestGoogleKey0000000000003", openrouter: "sk-or-test-0004",
   deepseek: "sk-test-deepseek-05", xai: "xai-test-key-000006", mistral: "test-mistral-key-07",
+  perplexity: "pplx-test-key-0008", groq: "gsk_test_key_0009", cerebras: "csk-test-key-0010", together: "tgp_v1_test_key_0011", fireworks: "fw_test_key_0012",
+  custom: "custom-test-key-0013",
+};
+// Keys in each provider's real shape, so a pasted key can be recognized (findkeys.ts recognize()).
+export const SHAPED: Record<string, string> = {
+  openai: "sk-proj-" + "a1".repeat(10) + "T3BlbkFJ" + "b2".repeat(10), anthropic: "sk-ant-api03-" + "c".repeat(93) + "AA",
+  google: "AIza" + "D".repeat(35), openrouter: "sk-or-v1-" + "e".repeat(64), deepseek: "sk-" + "0f".repeat(16), xai: "xai-" + "G".repeat(80),
+  perplexity: "pplx-" + "h".repeat(48), groq: "gsk_" + "I".repeat(52), cerebras: "csk-" + "j".repeat(48), together: "tgp_v1_" + "K".repeat(43),
+  fireworks: "fw_" + "L".repeat(24), mistral: "M".repeat(32),
 };
 
 // A longer answer with the usual markdown, for screenshots ("[md]").
@@ -157,6 +166,8 @@ export function startFake() {
         return Response.json({ data: { total_credits: 10, total_usage: 2.5 } });
       }
       if (url.pathname === "/data.json") return dataStatus === 200 && dataJson ? Response.json(dataJson) : new Response("down", { status: dataStatus });
+      // models.dev's list, as small as the tests need (providers.test.ts serves its own).
+      if (url.pathname === "/models-dev/api.json") return Response.json({ nvidia: { id: "nvidia", name: "Nvidia", env: ["NVIDIA_API_KEY"], api: "https://integrate.api.nvidia.com/v1", npm: "@ai-sdk/openai-compatible", models: {} } });
       if (provider === "ollama" && url.pathname.endsWith("/api/tags")) return ollama.down ? new Response("not running", { status: 500 }) : Response.json({ models: ollama.models });
       if (provider === "ollama" && url.pathname === "/ollama/api/ps") return Response.json({ models: ollama.loaded.map((name) => ({ name, model: name, size: ollama.models.find((m) => m.name === name)?.size ?? 0, size_vram: 0, expires_at: "2026-10-22T12:00:00Z" })) });
       if (provider === "ollama" && url.pathname === "/ollama/api/delete" && req.method === "DELETE") {
@@ -206,7 +217,9 @@ export function startFake() {
         }), { headers: { "content-type": "application/x-ndjson" } });
       }
 
-      const keyOk = provider === "ollama" || auth === KEYS[provider] || (provider === "openrouter" && auth === OAUTH_KEY);
+      const keyOk = provider === "ollama" || auth === KEYS[provider] || auth === SHAPED[provider] || (provider === "openrouter" && auth === OAUTH_KEY);
+      // Perplexity has no model list: a request naming a model that does not exist answers 400 to a good key.
+      if (provider === "perplexity" && body?.model === "leanfare-key-check") return keyOk ? Response.json({ error: { message: "Invalid model" } }, { status: 400 }) : Response.json({ error: { message: "Invalid API key" } }, { status: 401 });
       if (url.pathname.endsWith("/models") || url.pathname.endsWith("/key") || url.pathname.includes("/v1/models")) {
         if (provider === "openrouter" && url.pathname.endsWith("/models")) return Response.json({ data: [
           { id: "acme/acme-large", name: "Acme: Large", pricing: { prompt: "0.000001", completion: "0.000004" }, context_length: 100000, created: 1790000000, architecture: { input_modalities: ["text", "image"], output_modalities: ["text"] }, supported_parameters: ["tools", "reasoning"] },
@@ -283,7 +296,8 @@ export function startFake() {
       }
 
       if (url.pathname.endsWith("/chat/completions")) {
-        const usage = { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok, prompt_tokens_details: { cached_tokens: cached }, ...(provider === "openrouter" ? { cost: 0.00042 } : {}) };
+        // OpenRouter reports its cost as a number; Perplexity as an object with its search fee in it.
+        const usage = { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok, prompt_tokens_details: { cached_tokens: cached }, ...(provider === "openrouter" ? { cost: 0.00042 } : {}), ...(provider === "perplexity" ? { search_context_size: "low", cost: { input_tokens_cost: 0.0001, output_tokens_cost: 0.0001, request_cost: 0.005, total_cost: 0.0052 } } : {}) };
         if (!body.stream) {
           return Response.json({ id: "chatcmpl-fake", object: "chat.completion", created: 1, model: body.model, choices: [{ index: 0, message: { role: "assistant", content: answer, ...(think ? { reasoning_content: think } : {}) }, finish_reason: finishReason }], ...(nousage ? {} : { usage }) });
         }
@@ -318,6 +332,7 @@ export function startFake() {
   const bases: Record<string, string> = {
     openai: `${base}/openai/v1`, anthropic: `${base}/anthropic`, google: `${base}/google/v1beta/openai`, openrouter: `${base}/openrouter/api/v1`,
     deepseek: `${base}/deepseek`, xai: `${base}/xai/v1`, mistral: `${base}/mistral/v1`, ollama: `${base}/ollama/v1`,
+    perplexity: `${base}/perplexity`, groq: `${base}/groq/openai/v1`, cerebras: `${base}/cerebras/v1`, together: `${base}/together/v1`, fireworks: `${base}/fireworks/inference/v1`,
   };
   return {
     server, base, bases, seen, oauth, ollama,
