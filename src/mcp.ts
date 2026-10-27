@@ -136,7 +136,7 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
     if (!["status", "start", "stop"].includes(action)) return failure("action must be status, start or stop.");
     let { j } = await call("/api/trial", {}, signal);
     if (action === "start" && !j.running) {
-      if (!j.estimate?.models?.low) return failure("No model is ready yet. Open Leanfare, add a key and tick a model, then start the trial.");
+      if (!j.estimate?.models?.low) return failure(j.estimate?.error ?? "No model is ready yet. Open Leanfare, add a key and tick a model, then start the trial.");
       const e = j.estimate;
       ({ j } = await call("/api/trial/start", { method: "POST", json: {} }, signal));
       const cost = e.estimate === 0 ? "$0 on the models ticked now (free)" : e.estimate === null ? "an unknown cost" : `about ${usd(e.estimate)}`;
@@ -145,7 +145,10 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
     if (action === "stop" && j.running) ({ j } = await call("/api/trial/stop", { method: "POST", json: {} }, signal));
     const r = j.report;
     if (!r) return text("No trial has run yet. Call trial with action start to begin one.", { running: false, report: null });
-    if (j.running) return text(`The trial is running: ${r.done} of ${r.total} answers so far. ${r.arms.filter((a: any) => a.asked).map((a: any) => `${a.effort}: ${a.right} of ${a.answered} right`).join(", ")}.`, { running: true, done: r.done, total: r.total });
+    if (j.running) {
+      const sofar = r.arms.filter((a: any) => a.asked).map((a: any) => `${a.effort}: ${a.right} of ${a.answered} right`).join(", ");
+      return text(`The trial is running: ${r.done} of ${r.total} answers so far.${sofar ? ` ${sofar}.` : ""}`, { running: true, done: r.done, total: r.total });
+    }
     return text(reportText(r, "mcp"), { running: false, status: r.status, lowest_passing: r.lowest, claude_line: r.claudeLine, arms: r.arms.map((a: any) => ({ effort: a.effort, right: a.right, answered: a.answered, verdict: a.verdict, cost_usd: a.cost })), share_url: r.share.url });
   }
   if (name === "spend") {

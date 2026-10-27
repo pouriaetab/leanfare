@@ -219,7 +219,7 @@ export const QUESTIONS: Question[] = [
     id: "log-503", what: "the request id of the only 503 (server.log)", kind: "read", files: ["server.log"],
     task: "What is the request id of the only line in server.log with status 503? Answer with only the id.",
     truth: (f) => logRows(f).find((r) => r.status === 503)!.id,
-    grade: (a, t) => (a.match(/r-\d+/g) ?? []).length === 1 && a.includes(t),
+    grade: (a, t) => sameSet(a.match(/\br-\d+\b/g) ?? [], [t]),
   },
   {
     id: "log-user", what: "the user with the most ERROR lines (server.log)", kind: "read", files: ["server.log"],
@@ -291,12 +291,13 @@ const tokensOf = (chars: number) => Math.ceil(chars / 4);
 // ---- the estimate before it starts ------------------------------------------------------
 
 // The first answers at today's picks, and the high effort checks at about the same again.
-export async function trialEstimate(signal: AbortSignal): Promise<{ questions: number; answers: number; estimate: number | null; seconds: number | null; models: Record<Effort, string | null>; fileTokens: number }> {
+export async function trialEstimate(signal: AbortSignal): Promise<{ questions: number; answers: number; estimate: number | null; seconds: number | null; models: Record<Effort, string | null>; fileTokens: number; error: string | null }> {
   const f = trialFiles();
-  let estimate: number | null = 0, seconds: number | null = 0;
+  let estimate: number | null = 0, seconds: number | null = 0, error: string | null = null;
   const models = { low: null, medium: null, high: null } as Record<Effort, string | null>;
   for (const arm of ARMS) for (const q of QUESTIONS) {
     const e = await estimateDelegate(inputOf(q, arm.effort, arm.check, f), signal);
+    error ??= e.error; // why there is no model (none ready, or the budget), said once
     const times = arm.check === "auto" ? 2 : 1;
     estimate = estimate === null || e.estimate === null ? null : estimate + e.estimate * times;
     seconds = seconds === null || e.seconds === null ? null : seconds + e.seconds * times;
@@ -304,7 +305,7 @@ export async function trialEstimate(signal: AbortSignal): Promise<{ questions: n
   }
   const fileTokens = QUESTIONS.reduce((a, q) => a + tokensOf(q.files.reduce((n, name) => n + f[name].length, 0)), 0) * ARMS.length;
   if (seconds !== null) seconds += (QUESTIONS.length * ARMS.length * timing.pause) / 1000;
-  return { questions: QUESTIONS.length, answers: QUESTIONS.length * ARMS.length, estimate, seconds, models, fileTokens };
+  return { questions: QUESTIONS.length, answers: QUESTIONS.length * ARMS.length, estimate, seconds, models, fileTokens, error: models.low ? null : error };
 }
 
 // ---- running it ---------------------------------------------------------------------------
@@ -337,20 +338,22 @@ const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((res) => {
 
 async function askOne(q: Question, arm: (typeof ARMS)[number], f: Record<string, string>, truth: any, ac: AbortController): Promise<TrialRow> {
   const input = inputOf(q, arm.effort, arm.check, f);
-  const t0 = performance.now();
+  let t0 = performance.now();
   let r: DelegateResult | null = null;
   let error: string | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try { r = await runDelegate(input, ac.signal); error = null; break; }
     catch (e: any) {
       error = String(e?.message ?? e);
-      if (e?.code === "stopped") ac.abort(); // stopped in Leanfare (Stop, or Pause's stop all): the trial stops too
+      if (e?.type === "stopped") ac.abort(); // stopped in Leanfare (Stop, or Pause's stop all): the trial stops too
       if (ac.signal.aborted || attempt || !RATE.test(error)) break;
       await sleep(timing.rateWait, ac.signal); // a free plan's limit a minute: wait, then once more
+      if (ac.signal.aborted) break; // stopped while waiting: nothing more is sent
+      t0 = performance.now(); // the answer's own time, not the wait
     }
   }
   const fileTokens = tokensOf(input.files.reduce((n, x) => n + x.text.length, 0));
-  const seconds = (performance.now() - t0) / 1000;
+  const seconds = r ? r.seconds : (performance.now() - t0) / 1000;
   if (!r) return { q: q.id, effort: arm.effort, ok: false, right: null, answer: "", model: null, cost: null, check: null, checker: null, first: null, fileTokens, seconds, error };
   return {
     q: q.id, effort: arm.effort, ok: true, right: q.grade(r.answer, truth), answer: r.answer.slice(0, 2000), model: r.model.id, cost: r.total,
