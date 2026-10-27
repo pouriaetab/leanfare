@@ -5,26 +5,30 @@
 // the environment, and the marker again, and keeps only what is between the markers (banners and
 // anything else your shell prints are dropped). At most 10 seconds; on any failure, nothing.
 //
-// Only the names Leanfare asks for are read (provider key variables), never the rest.
+// Only key variables are kept (names ending in _KEY, and PATH for finding the claude command);
+// the rest of what the shell prints is dropped at once.
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 
 let cached: Promise<Record<string, string>> | null = null;
+let known: Record<string, string> = {}; // the last answer, for questions that must not wait on the shell
 
 export function shellEnv(timeoutMs = 10_000): Promise<Record<string, string>> {
   if (process.env.LEANFARE_SHELL_ENV === "off" || process.platform === "win32") return Promise.resolve({});
-  cached ??= readShellEnv(timeoutMs);
+  cached ??= readShellEnv(timeoutMs).then((env) => (known = env));
   return cached;
 }
-export const forgetShellEnv = () => { cached = null; };
+export const shellEnvKnown = () => known;
+export const forgetShellEnv = () => { cached = null; known = {}; };
+const KEEP = /^(PATH|[A-Z][A-Z0-9_]*_KEY)$/;
 
 function readShellEnv(timeoutMs: number): Promise<Record<string, string>> {
   const shell = process.env.SHELL || "/bin/zsh";
   const mark = randomBytes(6).toString("hex");
   // csh and tcsh take -ic; everything else -ilc. env -0 separates the variables with NUL bytes,
-  // so a value holding a newline stays whole.
+  // so a value holding a newline stays whole; an env without -0 prints one per line instead.
   const csh = /\/t?csh$/.test(shell);
-  const cmd = `printf '%s' '${mark}'; env -0; printf '%s' '${mark}'`;
+  const cmd = `printf '%s' '${mark}'; env -0 2>/dev/null || env; printf '%s' '${mark}'`;
   return new Promise((resolve) => {
     let out = "";
     let done = false;
@@ -46,10 +50,15 @@ function readShellEnv(timeoutMs: number): Promise<Record<string, string>> {
 export function parseEnv(out: string, mark: string): Record<string, string> {
   const a = out.indexOf(mark), b = out.lastIndexOf(mark);
   if (a < 0 || b <= a) return {};
+  const body = out.slice(a + mark.length, b);
+  // NUL separated (env -0); or one per line, where a line that does not start NAME= continues the last value.
+  const pairs: string[] = [];
+  if (body.includes("\0")) pairs.push(...body.split("\0"));
+  else for (const line of body.replace(/\n$/, "").split("\n")) { if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(line) || !pairs.length) pairs.push(line); else pairs[pairs.length - 1] += "\n" + line; }
   const env: Record<string, string> = {};
-  for (const pair of out.slice(a + mark.length, b).split("\0")) {
+  for (const pair of pairs) {
     const i = pair.indexOf("=");
-    if (i > 0) env[pair.slice(0, i)] = pair.slice(i + 1);
+    if (i > 0 && KEEP.test(pair.slice(0, i))) env[pair.slice(0, i)] = pair.slice(i + 1);
   }
   return env;
 }

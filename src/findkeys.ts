@@ -17,7 +17,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { PROVIDERS, provider } from "./config";
 import { getKey } from "./keys";
-import { registry, registryForEnv } from "./providers";
+import { customFor, registry, registryForEnv } from "./providers";
 import { shellEnv } from "./shellenv";
 
 export interface FoundKey {
@@ -105,13 +105,14 @@ export async function findKeys(): Promise<FoundKey[]> {
     for (const [name, value] of Object.entries(vars)) {
       if (!looksLikeKey(value)) continue;
       const builtIn = PROVIDERS.find((p) => p.needsKey && p.envKeys.includes(name));
-      const fromReg = !builtIn && reg && /(_API_KEY|_TOKEN|_KEY)$/.test(name) ? registryForEnv(reg, name) : null;
+      const fromReg = !builtIn && reg ? registryForEnv(reg, name) : null;
       if (!builtIn && !fromReg) continue;
-      const pid = builtIn?.id ?? `custom-${fromReg!.id}`;
+      // A provider already added for that models.dev entry is the one the key goes to, not a second one.
+      const pid = builtIn?.id ?? customFor(fromReg!.id, fromReg!.api)?.id ?? `custom-${fromReg!.id}`;
       const dedupe = `${pid}|${value}`;
       if (seen.has(dedupe)) continue;
       seen.add(dedupe);
-      const have = getKey(builtIn?.id ?? pid);
+      const have = getKey(pid);
       out.push({
         ref: `${src.id}:${name}`, provider: builtIn?.id ?? null, registry: fromReg, label: builtIn?.name ?? fromReg!.name,
         where: src.where, hint: `…${value.slice(-4)}`, status: !have ? "new" : have === value ? "same" : "different",
@@ -132,16 +133,17 @@ export async function readFound(ref: string): Promise<string | null> {
 
 // A pasted key's provider, by how its keys look: the most telling shapes first. A key that could
 // be several (a bare sk-... is OpenAI's old shape and DeepSeek's) lists each, to test in turn.
-// A Claude subscription login or an admin key is refused: neither works for answers here.
+// Anything of Anthropic's that is not an API key (a Claude login, its refresh token, a claude.ai
+// session, an admin key) is refused, and never tested anywhere: none works for answers here.
 export function recognize(key: string): { providers: string[]; refuse: string | null } {
   const k = key.trim();
-  if (/^sk-ant-oat\d\d-/.test(k)) return { providers: [], refuse: "That is a Claude subscription login, not an API key. Anthropic does not let other apps use it; make an API key at console.anthropic.com." };
   if (/^sk-ant-admin\d\d-/.test(k)) return { providers: [], refuse: "That is an Anthropic admin key; it cannot send messages. Make an API key at console.anthropic.com." };
+  if (/^sk-ant-/.test(k) && !/^sk-ant-api\d\d-/.test(k)) return { providers: [], refuse: "That is a Claude login or session token, not an API key. Anthropic does not let other apps use it; make an API key at console.anthropic.com." };
   const strong = PROVIDERS.filter((p) => p.keyShape && p.id !== "mistral" && p.id !== "deepseek" && p.keyShape.test(k)).map((p) => p.id);
   if (strong.length) return { providers: strong, refuse: null };
   const loose: string[] = [];
   if (/^sk-[0-9a-f]{32}$/.test(k)) loose.push("deepseek", "openai");
-  else if (/^sk-[\w-]{20,}$/.test(k)) loose.push("openai", "deepseek");
+  else if (/^sk-[\w-]{20,}$/.test(k) && !k.startsWith("sk-ant-")) loose.push("openai", "deepseek");
   if (/^[A-Za-z0-9]{32}$/.test(k)) loose.push("mistral");
   return { providers: loose.filter((id) => !!provider(id)), refuse: null };
 }

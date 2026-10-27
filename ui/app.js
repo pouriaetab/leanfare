@@ -825,7 +825,7 @@
     rows.push(h("div", {}, h("b", { text: "Why: " }), meta.reason ?? ""));
     if (meta.task) rows.push(h("div", {}, h("b", { text: "Task guess: " }), `${S.st.tasks.find((t) => t[0] === meta.task)?.[1] ?? meta.task}, from ${meta.why}.`, meta.alt ? ` It could also have been ${S.st.tasks.find((t) => t[0] === meta.alt)?.[1]?.toLowerCase() ?? meta.alt}.` : ""));
     for (const n of meta.notes ?? []) rows.push(h("div", {}, h("b", { text: "Note: " }), n));
-    if (meta.model && sameQuality(meta)) rows.push(h("div", {}, h("b", { text: "Speed: " }), `${typeof meta.seconds === "number" ? `expected ${secondsText(meta.seconds)}${meta.secondsMeasured ? "" : " (a rough guess)"}. ` : ""}${sameQuality(meta)}`));
+    if (meta.model && (typeof meta.seconds === "number" || sameQuality(meta))) rows.push(h("div", {}, h("b", { text: "Speed: " }), `${typeof meta.seconds === "number" ? `expected ${secondsText(meta.seconds)}${meta.secondsMeasured ? ", from this model's answers here." : " (a rough guess until this model has answered three times here)."} ` : ""}${sameQuality(meta)}`.trim()));
     if (meta.alternatives?.length) rows.push(h("div", {}, h("b", { text: "Other choices: " }), meta.alternatives.map((a) => `${a.label} (rated ${a.rating ?? "—"}, ≈ ${money(a.estimate)}${typeof a.seconds === "number" ? `, ${secondsText(a.seconds)}` : ""})`).join(" · ")));
     if (meta.usual && meta.usualCost !== null && meta.usualCost !== undefined && meta.usual.id !== meta.model?.id) rows.push(h("div", {}, h("b", { text: "On your usual model: " }), `${meta.usual.label} would have cost ${money(meta.usualCost)} for the same tokens.`));
     if (meta.price) {
@@ -995,7 +995,7 @@
       if (r.error) { composer.est.textContent = r.error; return; }
       const p = r.plan;
       const nf = S.pending.length;
-      composer.est.textContent = `≈ ${money(r.estimate)}${typeof p.seconds === "number" ? ` · ${secondsText(p.seconds)}` : ""} on ${p.model.label}${p.auto ? ` · ${S.st.tasks.find((t) => t[0] === p.task)?.[1] ?? p.task}` : ""}${p.effort ? ` · thinking ${p.effort}` : ""}${nf ? ` · ${nf} file${nf === 1 ? "" : "s"}` : ""} · estimate${otherChoice(p)}`;
+      composer.est.textContent = `≈ ${money(r.estimate)}${typeof p.seconds === "number" ? ` · ${secondsText(p.seconds)}${p.secondsMeasured ? "" : " (a guess)"}` : ""} on ${p.model.label}${p.auto ? ` · ${S.st.tasks.find((t) => t[0] === p.task)?.[1] ?? p.task}` : ""}${p.effort ? ` · thinking ${p.effort}` : ""}${nf ? ` · ${nf} file${nf === 1 ? "" : "s"}` : ""} · estimate${otherChoice(p)}`;
       composer.est.title = [p.reason, sameQuality(p)].filter(Boolean).join("\n");
     } catch {}
   }
@@ -1372,7 +1372,7 @@
   // ---- the delegate trial (trial.ts) ------------------------------------------------------------
   // Before Claude hands work over on its own: questions with known answers, at three efforts.
   async function loadTrial() {
-    try { S.trial = await api("/api/trial"); } catch { return; }
+    try { S.trial = await api("/api/trial"); } catch { if (S.trial?.running) pollTrial(); return; } // a missed look: try again
     const old = $("#trialCard");
     if (old) old.replaceWith(trialCardEl());
     if (S.trial.running) pollTrial();
@@ -1405,7 +1405,7 @@
       if (old) old.replaceWith(trialCardEl());
       pollTrial();
     }, "btn small primary");
-    const estText = !e ? "" : !e.models.low ? "Add a key and tick a model first: the trial asks the models you ticked."
+    const estText = !e ? "" : !e.models.low ? (e.error ?? "Add a key and tick a model first: the trial asks the models you ticked.")
       : `${e.estimate === 0 ? "$0 on the models you ticked now (free)" : e.estimate === null ? "On the models you ticked now" : `About ${money(e.estimate)} on the models you ticked now`}${typeof e.seconds === "number" ? `, about ${Math.max(1, Math.round(e.seconds / 60))} min` : ""}: ${["low", "medium", "high"].map((k) => `${k} ${labelOf(e.models[k])}`).join(", ")}.`;
     if (!r) {
       card.append(h("p", { text: `Before Claude hands work to Leanfare on its own, see how your models do. ${about}` }), estText ? h("p", { class: "fine", text: estText }) : null,
@@ -1579,7 +1579,7 @@
       const r = await api(`/api/keys/${p.id}`, { method: "DELETE" });
       S.st = r.state;
       renderShell(); renderSettings(); renderComposerBar();
-      t.set(r.env ? `Removed. Your ${r.env} environment variable still holds a key, and Leanfare will use it after a restart.` : `Removed the ${p.name} key.`, "done",
+      t.set(r.env ? (r.from === "shell" ? `Removed. Your shell's settings still set ${r.env}, and Leanfare will use that key after a restart; take that line out of your shell's settings to stop it.` : `Removed. Your ${r.env} environment variable still holds a key, and Leanfare will use it after a restart.`) : `Removed the ${p.name} key.`, "done",
         r.env ? {} : { action: { label: "Undo", run: async () => { try { const x = await api(`/api/keys/${p.id}/restore`, { body: {} }); S.st = x.state; renderSettings(); renderShell(); renderComposerBar(); toast("Key put back.", "done"); } catch (e) { failed(e); } } } });
     } catch (e) { t.set(String(e.message ?? e), "error"); }
   }
@@ -1805,9 +1805,9 @@
     if (p.needsKey) {
       if (p.key.saved) {
         body.append(h("div", { class: "keyline" }, "Key ", h("code", { text: p.key.hint }),
-          h("span", { text: p.key.where === "keychain" ? "in the macOS Keychain" : p.key.where === "environment" ? "from your environment" : "in a file only you can read" }),
+          h("span", { text: p.key.where === "keychain" ? "in the macOS Keychain" : p.key.where === "environment" ? "from your environment" : p.key.where === "shell" ? "from your shell's settings" : "in a file only you can read" }),
           h("span", { class: "grow" }),
-          p.key.where === "environment" ? null : h("button", { class: "btn small", text: "Remove key", onclick: () => removeKey(p) })));
+          p.key.where === "environment" || p.key.where === "shell" ? null : h("button", { class: "btn small", text: "Remove key", onclick: () => removeKey(p) })));
       }
       if (p.id === "openrouter") body.append(h("div", { class: "row" },
         runButton(p.key.saved ? "Connect again" : "Connect OpenRouter", connectOpenRouter, "btn primary"),
@@ -1919,7 +1919,8 @@
   }
   async function findMyKeys(signal) {
     const r = await api("/api/keys/found", { signal });
-    S.found = { keys: r.keys, picked: new Set(r.keys.filter((k) => k.status === "new").map((k) => k.ref)) };
+    // New keys for built-in providers start ticked; one that would add a provider waits for your tick.
+    S.found = { keys: r.keys, picked: new Set(r.keys.filter((k) => k.status === "new" && !k.registry).map((k) => k.ref)) };
     renderSettings();
   }
   function foundListEl() {
@@ -1929,7 +1930,7 @@
     const rows = f.keys.map((k) => h("label", { class: "check found-row" },
       h("input", { type: "checkbox", checked: f.picked.has(k.ref), disabled: k.status === "same", onchange: (e) => { if (e.target.checked) f.picked.add(k.ref); else f.picked.delete(k.ref); } }),
       h("span", { text: `${k.label} key ${k.hint}` }),
-      h("span", { class: "note", text: ` · ${k.where}${k.status === "same" ? " · already in Leanfare" : k.status === "different" ? " · Leanfare has a different key for it" : ""}${k.registry ? " · will be added as a provider" : ""}` })));
+      h("span", { class: "note", text: ` · ${k.where}${k.status === "same" ? " · already in Leanfare" : k.status === "different" ? " · Leanfare has a different key for it" : ""}${k.registry ? ` · would add ${k.registry.name} as a provider, at ${k.registry.api}` : ""}` })));
     return h("div", { class: "found" },
       h("p", { class: "note", text: "Found on this computer. Tick the keys to use: each is tested with its own provider first, and nothing is sent anywhere else." }),
       ...rows,
@@ -2030,7 +2031,7 @@
       a.note ? h("div", { class: "note", text: a.note }) : null,
       a.manual && a.status !== "added" ? h("div", { class: "note manual" }, "Or in Terminal: ", h("code", { text: a.manual }), " ", copyBtn(a.manual)) : null);
     return h("div", { class: "setting apps" }, h("h3", { text: "Use Leanfare in your apps" }),
-      h("p", { text: "Adds Leanfare's tools (delegate, ask, spend, models, estimate) to the AI apps you already use, so they work as usual with Leanfare on top. Leanfare changes only its own entry in each app's settings, and keeps a copy of the file as it was." }),
+      h("p", { text: "Adds Leanfare's tools (delegate, ask, spend, models, estimate, trial) to the AI apps you already use, so they work as usual with Leanfare on top. Leanfare changes only its own entry in each app's settings, and keeps a copy of the file as it was." }),
       S.apps?.loading ? h("p", { class: "note", text: "Looking for the AI apps on this computer…" }) : null,
       ...here.map(row),
       !S.apps?.loading && !here.length ? h("p", { class: "note", text: "None of the apps Leanfare knows are on this computer yet." }) : null,

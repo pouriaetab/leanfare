@@ -20,7 +20,8 @@
 //   [reply@xai FAIL: x]     answer with this text, only when the request goes to that provider
 //                           ([reply PASS] for any provider; the one for the provider wins)
 // A test can also answer by code: hooks.answer(prompt, provider, model) returns the text, or null for the usual;
-// hooks.fail(prompt, provider) returns an HTTP status to fail with, or null.
+// hooks.fail(prompt, provider) returns an HTTP status to fail with, or null; hooks.slow(prompt, provider)
+// the milliseconds to wait first.
 import { createHash } from "node:crypto";
 
 // The key OpenRouter's sign in hands out. It works on the fake like the paste key does.
@@ -98,6 +99,7 @@ export function startFake() {
   const hooks = {
     answer: null as null | ((prompt: string, provider: string, model: string) => string | null),
     fail: null as null | ((prompt: string, provider: string) => number | null),
+    slow: null as null | ((prompt: string, provider: string) => number), // milliseconds to wait before answering
   };
   const onceSeen = new Set<string>();
   // OpenRouter's sign in: /openrouter/auth shows the "Authorize" step and sends the browser back with a
@@ -244,6 +246,8 @@ export function startFake() {
       if (fail?.[0]) return Response.json({ error: { message: `fake failure ${fail[0]}` } }, { status: fail[0] });
       const slow = directive(text, "slow", provider);
       if (slow?.[0]) await Bun.sleep(slow[0]);
+      const slowHook = hooks.slow?.(text, provider) ?? 0;
+      if (slowHook > 0) await Bun.sleep(slowHook);
       const u = directive(text, "usage");
       const inTok = u?.[0] ?? Math.ceil(text.length / 4);
       // Like a real provider, never write more than the request allows.

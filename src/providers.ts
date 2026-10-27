@@ -121,11 +121,30 @@ export function checkCustomInput(b: any): { name: string; base: string; key: str
   const base = typeof b?.base === "string" ? b.base.trim().replace(/\/+$/, "") : "";
   const key = typeof b?.key === "string" && b.key.trim() ? b.key.trim() : null;
   if (!name) return "Give the provider a name.";
-  if (!/^https?:\/\/[^\s/]+/i.test(base)) return "The address must start with https:// (or http:// for one on this computer or your network).";
-  if (/^http:\/\//i.test(base) && !/^http:\/\/(127\.0\.0\.1|localhost|\[::1\]|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(base)) return "Use https:// for an address on the internet, so your key is not sent in the clear.";
+  let u: URL;
+  try { u = new URL(base); } catch { return "The address must start with https:// (or http:// for one on this computer or your network)."; }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return "The address must start with https:// (or http:// for one on this computer or your network).";
+  if (u.username || u.password) return "Leave any name or password out of the address; put the key in the key box.";
+  if (u.search || u.hash) return "The address should end at its path (most end in /v1), with nothing after a ? or #.";
+  if (u.protocol === "http:" && !onThisNetwork(u.hostname)) return "Use https:// for an address on the internet, so your key is not sent in the clear.";
   if (key && (key.length < 8 || /\s/.test(key))) return "That does not look like a key: it should be one word with no spaces.";
   if (PROVIDERS.some((p) => p.name.toLowerCase() === name.toLowerCase())) return `${name} is built in: add its key in its own card.`;
   return { name, base, key, registry: typeof b?.registry === "string" ? b.registry : null };
+}
+
+// This computer or your own network, by the exact host name: http:// is allowed only there.
+export function onThisNetwork(host: string): boolean {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h === "::1" || h.endsWith(".local")) return true;
+  const ip = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h)?.slice(1).map(Number);
+  if (!ip || ip.some((n) => n > 255)) return false;
+  return ip[0] === 127 || ip[0] === 10 || (ip[0] === 192 && ip[1] === 168) || (ip[0] === 172 && ip[1] >= 16 && ip[1] <= 31);
+}
+
+// The provider you already added for a models.dev entry (by its id, or the same address), if any.
+export function customFor(registryId: string | null, base: string): CustomProvider | null {
+  const b = base.replace(/\/+$/, "");
+  return (settings().custom ?? []).find((c) => (registryId && c.registry === registryId) || c.base.replace(/\/+$/, "") === b) ?? null;
 }
 
 export async function addCustomProvider(input: { name: string; base: string; key: string | null; registry: string | null }): Promise<{ ok: true; id: string; models: number } | { ok: false; message: string }> {
@@ -246,9 +265,14 @@ export function registryChoices(r: Registry): { id: string; name: string; api: s
 }
 
 // The models.dev provider whose key lives in this environment variable (NVIDIA_API_KEY -> nvidia).
+// Only *_API_KEY names: general tokens (GITHUB_TOKEN, ..._ACCESS_TOKEN) are never guessed at. Plan
+// endpoints (a coding plan, a token plan, Copilot, "Go") take a subscription's key, so they are
+// skipped; and when several providers name the same variable, Leanfare does not guess.
+const PLAN_ENDPOINT = /coding|plan|copilot|subscription|(^|[-\s])go$/i;
 export function registryForEnv(r: Registry, name: string): { id: string; name: string; api: string } | null {
-  for (const [id, p] of Object.entries(r.providers)) if (p.api && /^(https:\/\/|http:\/\/(127\.0\.0\.1|localhost)[:/])/.test(p.api) && p.env.includes(name)) return { id, name: p.name, api: p.api };
-  return null;
+  if (!/^[A-Z][A-Z0-9_]*_API_KEY$/.test(name)) return null;
+  const hits = Object.entries(r.providers).filter(([id, p]) => p.env.includes(name) && !!p.api && /^(https:\/\/|http:\/\/(127\.0\.0\.1|localhost)[:/])/.test(p.api) && !PLAN_ENDPOINT.test(id) && !PLAN_ENDPOINT.test(p.name));
+  return hits.length === 1 ? { id: hits[0][0], name: hits[0][1].name, api: hits[0][1].api! } : null;
 }
 
 // What the Settings screen shows about the apps found and the providers added.
