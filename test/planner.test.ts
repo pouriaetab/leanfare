@@ -1,9 +1,10 @@
 // The plan (planner.ts): a task split into parts, each with where it runs and on which model, as a
 // table. The split by a model and by rules, where each part goes, and the plan's limits.
 import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chainSeconds, checkPlan, makePlan, readSplit, rulesSplit, SIZE_TOKENS, SPLIT_SYSTEM, tableOf, type Part } from "../src/planner";
+import { chainSeconds, checkPlan, forgetPlans, makePlan, readSplit, rulesSplit, runView, SIZE_TOKENS, SPLIT_SYSTEM, startRun, stopRun, tableOf, type Part } from "../src/planner";
 import { saveSnap } from "../src/statusline";
 import { ALL_TICKED, boot, fake, keys, ledger, reset, ui } from "./app";
 
@@ -12,8 +13,10 @@ beforeAll(async () => { url = (await boot()).url; });
 beforeEach(async () => {
   for (const f of ["limits-last.json", "limits.jsonl"]) rmSync(join(process.env.LEANFARE_DATA_DIR!, f), { force: true });
   fake.hooks.answer = null;
+  forgetPlans();
   await reset({ ticked: ALL_TICKED });
 });
+async function until(ok: () => boolean, ms = 10_000) { for (let i = 0; i < ms / 25 && !ok(); i++) await Bun.sleep(25); }
 const signal = () => new AbortController().signal;
 
 const SPLIT = JSON.stringify({ parts: [
@@ -166,5 +169,74 @@ describe("where each part runs", () => {
     expect(r.status).toBe(200);
     expect(r.json.parts.length).toBe(3);
     expect(typeof r.json.table).toBe("string");
+  });
+});
+
+describe("running a plan here (the Plan tab)", () => {
+  test("Leanfare's parts run at once, each after the parts it needs with their answers handed on; a part after one of yours waits", async () => {
+    await keys("openai", "google", "deepseek");
+    const prompts: string[] = [];
+    fake.hooks.answer = (prompt) => {
+      if (prompt.includes("The person works in")) return SPLIT;
+      prompts.push(prompt);
+      return prompt.includes("List the modules") ? "MODULES: proxy, router, cost." : null;
+    };
+    const plan = await makePlan({ task: "Reverse engineer LiteLLM", files: [], manager: "Claude Code", signal: signal() });
+    const v = startRun(plan.id);
+    expect(v.running).toBe(true);
+    expect(startRun(plan.id)).toBe(v); // asked again while it runs: the same run
+    await until(() => !runView(plan.id)!.running);
+    const st = Object.fromEntries(runView(plan.id)!.parts.map((p) => [p.n, p.status]));
+    expect(st).toEqual({ 1: "done", 2: "done", 3: "yours", 4: "yours", 5: "blocked" });
+    const two = prompts.find((x) => x.includes("Explain how the router picks a model"))!;
+    expect(two).toContain("What the earlier parts found");
+    expect(two).toContain("MODULES: proxy, router, cost."); // part 1's answer, handed on
+    expect(runView(plan.id)!.parts[0].receipt).toContain("Leanfare delegate");
+    expect(runView(plan.id)!.cost).not.toBeNull();
+  });
+
+  test("files named by path in the Plan tab are measured, then handed over when their part runs", async () => {
+    await keys("openai", "google", "deepseek");
+    const dir = mkdtempSync(join(tmpdir(), "plan-tab-"));
+    mkdirSync(join(dir, "src"));
+    writeFileSync(join(dir, "src", "router.py"), "def pick(deployments):\n    return deployments[0]\n");
+    writeFileSync(join(dir, ".env"), "OPENAI_API_KEY=sk-never");
+    const v = checkPlan({ task: "Reverse engineer this router and build a smaller one", paths: [dir], split: "rules" });
+    if (typeof v === "string") throw new Error(v);
+    expect(v.files.map((f) => f.size)).toEqual([Buffer.byteLength("def pick(deployments):\n    return deployments[0]\n")]); // router.py only: .env is never counted
+    expect(checkPlan({ task: "x", paths: ["code/x"] })).toBe("code/x is not a full path. Give full paths, like ~/code/project.");
+    const prompts: string[] = [];
+    fake.hooks.answer = (prompt) => { prompts.push(prompt); return null; };
+    const plan = await makePlan({ ...v, signal: signal() });
+    expect(plan.parts[0].files.length).toBe(1);
+    startRun(plan.id);
+    await until(() => !runView(plan.id)!.running);
+    expect(runView(plan.id)!.parts[0].status).toBe("done");
+    expect(prompts.some((x) => x.includes("def pick(deployments):") && x.includes("router.py"))).toBe(true);
+    expect(prompts.some((x) => x.includes("sk-never"))).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("Stop ends the run: what is running and what waits is stopped", async () => {
+    await keys("openai", "google", "deepseek");
+    fake.hooks.answer = (prompt) => (prompt.includes("The person works in") ? SPLIT : null);
+    fake.hooks.slow = (prompt) => (prompt.includes("List the modules") ? 3000 : 0);
+    try {
+      const plan = await makePlan({ task: "Reverse engineer LiteLLM", files: [], manager: "Claude Code", signal: signal() });
+      startRun(plan.id);
+      await until(() => runView(plan.id)!.parts[0].status === "running");
+      stopRun(plan.id);
+      await until(() => !runView(plan.id)!.running);
+      const st = runView(plan.id)!.parts.map((p) => p.status);
+      expect(st[0]).toBe("stopped");
+      expect(st[1]).toBe("stopped"); // it was waiting for part 1
+    } finally { fake.hooks.slow = null; }
+  });
+
+  test("a plan Leanfare no longer has cannot run, and says what to do", async () => {
+    expect(() => startRun("nope")).toThrow("Make the plan again.");
+    expect((await ui(url, "/api/plan/run", { id: "nope" })).status).toBe(404);
+    expect((await ui(url, "/api/plan/run?id=nope")).status).toBe(404);
+    expect((await ui(url, "/api/plan/stop", { id: "nope" })).status).toBe(404);
   });
 });

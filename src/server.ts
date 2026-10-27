@@ -21,7 +21,7 @@ import * as local from "./local";
 import { plansBrief, plansView } from "./plans";
 import { meterViews, setStatusline } from "./meter";
 import { checkDelegate, runDelegate } from "./delegate";
-import { checkPlan, makePlan } from "./planner";
+import { checkPlan, makePlan, runView, startRun, stopRun } from "./planner";
 import { retirementNotices } from "./retire";
 import { savings } from "./savings";
 import { checkKey, effortLevels, UserError } from "./upstream";
@@ -538,6 +538,9 @@ async function api(req: Request, url: URL): Promise<Response> {
     if (typeof v === "string") return fail(400, v);
     return json(await makePlan({ ...v, signal: req.signal }));
   }
+  if (p === "/api/plan/run" && m === "POST") { const b = await readBody(req); return json(startRun(String(b?.id ?? ""))); }
+  if (p === "/api/plan/run" && m === "GET") { const v = runView(url.searchParams.get("id") ?? ""); return v ? json(v) : fail(404, "No run of that plan."); }
+  if (p === "/api/plan/stop" && m === "POST") { const b = await readBody(req); const v = stopRun(String(b?.id ?? "")); return v ? json(v) : fail(404, "No run of that plan."); }
   // The delegate trial (trial.ts): its estimate and last report, start, stop.
   if (p === "/api/trial" && m === "GET") return json(await trialView(req.signal));
   if (p === "/api/trial/start" && m === "POST") { startTrial(); return json(await trialView(req.signal, false)); }

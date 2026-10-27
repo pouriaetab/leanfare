@@ -16,13 +16,15 @@
 // plan is left: near a limit, more parts go out.
 //
 // No words are kept: the ledger has the split's model, tokens and cost, as for any answer.
-import { TIER, taskFor, type Effort, type Kind } from "./delegate";
+import { DEFAULT_MAX_OUT, TIER, runDelegate, taskFor, type Effort, type Kind } from "./delegate";
 import type { Model } from "./data";
 import { chargeOf, plan as route, runChat, usableModels } from "./engine";
 import { windowsNow } from "./plans";
 import { guessTask, type Msg } from "./router";
 import { UserError } from "./upstream";
-import { secondsText } from "./util";
+import { now, randomId, secondsText } from "./util";
+import { DELEGATE_LIMITS, readForDelegate, sizesForPlan } from "./readfiles";
+import { homedir } from "node:os";
 
 export type PartKind = "read" | "write" | "reason" | "code" | "search" | "act";
 export type Size = "none" | "small" | "medium" | "large";
@@ -36,7 +38,7 @@ const OUT_YOU = 2_000; // what a part the app does itself writes, about
 export const MAX_PARTS = 8;
 export const MAX_TASK = 20_000; // characters
 
-export interface PlanFile { name: string; size: number } // bytes
+export interface PlanFile { name: string; size: number; path?: string } // size: bytes; path: where it is, when Leanfare itself measured it (the Plan tab)
 export interface Part {
   n: number;
   title: string;
@@ -54,6 +56,7 @@ export interface Part {
   why: string;
 }
 export interface PlanResult {
+  id: string; // kept here (the last 20), so the Plan tab can run it
   task: string;
   manager: string; // the app the person works in, as said ("Claude Code"), or "you"
   parts: Part[];
@@ -204,7 +207,7 @@ const usd = (v: number | null) => (v === null ? "not known" : v === 0 ? "$0" : v
 const RUNS: Record<Where, string> = { you: "you", local: "Leanfare, on this computer", free: "Leanfare, free model", paid: "Leanfare, pay per use" };
 const cell = (s: string) => s.replace(/\|/g, "/").replace(/\n/g, " ");
 
-export function tableOf(r: Omit<PlanResult, "table" | "next">): string {
+export function tableOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
   const rows = r.parts.map((p) => [
     String(p.n), p.title, `${LABEL_KIND[p.kind]}, ${p.effort}`, p.where === "you" ? r.manager === "you" ? "you" : `you (${r.manager})` : RUNS[p.where],
     p.model?.label ?? "your model", p.seconds === null ? "" : secondsText(p.seconds).replace(/^about /, "~"),
@@ -221,7 +224,7 @@ export function tableOf(r: Omit<PlanResult, "table" | "next">): string {
   ].join("\n");
 }
 
-function nextOf(r: Omit<PlanResult, "table" | "next">): string {
+function nextOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
   const out = r.parts.filter((p) => p.where !== "you");
   const mine = r.parts.filter((p) => p.where === "you");
   const now = out.filter((p) => !p.needs.length).map((p) => p.n);
@@ -238,6 +241,7 @@ function nextOf(r: Omit<PlanResult, "table" | "next">): string {
 // ---- the plan ------------------------------------------------------------------------------------
 
 export interface PlanInput { task: string; files: PlanFile[]; manager: string | null; split?: "auto" | "rules"; signal: AbortSignal }
+const FULL_PATH = /^(~|\/|[A-Za-z]:[\\/]|\\\\)/; // ~/..., /..., C:\..., \\server
 
 // The request body of POST /api/plan, checked: the input, or one sentence saying what is wrong.
 export function checkPlan(b: any): Omit<PlanInput, "signal"> | string {
@@ -250,6 +254,15 @@ export function checkPlan(b: any): Omit<PlanInput, "signal"> | string {
   for (const f of list) {
     if (!f || typeof f !== "object" || typeof f.name !== "string" || !f.name.trim() || !Number.isFinite(f.size) || f.size < 0) return "Each file needs a name and its size in bytes.";
     files.push({ name: plainText(f.name, 500), size: Math.min(Math.round(f.size), 1e10) });
+  }
+  // The Plan tab names files and folders by their paths: Leanfare measures them itself (never opens them here).
+  if (b.paths !== undefined && b.paths !== null) {
+    if (!Array.isArray(b.paths) || b.paths.some((x: unknown) => typeof x !== "string")) return "paths must be a list of file or folder paths.";
+    const bad = (b.paths as string[]).find((x) => x.trim() && !FULL_PATH.test(x.trim()));
+    if (bad) return `${bad.trim()} is not a full path. Give full paths, like ~/code/project.`;
+    const got = sizesForPlan((b.paths as string[]).map((x) => x.trim()).filter(Boolean), homedir());
+    if (typeof got === "string") return got;
+    files.push(...got);
   }
   const manager = typeof b.manager === "string" && b.manager.trim() ? plainText(b.manager, 60) : null;
   const split = b.split === "rules" ? "rules" : "auto";
@@ -289,6 +302,98 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
     cost: costs.some((c) => c === null) ? null : costs.reduce<number>((a, b) => a + (b ?? 0), 0),
   };
   const base = { task: input.task, manager, parts: placed, totals, split, limits: known ? limits : null };
-  return { ...base, table: tableOf(base), next: nextOf(base) };
+  const result: PlanResult = { id: randomId(), ...base, table: tableOf(base), next: nextOf(base) };
+  kept.set(result.id, result);
+  wherePaths.set(result.id, new Map(input.files.filter((f) => f.path).map((f) => [f.name, { path: f.path!, size: f.size }])));
+  while (kept.size > KEEP) { const old = kept.keys().next().value!; kept.delete(old); wherePaths.delete(old); }
+  return result;
+}
+
+// ---- running a plan here (the Plan tab) ---------------------------------------------------------
+// The parts Leanfare runs, run at once where they can, each as soon as the parts it needs are back,
+// with their answers handed on in its task. The parts that stay with the person are theirs, and a
+// part that needs one of those (or one that failed) waits for them. Each part goes through the
+// delegate (checks included); a search part goes to the model the plan named.
+
+export type RunStatus = "waiting" | "running" | "done" | "failed" | "stopped" | "yours" | "blocked";
+export interface RunPart { n: number; title: string; status: RunStatus; answer: string | null; receipt: string | null; model: string | null; cost: number | null; seconds: number | null; error: string | null }
+export interface RunView { id: string; started: string; running: boolean; parts: RunPart[]; cost: number | null }
+
+const KEEP = 20;
+const kept = new Map<string, PlanResult>();
+const wherePaths = new Map<string, Map<string, { path: string; size: number }>>(); // a plan's files, by name, when Leanfare measured them
+const runs = new Map<string, { view: RunView; ac: AbortController }>();
+export const keptPlan = (id: string) => kept.get(id) ?? null;
+export const forgetPlans = () => { for (const r of runs.values()) r.ac.abort(); kept.clear(); runs.clear(); wherePaths.clear(); };
+const HANDED = 20_000; // characters of an earlier part's answer handed on
+
+export function runView(id: string): RunView | null { return runs.get(id)?.view ?? null; }
+
+export function startRun(id: string): RunView {
+  const plan = kept.get(id);
+  if (!plan) throw new UserError(404, "This plan is no longer in Leanfare (it was restarted, or 20 newer plans were made). Make the plan again.", "plan_gone");
+  const had = runs.get(id);
+  if (had?.view.running) return had.view;
+  const view: RunView = { id, started: now().toISOString(), running: true, cost: 0,
+    parts: plan.parts.map((p) => ({ n: p.n, title: p.title, status: p.where === "you" ? "yours" : "waiting", answer: null, receipt: null, model: null, cost: null, seconds: null, error: null })) };
+  const ac = new AbortController();
+  runs.set(id, { view, ac });
+  const at = (n: number) => view.parts.find((x) => x.n === n)!;
+  const going = new Set<number>();
+  const finish = () => {
+    for (const r of view.parts) if (r.status === "waiting") r.status = ac.signal.aborted ? "stopped" : "blocked";
+    const costs = view.parts.filter((r) => r.status === "done" || r.status === "failed").map((r) => r.cost);
+    view.cost = costs.some((c) => c === null) ? null : costs.reduce<number>((a, b) => a + (b ?? 0), 0);
+    view.running = false;
+  };
+  const tick = () => {
+    if (ac.signal.aborted) { if (!going.size) finish(); return; }
+    for (const p of plan.parts) {
+      const r = at(p.n);
+      if (r.status !== "waiting") continue;
+      if (p.needs.some((n) => ["yours", "failed", "stopped", "blocked"].includes(at(n).status))) { r.status = "blocked"; continue; }
+      if (!p.needs.every((n) => at(n).status === "done")) continue;
+      r.status = "running";
+      going.add(p.n);
+      runPart(p, plan, at, ac.signal).then((got) => Object.assign(r, got)).catch((e: any) => {
+        Object.assign(r, { status: ac.signal.aborted || e?.status === 499 ? "stopped" : "failed", error: String(e?.message ?? e).slice(0, 500) });
+      }).finally(() => { going.delete(p.n); tick(); });
+    }
+    if (!going.size) finish();
+  };
+  tick();
+  return view;
+}
+
+export function stopRun(id: string): RunView | null {
+  const r = runs.get(id);
+  if (!r) return null;
+  r.ac.abort();
+  if (r.view.running && ![...r.view.parts].some((p) => p.status === "running")) { for (const p of r.view.parts) if (p.status === "waiting") p.status = "stopped"; r.view.running = false; }
+  return r.view;
+}
+
+async function runPart(p: Part, plan: PlanResult, at: (n: number) => RunPart, signal: AbortSignal): Promise<Partial<RunPart>> {
+  const before = p.needs.map((n) => { const x = at(n); return `Part ${n} (${x.title}):\n${(x.answer ?? "").slice(0, HANDED)}`; });
+  const task = `${p.task}${before.length ? `\n\nWhat the earlier parts found:\n\n${before.join("\n\n")}` : ""}\n\nThe whole task, for context: ${plan.task.slice(0, 4000)}`;
+  if (p.kind === "search" && p.model) {
+    const r = await runChat([{ role: "user", content: task }], p.model.id, signal, () => {}, `Plan part ${p.n}`, { source: "plan", maxOut: 4096 });
+    if (r.status !== "ok") return { status: r.status === "stopped" ? "stopped" : "failed", error: String(r.meta?.error ?? "It failed."), cost: r.meta?.spent ?? r.meta?.cost ?? null, model: r.meta?.model?.label ?? null };
+    return { status: "done", answer: r.text, receipt: `${r.meta.model.label}, ${usd(r.meta.cost ?? null)}.`, model: r.meta.model.label, cost: r.meta.spent ?? r.meta.cost ?? null, seconds: (r.meta.ms ?? 0) / 1000 };
+  }
+  // Its files, as many as one hand off takes (50, 4 MB in all, 2 MB each), in the plan's order.
+  const known = wherePaths.get(plan.id) ?? new Map();
+  const mine = p.files.map((n) => known.get(n)).filter((x): x is { path: string; size: number } => !!x);
+  const chosen: string[] = [];
+  let total = 0;
+  for (const f of mine) {
+    if (chosen.length >= DELEGATE_LIMITS.count || f.size > DELEGATE_LIMITS.file || total + f.size > DELEGATE_LIMITS.total) continue;
+    chosen.push(f.path); total += f.size;
+  }
+  const files = readForDelegate(chosen);
+  if (typeof files === "string") throw new UserError(400, files, "plan_files");
+  const d = await runDelegate({ task, files, kind: DELEGATE_KIND[p.kind] ?? null, effort: p.effort, check: "auto", maxOut: DEFAULT_MAX_OUT }, signal);
+  const short = mine.length > chosen.length ? ` Handed over ${chosen.length} of its ${mine.length} files (the most one hand off takes is ${DELEGATE_LIMITS.count} files, ${DELEGATE_LIMITS.total / 1048576} MB).` : "";
+  return { status: "done", answer: d.answer, receipt: d.receipt + short, model: d.model.label, cost: d.total, seconds: d.seconds };
 }
 
