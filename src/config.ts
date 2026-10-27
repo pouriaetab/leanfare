@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdirSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { CATALOG_FILE } from "./assets";
 
 export const VERSION = "0.3.0";
 export const BUN_TESTED = "1.4"; // the Bun minor version this release is tested on
@@ -13,8 +14,7 @@ export const PORT = Number(process.env.LEANFARE_PORT ?? 4747);
 export const runtime = { port: PORT }; // the port actually in use, set when the server starts
 export const DATA_DIR = process.env.LEANFARE_DATA_DIR ?? join(homedir(), ".leanfare");
 export const DATA_URL = process.env.LEANFARE_DATA_URL ?? "https://pouriaetab.github.io/llmledger/data.json";
-export const BUILT_IN_CATALOG = new URL("../data/catalog.json", import.meta.url).pathname;
-export const UI_DIR = new URL("../ui/", import.meta.url).pathname;
+export const BUILT_IN_CATALOG = CATALOG_FILE; // the price list this release ships with (assets.ts)
 
 mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
 
