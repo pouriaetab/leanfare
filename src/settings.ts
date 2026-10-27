@@ -10,11 +10,12 @@ export type AtLimit = "cheapest" | "stop";
 
 export interface ProviderSettings { on: boolean; free?: boolean }
 
-// A plan you pay for outside Leanfare (Claude Max, ChatGPT Plus), only to compare its price with what your sessions would cost at API prices.
-export type PlanProvider = "claude" | "chatgpt";
+// A plan you pay for outside Leanfare (Claude Max, ChatGPT Plus, Perplexity Pro...): its limits, and its price next to
+// what your sessions would cost at API prices (subscriptions.ts).
+export type PlanProvider = "claude" | "chatgpt" | "perplexity" | "google" | "copilot" | "cursor";
 export interface Plan { name: string; price: number } // price: US dollars a month
 export type Plans = Partial<Record<PlanProvider, Plan>>;
-export const PLAN_KEYS: PlanProvider[] = ["claude", "chatgpt"];
+export const PLAN_KEYS: PlanProvider[] = ["claude", "chatgpt", "perplexity", "google", "copilot", "cursor"];
 
 export interface Settings {
   mode: Mode;
@@ -93,7 +94,7 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
     if (p.plans === null || typeof p.plans !== "object" || Array.isArray(p.plans)) return { error: "plans must be an object like {\"claude\": {\"name\": \"Claude Max\", \"price\": 100}}" };
     const plans: Plans = { ...settings().plans }; // the plans not named stay as they are
     for (const [k, v] of Object.entries(p.plans)) {
-      if (!PLAN_KEYS.includes(k as PlanProvider)) return { error: "plans can hold claude and chatgpt" };
+      if (!PLAN_KEYS.includes(k as PlanProvider)) return { error: `plans can hold ${PLAN_KEYS.join(", ")}` };
       if (v === null) { delete plans[k as PlanProvider]; continue; } // null removes that plan
       const w = v as any;
       const name = typeof w?.name === "string" ? w.name.trim().slice(0, 60) : "";

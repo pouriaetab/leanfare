@@ -10,6 +10,7 @@ import { TASKS, allModels, getModel, isRetired, refreshCatalog, refreshOllama, r
 import * as extra from "./providers";
 import { findKeys, readFound, recognize } from "./findkeys";
 import { appsView, setApp } from "./apps";
+import { SUBSCRIPTIONS } from "./subscriptions";
 import { db, lastRepair } from "./db";
 import { allKeys, getKey, keyWhere, keychainNote, removeKey, saveKey, storeName } from "./keys";
 import { MAX_INSTRUCTIONS, MODES, saveSettings, settings, validatePatch } from "./settings";
@@ -122,6 +123,7 @@ export function state() {
       modelCount: store.catalog.models.length,
     },
     extra: extra.extraView(),
+    subscriptions: SUBSCRIPTIONS,
     pause: pauseState(),
     running: runningList(),
     local: { pull: local.pullView() },

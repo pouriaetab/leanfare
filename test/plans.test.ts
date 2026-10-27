@@ -385,3 +385,39 @@ describe("the ChatGPT plan's limits, as of the last Codex message", () => {
     expect((await planView("claude", MONTH)).limits).toBeNull();
   });
 });
+
+describe("subscriptions: compressed and archived Codex sessions, the plan Codex names, and plans with no logs", () => {
+  test("Codex's compressed sessions (older than a week) and its archived ones are read too", async () => {
+    const plain = jsonl([ctx("gpt-5-mini"), tc("2026-10-03T10:00:00Z", [1000, 0, 100])]);
+    put(join(codexRoot(), "sessions", "2026", "10", "03", "rollout-2026-10-03T10-00-00-old.jsonl.zst"), "");
+    writeFileSync(join(codexRoot(), "sessions", "2026", "10", "03", "rollout-2026-10-03T10-00-00-old.jsonl.zst"), Bun.zstdCompressSync(new TextEncoder().encode(plain)));
+    put(join(codexRoot(), "archived_sessions", "rollout-2026-10-04T10-00-00-arch.jsonl"), jsonl([ctx("gpt-5-mini", "2026-10-04T10:00:00Z"), tc("2026-10-04T10:00:00Z", [2000, 0, 200])]));
+    const v = await planView("chatgpt", MONTH, true);
+    expect(v.files).toBe(2);
+    expect(v.tokens).toBe(3300); // 1,100 from the compressed file, 2,200 from the archived one
+  });
+  test("an older Codex's resets_in_seconds counts from the event's time", () => {
+    const at = Date.parse("2026-10-20T10:00:00Z");
+    expect(limitsOf({ primary: { used_percent: 5, window_minutes: 300, resets_in_seconds: 3600 } }, at)!.windows[0].resets).toBe(at / 1000 + 3600);
+  });
+  test("the plan Codex names: shown with its price when OpenAI's pages make it plain, asked for otherwise", async () => {
+    codexFile("p", REAL_CODEX);
+    const v = await planView("chatgpt", MONTH, true);
+    expect(v.recognized).toEqual({ name: "ChatGPT Plus", price: 20, from: "plus" });
+    const pro = REAL_CODEX.map((l) => l.replace('"plan_type":"plus"', '"plan_type":"prolite"'));
+    rmSync(codexRoot(), { recursive: true, force: true }); forgetLogs();
+    codexFile("q", pro);
+    expect((await planView("chatgpt", MONTH, true)).recognized).toEqual({ name: "ChatGPT Pro (a lighter tier)", price: null, from: "prolite" });
+  });
+  test("a plan with no log files (Perplexity): its limits and its own usage page, and only when you entered it", async () => {
+    expect((await plansView(MONTH, true)).providers.map((p) => p.provider)).toEqual(["claude", "chatgpt"]);
+    await ui(url, "/api/settings", { plans: { perplexity: { name: "Perplexity Pro", price: 20 } } });
+    const v = (await plansView(MONTH, true)).providers.find((p) => p.provider === "perplexity")!;
+    expect(v).toMatchObject({ logs: null, usageUrl: "https://www.perplexity.ai/account/usage", plan: { name: "Perplexity Pro", price: 20 }, found: false });
+    expect(v.limitsText).toContain("weekly limits on Pro Searches");
+  });
+  test("the settings take every subscription Leanfare knows, and say which when the name is wrong", () => {
+    expect(validatePatch({ plans: { copilot: { name: "Copilot Pro", price: 10 } } })).toMatchObject({ patch: { plans: { copilot: { name: "Copilot Pro", price: 10 } } } });
+    expect(validatePatch({ plans: { netflix: { name: "x", price: 1 } } })).toEqual({ error: "plans can hold claude, chatgpt, perplexity, google, copilot, cursor" });
+  });
+});
