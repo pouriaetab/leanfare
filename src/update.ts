@@ -8,7 +8,13 @@ const RELEASES = () => process.env.LEANFARE_RELEASES_URL ?? "https://api.github.
 export const INSTALL_LINE = "curl -fsSL https://raw.githubusercontent.com/pouriaetab/leanfare/main/install.sh | sh";
 export const INSTALL_LINE_WINDOWS = 'powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/pouriaetab/leanfare/main/install.ps1 | iex"';
 
-export const update = { latest: null as string | null, url: null as string | null, checked: 0, error: null as string | null };
+export const update = { latest: null as string | null, url: null as string | null, files: [] as string[], checked: 0, error: null as string | null };
+
+// The download for this computer, as the release names it (scripts/compile.ts).
+export const ownFile = () => {
+  const os = process.platform === "win32" ? "windows" : process.platform;
+  return `leanfare-${os}-${process.arch}.${os === "windows" ? "zip" : "tar.gz"}`;
+};
 
 // "0.4.1" > "0.4.0"; a tag like "v0.5.0-beta.1" counts as 0.5.0 only once it has no suffix.
 const parts = (v: string) => /^v?(\d+)\.(\d+)\.(\d+)$/.exec(v.trim())?.slice(1).map(Number) ?? null;
@@ -24,10 +30,11 @@ export async function checkUpdate(signal?: AbortSignal): Promise<void> {
   try {
     const r = await fetch(RELEASES(), { headers: { accept: "application/vnd.github+json", "user-agent": `leanfare/${VERSION}` }, signal: signal ?? AbortSignal.timeout(8000) });
     if (!r.ok) throw new Error(`GitHub answered ${r.status}`);
-    const j = (await r.json()) as { tag_name?: string; html_url?: string; draft?: boolean; prerelease?: boolean };
+    const j = (await r.json()) as { tag_name?: string; html_url?: string; draft?: boolean; prerelease?: boolean; assets?: { name?: string }[] };
     if (j.draft || j.prerelease || !j.tag_name || !parts(j.tag_name)) throw new Error("no release to compare with");
     update.latest = j.tag_name.replace(/^v/, "");
     update.url = typeof j.html_url === "string" && j.html_url.startsWith("https://github.com/") ? j.html_url : null;
+    update.files = Array.isArray(j.assets) ? j.assets.map((a) => String(a?.name ?? "")) : [];
     update.error = null;
   } catch (e: any) { update.error = String(e?.message ?? e); }
   update.checked = Date.now();
@@ -39,7 +46,9 @@ export function howToUpdate(): string {
   return "In your Leanfare folder: git pull, then bun install, then start it again.";
 }
 
+// The one-file Leanfare hears of a release only once its download for this computer is attached.
 export function updateNotice(on: boolean): { kind: "update"; level: "info"; text: string; url: string | null } | null {
   if (!on || !update.latest || !newer(update.latest, VERSION)) return null;
+  if (compiled() && !update.files.includes(ownFile())) return null;
   return { kind: "update", level: "info", text: `Leanfare ${update.latest} is out (you have ${VERSION}). ${howToUpdate()}`, url: update.url };
 }

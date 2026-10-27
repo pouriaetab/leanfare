@@ -15,8 +15,8 @@ beforeAll(async () => {
   process.env.LEANFARE_RELEASES_URL = `http://127.0.0.1:${server.port}/repos/pouriaetab/leanfare/releases/latest`;
   delete process.env.LEANFARE_UPDATE_CHECK;
 });
-afterAll(() => { server.stop(true); process.env.LEANFARE_UPDATE_CHECK = "off"; delete process.env.LEANFARE_RELEASES_URL; Object.assign(update, { latest: null, url: null, checked: 0, error: null }); });
-beforeEach(async () => { await reset(); Object.assign(update, { latest: null, url: null, checked: 0, error: null }); });
+afterAll(() => { server.stop(true); process.env.LEANFARE_UPDATE_CHECK = "off"; delete process.env.LEANFARE_RELEASES_URL; Object.assign(update, { latest: null, url: null, files: [], checked: 0, error: null }); });
+beforeEach(async () => { await reset(); Object.assign(update, { latest: null, url: null, files: [], checked: 0, error: null }); });
 const notice = async () => (await ui(url, "/api/state")).json.notices.find((n: any) => n.kind === "update") ?? null;
 
 describe("a newer Leanfare", () => {
@@ -50,6 +50,13 @@ describe("a newer Leanfare", () => {
     const before = seen.length;
     try { await checkUpdate(); } finally { delete process.env.LEANFARE_UPDATE_CHECK; }
     expect(seen.length).toBe(before);
+  });
+  test("the files a release lists are kept, so the one-file Leanfare waits for its own download", async () => {
+    const { ownFile } = await import("../src/update");
+    release = { tag_name: "v9.9.9", html_url: "https://github.com/pouriaetab/leanfare/releases/tag/v9.9.9", assets: [{ name: "SHA256SUMS" }, { name: ownFile() }] };
+    await checkUpdate();
+    expect(update.files).toEqual(["SHA256SUMS", ownFile()]);
+    expect(ownFile()).toMatch(/^leanfare-(darwin|linux|windows)-(arm64|x64)\.(tar\.gz|zip)$/);
   });
   test("a link that is not GitHub's is not shown", async () => {
     release = { tag_name: "v9.9.9", html_url: "https://example.com/evil" };
