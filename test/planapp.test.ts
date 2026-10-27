@@ -81,6 +81,19 @@ describe("the plan inside the chat (an MCP App)", () => {
     expect(sent.some((m) => m.method === "ui/notifications/size-changed")).toBe(true); // it tells the app its height
   });
 
+  test("a part after one of yours: the page says it waits for yours, and offers no Run when nothing else can start", async () => {
+    const { doc, sent, push } = open((m) => (m.method === "ui/initialize" ? { hostContext: {} } : undefined));
+    await until(() => sent.some((m) => m.method === "ui/notifications/initialized"));
+    const parts = [
+      { ...PLAN.parts[1], n: 1, needs: [] }, // yours
+      { ...PLAN.parts[0], n: 2, needs: [1], runs_on: "free", cost_usd: 0 }, // Leanfare's, after yours
+    ];
+    push("ui/notifications/tool-result", { structuredContent: { id: "p2", parts, totals: { parts: 2, out: 1, later: 1, kept: 31000, used: 5000, seconds: null, after: 12, cost: 0 } } });
+    await until(() => doc.body.textContent.includes("waits for yours"));
+    expect(doc.body.textContent).toContain("Part 2 waits for yours: once yours are done, Claude hands it to Leanfare.");
+    expect(doc.querySelector("#run")).toBeNull();
+  });
+
   test("messages from anywhere but the app it is shown in are ignored, and a result with no plan shows its text", async () => {
     const { doc, push } = open((m) => (m.method === "ui/initialize" ? { hostContext: {} } : undefined));
     push("ui/notifications/tool-result", { structuredContent: PLAN }, { postMessage() {} }); // another frame

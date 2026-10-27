@@ -540,7 +540,8 @@ async function api(req: Request, url: URL): Promise<Response> {
   }
   // The plan (planner.ts): a task split into parts, each with where it runs and on which model.
   if (p === "/api/plan" && m === "POST") {
-    const v = checkPlan(await readBody(req));
+    // The MCP door holds the control token: it measured the files itself and says where each is.
+    const v = checkPlan(await readBody(req), controlOk(req, controlToken));
     if (typeof v === "string") return fail(400, v);
     return json(await makePlan({ ...v, signal: req.signal }));
   }
@@ -556,7 +557,9 @@ async function api(req: Request, url: URL): Promise<Response> {
     const messages = Array.isArray(b.messages) ? describeFiles(b.messages) : [];
     if (!messages.length) return json({ estimate: null });
     try {
-      const system = typeof b.system === "string" && b.system.trim() ? b.system.slice(0, MAX_INSTRUCTIONS) : undefined;
+      // As the chat will send it: the short answers instruction first, when it is on.
+      const own = typeof b.system === "string" && b.system.trim() ? b.system.slice(0, MAX_INSTRUCTIONS) : "";
+      const system = [settings().brief ? BRIEF : "", own].filter(Boolean).join("\n\n") || undefined;
       const pl = await plan({ source: "chat", asked: typeof b.model === "string" ? b.model : "auto", messages, system, maxOut: null, signal: req.signal, dry: true, effort: EFFORTS.includes(b.effort) ? b.effort : settings().effort, speed: parseSpeed(b.speed) ?? undefined });
       return json({ estimate: pl.estimate, plan: planView(pl) });
     } catch (e: any) {

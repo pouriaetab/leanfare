@@ -15,17 +15,22 @@
 // of each part, Auto's ratings and prices, the times models took here, and how much of the person's
 // plan is left: near a limit, more parts go out.
 //
+// What a run may spend is what the plan said: a part placed on a local or free model runs only on
+// local or free models (its check too), and paid parts run only after the person's yes, or while
+// what they spent stays within the cap set in Settings (then with no check, which the estimate does
+// not hold). The monthly budget holds either way.
+//
 // No words are kept: the ledger has the split's model, tokens and cost, as for any answer.
+import { homedir } from "node:os";
 import { DEFAULT_MAX_OUT, TIER, runDelegate, taskFor, type Effort, type Kind } from "./delegate";
 import type { Model } from "./data";
 import { chargeOf, plan as route, runChat, usableModels } from "./engine";
-import { windowsNow } from "./plans";
-import { settings } from "./settings";
+import { planView, windowsNow } from "./plans";
+import { DELEGATE_LIMITS, readForDelegate, sizesForPlan, PLAN_FILES } from "./readfiles";
 import { guessTask, type Msg } from "./router";
+import { settings } from "./settings";
 import { UserError } from "./upstream";
 import { now, randomId, secondsText } from "./util";
-import { DELEGATE_LIMITS, readForDelegate, sizesForPlan } from "./readfiles";
-import { homedir } from "node:os";
 
 export type PartKind = "read" | "write" | "reason" | "code" | "search" | "act";
 export type Size = "none" | "small" | "medium" | "large";
@@ -36,10 +41,13 @@ const EFFORTS: Effort[] = ["low", "medium", "high"];
 // About how many tokens a part reads when no file says it: a page, a few files, a folder.
 export const SIZE_TOKENS: Record<Size, number> = { none: 500, small: 3_000, medium: 30_000, large: 150_000 };
 const OUT_YOU = 2_000; // what a part the app does itself writes, about
+const OUT_LEANFARE = 1_000; // what a part Leanfare runs answers, about
 export const MAX_PARTS = 8;
 export const MAX_TASK = 20_000; // characters
+const LISTED = 200; // files named one by one to the split model; past it, the folders they are in
+const CONTEXT = "The whole task, for context:";
 
-export interface PlanFile { name: string; size: number; path?: string } // size: bytes; path: where it is, when Leanfare itself measured it (the Plan tab)
+export interface PlanFile { name: string; size: number; path?: string } // size: bytes; path: where it is, when Leanfare itself measured it
 export interface Part {
   n: number;
   title: string;
@@ -56,16 +64,41 @@ export interface Part {
   cost: number | null; // on pay per use; 0 on a local or free model; null when it stays with you, or not known
   why: string;
 }
+type Split = Omit<Part, "where" | "model" | "seconds" | "tokens" | "cost" | "why">;
 export interface PlanResult {
-  id: string; // kept here (the last 20), so the Plan tab can run it
+  id: string; // kept here (the last 20), so it can run
   task: string;
   manager: string; // the app the person works in, as said ("Claude Code"), or "you"
   parts: Part[];
-  totals: { parts: number; out: number; kept: number; used: number; seconds: number | null; cost: number | null };
+  totals: { parts: number; out: number; later: number; kept: number; used: number; seconds: number | null; after: number | null; cost: number | null }; // later: Leanfare's parts that wait for yours; seconds: the time of the others, after: of the ones after yours
   split: { by: "model" | "rules"; model: { id: string; label: string } | null; cost: number | null; note: string | null };
   limits: { five: number | null; week: number | null } | null; // the person's plan windows, when known (percent used)
   table: string; // the table as markdown
   next: string; // what to do now
+}
+
+// ---- the files, as the split model sees them -------------------------------------------------------
+// Up to 200 files are named one by one. Past that, the split model sees the folders they are in (one
+// level below the folder they all share), and a part that reads a folder reads every file in it.
+export interface Shown { name: string; size: number; members: string[] }
+export function splitView(files: PlanFile[]): Shown[] {
+  if (files.length <= LISTED) return files.map((f) => ({ name: f.name, size: f.size, members: [f.name] }));
+  const segs = files.map((f) => f.name.split("/"));
+  let common = 0; // folders every file is in
+  while (segs.every((s) => s.length > common + 1 && s[common] === segs[0][common])) common++;
+  const base = segs[0].slice(0, common).join("/");
+  const groups = new Map<string, Shown>();
+  segs.forEach((s, i) => {
+    const key = s.length > common + 1 ? `${[...s.slice(0, common + 1)].join("/")}/` : `${base ? base + "/" : ""}(files at the top)`;
+    const g = groups.get(key) ?? groups.set(key, { name: key, size: 0, members: [] }).get(key)!;
+    g.size += files[i].size; g.members.push(files[i].name);
+  });
+  let list = [...groups.values()].sort((a, b) => b.size - a.size);
+  if (list.length > LISTED) { // still too many: the largest, and the rest together
+    const rest = list.slice(LISTED - 1);
+    list = [...list.slice(0, LISTED - 1), { name: "(everything else)", size: rest.reduce((n, g) => n + g.size, 0), members: rest.flatMap((g) => g.members) }];
+  }
+  return list.map((g) => ({ ...g, name: g.members.length > 1 ? `${g.name} (${g.members.length.toLocaleString("en-US")} files)` : g.members[0] }));
 }
 
 // ---- the split ------------------------------------------------------------------------------------
@@ -80,15 +113,16 @@ export const SPLIT_SYSTEM = [
   "- effort: low, medium or high: how good the model must be for that part.",
   "- needs: the numbers (from 1) of the earlier parts whose results this part uses. Parts that need nothing can run at the same time.",
   "- size: how much it must read: none, small (a page), medium (a few files), large (a whole folder or a long document).",
-  "- files: which of the given files it reads, named exactly as given; none if no files were given.",
+  "- files: which of the given files or folders it reads, named exactly as given; none if none were given.",
   "- task: what to hand over for that part, written for a model that has not seen this conversation: the goal, what to look at, and the form of the answer.",
 ].join("\n");
 
 const plainText = (s: unknown, max: number) => (typeof s === "string" ? s.replace(/[\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, max) : "");
 
 // The parts in a model's answer: the first JSON object in it, checked part by part. Null when it
-// holds no usable parts.
-export function readSplit(text: string, files: PlanFile[]): Omit<Part, "where" | "model" | "seconds" | "tokens" | "cost" | "why">[] | null {
+// holds no usable parts. The model numbers the parts as it wrote them; a part that is left out does
+// not move the others' needs.
+export function readSplit(text: string, given: (PlanFile | Shown | string)[]): Split[] | null {
   const start = text.indexOf("{");
   if (start < 0) return null;
   let j: any = null;
@@ -98,33 +132,35 @@ export function readSplit(text: string, files: PlanFile[]): Omit<Part, "where" |
   }
   const list = Array.isArray(j?.parts) ? j.parts : Array.isArray(j) ? j : null;
   if (!list || !list.length) return null;
-  const names = new Map(files.map((f) => [f.name, f.name]));
-  const out: Omit<Part, "where" | "model" | "seconds" | "tokens" | "cost" | "why">[] = [];
-  for (const raw of list.slice(0, MAX_PARTS)) {
-    if (!raw || typeof raw !== "object") continue;
+  const names = new Set(given.map((f) => (typeof f === "string" ? f : f.name)));
+  const out: Split[] = [];
+  const renumbered = new Map<number, number>(); // the model's number -> the part's number here
+  list.forEach((raw: any, i: number) => {
+    if (out.length >= MAX_PARTS || !raw || typeof raw !== "object") return;
     const title = plainText(raw.title, 80);
     const task = typeof raw.task === "string" ? raw.task.trim().slice(0, 4000) : "";
-    if (!title && !task) continue;
+    if (!title && !task) return;
     const n = out.length + 1;
+    renumbered.set(i + 1, n);
     const kind: PartKind = PART_KINDS.includes(raw.kind) ? raw.kind : "reason";
     const effort: Effort = EFFORTS.includes(raw.effort) ? raw.effort : "medium";
     const size: Size = SIZES.includes(raw.size) ? raw.size : "small";
-    const needs = Array.isArray(raw.needs) ? [...new Set(raw.needs.map(Number).filter((x: number) => Number.isInteger(x) && x >= 1 && x < n))] as number[] : [];
+    const needs: number[] = Array.isArray(raw.needs) ? [...new Set<number>(raw.needs.map(Number).map((x: number) => renumbered.get(x)).filter((x: number | undefined): x is number => x !== undefined && x < n))] : [];
     const fl = Array.isArray(raw.files) ? [...new Set(raw.files.filter((f: unknown) => typeof f === "string" && names.has(f)))] as string[] : [];
     out.push({ n, title: title || task.slice(0, 60), kind, effort, needs: needs.sort((a, b) => a - b), task: task || title, files: fl, size });
-  }
+  });
   return out.length ? out : null;
 }
 
 // With no model to split it, a split by rules, from what the task looks like.
 const BUILDS = /\b(build|implement|add|fix|refactor|port|migrate|rewrite|reverse[- ]engineer|clone|debug|optimi[sz]e|integrate)\b/i;
 const RESEARCH = /\b(research|compare|find out|look up|survey|review the (market|options)|what are the best|sources?|competitors?)\b/i;
-export function rulesSplit(task: string, files: PlanFile[]): Omit<Part, "where" | "model" | "seconds" | "tokens" | "cost" | "why">[] {
+export function rulesSplit(task: string, files: (PlanFile | Shown)[]): Split[] {
   const coding = guessTask([{ role: "user", content: task }]).task === "coding";
   const all = files.map((f) => f.name);
   const big: Size = files.length ? "medium" : "large";
   const p = (n: number, title: string, kind: PartKind, effort: Effort, needs: number[], size: Size, what: string, fl: string[] = []) =>
-    ({ n, title, kind, effort, needs, size, files: fl, task: `${what}\n\nThe whole task, for context: ${task}` });
+    ({ n, title, kind, effort, needs, size, files: fl, task: `${what}\n\n${CONTEXT} ${task}` });
   if (coding || BUILDS.test(task)) return [
     p(1, "Map the code: its parts and how they fit", "read", "low", [], big, "List the modules, the entry points and how they call each other, one line each.", all),
     p(2, "Read the parts that matter closely", "read", "medium", [1], "medium", "Explain what the parts this task touches do and how, with file:line for each claim.", all),
@@ -146,60 +182,120 @@ export function rulesSplit(task: string, files: PlanFile[]): Omit<Part, "where" 
   ];
 }
 
+// A part that names a folder (past 200 files) reads every file in it.
+function expand(parts: Split[], shown: Shown[]): Split[] {
+  const by = new Map(shown.map((s) => [s.name, s.members]));
+  return parts.map((p) => ({ ...p, files: [...new Set(p.files.flatMap((n) => by.get(n) ?? [n]))] }));
+}
+
+// The files a part names, the ones whose path holds the task's words first (for a router task,
+// router.py before the rest), each group in the plan's order: when one hand off cannot take them
+// all, it takes the ones that matter most.
+const PLAIN = new Set(["this", "that", "these", "those", "with", "from", "into", "what", "which", "when", "where", "there", "their", "them", "then", "than",
+  "make", "build", "smaller", "bigger", "find", "file", "files", "code", "each", "every", "list", "line", "lines", "part", "parts", "task", "about", "have",
+  "does", "work", "using", "used", "more", "most", "less", "only", "also", "just", "like", "your", "please", "should", "could", "would", "write", "read"]);
+export function byRelevance(names: string[], text: string): string[] {
+  const words = [...new Set((text.toLowerCase().match(/[a-z][a-z0-9_]{3,}/g) ?? []).filter((w) => !PLAIN.has(w)))];
+  if (!words.length || names.length < 2) return names;
+  const paths = names.map((n) => n.replace(/\\/g, "/"));
+  // The folder they all share says nothing about which one matters.
+  let common = paths[0].slice(0, paths[0].lastIndexOf("/") + 1);
+  for (const n of paths) while (common && !n.startsWith(common)) common = common.slice(0, common.slice(0, -1).lastIndexOf("/") + 1);
+  const score = (n: string) => { const rest = n.slice(common.length).toLowerCase(); return words.reduce((a, w) => a + (rest.includes(w) ? 1 : 0), 0); };
+  return names.map((n, i) => ({ n, i, s: score(paths[i]) })).sort((a, b) => b.s - a.s || a.i - b.i).map((x) => x.n);
+}
+
 // ---- where each part runs ----------------------------------------------------------------------------
 
-const DELEGATE_KIND: Partial<Record<PartKind, Kind>> = { read: "read", write: "write", reason: "reason" };
+export const DELEGATE_KIND: Partial<Record<PartKind, Kind>> = { read: "read", write: "write", reason: "reason" };
 const LABEL_KIND: Record<PartKind, string> = { read: "read", write: "write", reason: "reason", code: "code", search: "search", act: "act" };
 const NEAR = 85; // percent of a window used: from here on, more parts go out
+export const isFree = (m: Model) => !!m.local || chargeOf(m, 1).cost === 0;
 
 export function whereOf(m: Model, cost: number | null): Where {
   if (m.local) return "local";
   return cost === 0 || chargeOf(m, 1).cost === 0 ? "free" : "paid";
 }
 
-function partTokens(part: { size: Size; files: string[]; task: string }, files: PlanFile[]): number {
-  const fromFiles = part.files.reduce((n, name) => n + Math.ceil((files.find((f) => f.name === name)?.size ?? 0) / 4), 0);
-  return (fromFiles > 0 ? fromFiles : SIZE_TOKENS[part.size]) + Math.ceil(part.task.length / 4);
+// The files one hand off takes, in the plan's order: at most 50, 2 MB each, 4 MB in all.
+export function handOff<T extends { size: number }>(list: T[]): T[] {
+  const out: T[] = [];
+  let total = 0;
+  for (const f of list) {
+    if (out.length >= DELEGATE_LIMITS.count || f.size > DELEGATE_LIMITS.file || total + f.size > DELEGATE_LIMITS.total) continue;
+    out.push(f); total += f.size;
+  }
+  return out;
+}
+
+// What a part reads: its files that one hand off takes, or its size when it names none.
+function reading(part: { size: Size; files: string[]; task: string }, files: PlanFile[]): { tokens: number; named: number; taken: number } {
+  const byName = new Map(files.map((f) => [f.name, f]));
+  const named = part.files.map((n) => byName.get(n)).filter((f): f is PlanFile => !!f);
+  const taken = handOff(named);
+  const fromFiles = taken.reduce((n, f) => n + Math.ceil(f.size / 4), 0);
+  return { tokens: (named.length ? fromFiles : SIZE_TOKENS[part.size]) + Math.ceil(part.task.length / 4), named: named.length, taken: taken.length };
 }
 
 // Where one part runs. Leanfare's estimate runs as a dry plan: the same pick Auto would make now,
-// nothing sent and nothing reserved.
-async function place(part: Omit<Part, "where" | "model" | "seconds" | "tokens" | "cost" | "why">, files: PlanFile[], near: string | null, manager: string, signal: AbortSignal): Promise<Part> {
-  const tokens = partTokens(part, files);
-  const stay = (why: string): Part => ({ ...part, where: "you", model: null, seconds: null, tokens: tokens + OUT_YOU, cost: null, why });
+// among the models whose context holds the part, nothing sent and nothing reserved.
+async function place(part: Split, files: PlanFile[], near: string | null, manager: string, signal: AbortSignal): Promise<Part> {
+  const r = reading(part, files);
+  const stay = (why: string): Part => ({ ...part, where: "you", model: null, seconds: null, tokens: r.tokens + OUT_YOU, cost: null, why });
   if (part.kind === "code") return stay(`it changes the project, which only ${manager} can do`);
   if (part.kind === "act") return stay(`it needs ${manager}'s own tools`);
   const big = (part.effort === "high" && (part.kind === "reason" || part.kind === "write"));
   if (big && !near) return stay(`high effort judgement: your strongest model, in your plan`);
-  const filler = "x".repeat(Math.max(0, tokens - Math.ceil(part.task.length / 4)) * 4); // the reading, by its size only
-  const messages: Msg[] = [{ role: "user", content: `${part.task}\n\n${filler}` }];
-  const only = part.kind === "search" ? (m: Model) => m.provider === "perplexity" : undefined; // a model that searches the web
-  if (part.kind === "search" && !usableModels(only).length) return stay("it searches the web, and no model you ticked in Leanfare does");
+  const need = Math.ceil((r.tokens * 4) / 3) + DEFAULT_MAX_OUT; // as delegate counts it: three characters a token, and the answer
+  const fits = (m: Model) => m.context === null || m.context >= need;
+  const only = part.kind === "search" ? (m: Model) => m.provider === "perplexity" && fits(m) : fits; // a search goes to a model that searches the web
+  if (part.kind === "search" && !usableModels((m) => m.provider === "perplexity").length) return stay("it searches the web, and no model you ticked in Leanfare does");
+  const messages: Msg[] = [{ role: "user", content: part.task }];
   const kind = DELEGATE_KIND[part.kind] ?? null;
   try {
-    const p = await route({ source: "chat", asked: `auto-${TIER[part.effort]}`, messages, maxOut: null, signal, dry: true, effort: part.effort,
-      guess: part.kind === "search" ? { task: "overall", why: "a web search", alt: null } : taskFor(kind, messages), only, ledgerSource: "delegate" });
+    const p = await route({ source: "chat", asked: `auto-${TIER[part.effort]}`, messages, tokens: r.tokens, maxOut: null, signal, dry: true, effort: part.effort,
+      guess: part.kind === "search" ? { task: "overall", why: "a web search", alt: null } : taskFor(kind, messages), only, onlyWhy: `none of the models you ticked can take this much text (about ${tokText(need)} tokens with the answer)`, ledgerSource: "delegate" });
     const where = whereOf(p.model, p.estimate);
-    const why = near && big ? `your plan is near its limit (${near}), so this goes out too` : where === "local" ? "reading and drafting go out: on this computer, $0"
-      : where === "free" ? "reading and drafting go out: a free model" : `the cheapest model rated well enough at ${part.effort} effort`;
-    return { ...part, where, model: { id: p.model.id, label: p.model.label }, seconds: p.seconds, tokens: tokens + 1_000, cost: p.estimate, why };
+    const some = r.taken < r.named ? `; Leanfare hands over ${r.taken} of its ${r.named} files (one hand off takes at most ${DELEGATE_LIMITS.count} files, ${DELEGATE_LIMITS.total / 1048576} MB)` : "";
+    const why = (near && big ? `your plan is near its limit (${near}), so this goes out too` : where === "local" ? "reading and drafting go out: on this computer, $0"
+      : where === "free" ? "reading and drafting go out: a free model" : `the cheapest model rated well enough at ${part.effort} effort`) + some;
+    return { ...part, where, model: { id: p.model.id, label: p.model.label }, seconds: p.seconds, tokens: r.tokens + OUT_LEANFARE, cost: p.estimate, why };
   } catch (e: any) {
     if (e?.status === 499) throw e;
-    return stay(e instanceof UserError ? `Leanfare has no model for it now (${e.message.replace(/\.$/, "").slice(0, 120)})` : "Leanfare has no model for it now");
+    return stay(e instanceof UserError ? `Leanfare has no model for it now (${e.message.replace(/\.$/, "").slice(0, 160)})` : "Leanfare has no model for it now");
   }
 }
 
-// How long the parts Leanfare runs take, done at once where they can be: the longest chain of needs.
-export function chainSeconds(parts: Part[]): number | null {
-  const done = new Map<number, number>();
-  let any = false;
-  for (const p of parts) {
-    const before = Math.max(0, ...p.needs.map((n) => done.get(n) ?? 0));
-    if (p.seconds !== null) any = true;
-    done.set(p.n, before + (p.seconds ?? 0));
+// The parts Leanfare runs that wait for one of the person's parts, directly or through other parts.
+export function afterYours(parts: Pick<Part, "n" | "needs" | "where">[]): Set<number> {
+  const where = new Map(parts.map((p) => [p.n, p.where]));
+  const out = new Set<number>();
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const p of parts) if (p.where !== "you" && !out.has(p.n) && p.needs.some((n) => where.get(n) === "you" || out.has(n))) { out.add(p.n); grew = true; }
   }
-  return any ? Math.max(...done.values()) : null;
+  return out;
 }
+
+// How long the parts Leanfare runs take, done at once where they can be: the longest chain of needs.
+// now: the parts that can start now; after: the parts that wait for yours, counted from when yours
+// are done. The parts left to the person are not timed: their time is theirs.
+export function chains(parts: Part[]): { now: number | null; after: number | null } {
+  const later = afterYours(parts);
+  const done = new Map<number, number>();
+  let now: number | null = null, after: number | null = null;
+  for (const p of parts) {
+    if (p.where === "you") continue;
+    const w = later.has(p.n);
+    // A part after yours starts when yours are done: the parts that do not wait for yours count as done by then.
+    const start = Math.max(0, ...p.needs.filter((n) => later.has(n) === w).map((n) => done.get(n) ?? 0));
+    done.set(p.n, start + (p.seconds ?? 0));
+    if (p.seconds === null) continue;
+    if (w) after = Math.max(after ?? 0, done.get(p.n)!); else now = Math.max(now ?? 0, done.get(p.n)!);
+  }
+  return { now, after };
+}
+export const chainSeconds = (parts: Part[]) => chains(parts).now;
 
 // ---- the table -----------------------------------------------------------------------------------
 
@@ -207,6 +303,13 @@ export const tokText = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n
 const usd = (v: number | null) => (v === null ? "not known" : v === 0 ? "$0" : v < 0.01 ? "under $0.01" : `$${v.toFixed(2)}`);
 const RUNS: Record<Where, string> = { you: "you", local: "Leanfare, on this computer", free: "Leanfare, free model", paid: "Leanfare, pay per use" };
 const cell = (s: string) => s.replace(/\|/g, "/").replace(/\n/g, " ");
+
+// How long Leanfare's parts take: the ones that start now, and the ones after yours (from when yours are done).
+export function timeLine(t: { seconds: number | null; after: number | null }): string {
+  const now = t.seconds !== null ? `Leanfare's parts take ${secondsText(t.seconds)}, done at once where they can` : "";
+  const after = t.after !== null ? `${now ? "; the ones after yours" : "Leanfare's parts wait for yours, then"} take ${secondsText(t.after)}${now ? " once yours are done" : ""}` : "";
+  return now || after ? `${now}${after}. ` : "";
+}
 
 export function tableOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
   const rows = r.parts.map((p) => [
@@ -221,7 +324,7 @@ export function tableOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
     "|---|---|---|---|---|---|---|---|---|",
     ...rows.map((x) => `| ${x} |`),
     "",
-    `${t.out} of ${t.parts} parts go to Leanfare, keeping about ${tokText(t.kept)} tokens out of your plan${t.used ? `; about ${tokText(t.used)} stay in it` : ""}. ${t.seconds !== null ? `Leanfare's parts take ${secondsText(t.seconds)} done at once where they can. ` : ""}Pay per use: ${usd(t.cost)}.`,
+    `${t.out} of ${t.parts} parts go to Leanfare, keeping about ${tokText(t.kept)} tokens out of your plan${t.used ? `; about ${tokText(t.used)} stay in it` : ""}. ${timeLine(t)}Pay per use: ${usd(t.cost)}.`,
   ].join("\n");
 }
 
@@ -231,11 +334,13 @@ function nextOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
   const now = out.filter((p) => !p.needs.length).map((p) => p.n);
   const list = (ns: number[]) => (ns.length === 1 ? `part ${ns[0]}` : `parts ${ns.slice(0, -1).join(", ")} and ${ns.at(-1)}`);
   const s: string[] = [];
-  if (now.length) s.push(`Run ${list(now)} now with delegate${now.length > 1 ? ", all in the same turn (they do not wait for each other)" : ""}: each part's task, kind and effort as in the table, with its files.`);
-  const later = out.filter((p) => p.needs.length);
+  if (now.length) s.push(`Run ${list(now)} now with delegate${now.length > 1 ? ", all in the same turn (they do not wait for each other)" : ""}: each part's task, kind and effort as in the table, with its files (at most ${DELEGATE_LIMITS.count} to one delegate call).`);
+  const yoursFirst = afterYours(r.parts);
+  const later = out.filter((p) => p.needs.length && !yoursFirst.has(p.n));
   if (later.length) s.push(`Then ${list(later.map((p) => p.n))}, each once the parts it needs are back, with their answers in its task.`);
   if (out.some((p) => p.kind === "search")) s.push("A search part goes to ask with the model in the table.");
   if (mine.length) s.push(`Do ${list(mine.map((p) => p.n))} yourself.`);
+  if (yoursFirst.size) s.push(`${list([...yoursFirst]).replace(/^p/, "P")} wait${yoursFirst.size === 1 ? "s" : ""} for yours: once yours are done, run ${yoursFirst.size === 1 ? "it" : "them"} with delegate, with the answers ${yoursFirst.size === 1 ? "it needs" : "they need"} in the task (plan_run does not run ${yoursFirst.size === 1 ? "it" : "them"}).`);
   return s.join(" ");
 }
 
@@ -245,16 +350,21 @@ export interface PlanInput { task: string; files: PlanFile[]; manager: string | 
 const FULL_PATH = /^(~|\/|[A-Za-z]:[\\/]|\\\\)/; // ~/..., /..., C:\..., \\server
 
 // The request body of POST /api/plan, checked: the input, or one sentence saying what is wrong.
-export function checkPlan(b: any): Omit<PlanInput, "signal"> | string {
+// trusted: the MCP door (it holds the control token), which measured the files itself and may say
+// where each is; the page can only name paths, which Leanfare measures here.
+export function checkPlan(b: any, trusted = false): Omit<PlanInput, "signal"> | string {
   if (!b || typeof b !== "object" || Array.isArray(b)) return "The request must be a JSON object.";
   if (typeof b.task !== "string" || !b.task.trim()) return "plan needs a task.";
   if (b.task.length > MAX_TASK) return `The task is ${b.task.length.toLocaleString("en-US")} characters; the most is ${MAX_TASK.toLocaleString("en-US")}. Name the files instead of pasting them.`;
+  const most = trusted ? PLAN_FILES.walk : LISTED;
   const list = b.files ?? [];
-  if (!Array.isArray(list) || list.length > 200) return "files must be a list of at most 200 files, each with a name and its size in bytes.";
+  if (!Array.isArray(list) || list.length > most) return `files must be a list of at most ${most.toLocaleString("en-US")} files, each with a name and its size in bytes.`;
   const files: PlanFile[] = [];
   for (const f of list) {
     if (!f || typeof f !== "object" || typeof f.name !== "string" || !f.name.trim() || !Number.isFinite(f.size) || f.size < 0) return "Each file needs a name and its size in bytes.";
-    files.push({ name: plainText(f.name, 500), size: Math.min(Math.round(f.size), 1e10) });
+    const one: PlanFile = { name: plainText(f.name, 500), size: Math.min(Math.round(f.size), 1e12) };
+    if (trusted && typeof f.path === "string" && FULL_PATH.test(f.path)) one.path = f.path;
+    files.push(one);
   }
   // The Plan tab names files and folders by their paths: Leanfare measures them itself (never opens them here).
   if (b.paths !== undefined && b.paths !== null) {
@@ -270,75 +380,91 @@ export function checkPlan(b: any): Omit<PlanInput, "signal"> | string {
   return { task: b.task.trim(), files, manager, split };
 }
 
+// The plan whose limits count: Codex spends a ChatGPT plan, the others a Claude plan when they are Claude's.
+async function limitsFor(manager: string): Promise<{ five: number | null; week: number | null }> {
+  if (/codex|chatgpt/i.test(manager)) { try { return windowsNow("chatgpt", await planView("chatgpt")); } catch { return { five: null, week: null }; } }
+  if (/claude|^you$/i.test(manager)) return windowsNow("claude", null);
+  return { five: null, week: null };
+}
+
 export async function makePlan(input: PlanInput): Promise<PlanResult> {
   const manager = input.manager ?? "you";
-  let parts: Omit<Part, "where" | "model" | "seconds" | "tokens" | "cost" | "why">[] | null = null;
+  const shown = splitView(input.files);
+  let parts: Split[] | null = null;
   const split: PlanResult["split"] = { by: "rules", model: null, cost: null, note: null };
   if (input.split !== "rules") {
-    const fileList = input.files.length ? `\n\nFiles (${input.files.length}):\n${input.files.slice(0, 200).map((f) => `- ${f.name} (${tokText(Math.ceil(f.size / 4))} tokens)`).join("\n")}` : "";
+    const fileList = shown.length ? `\n\nFiles (${input.files.length.toLocaleString("en-US")}${shown.length < input.files.length ? `, shown by folder` : ""}):\n${shown.map((f) => `- ${f.name} (${tokText(Math.ceil(f.size / 4))} tokens)`).join("\n")}` : "";
     const ask: Msg[] = [{ role: "user", content: `The task: ${input.task}${fileList}\n\nThe person works in ${manager === "you" ? "their own AI app" : manager}.` }];
     const r = await runChat(ask, "auto-balanced", input.signal, () => {}, "Plan", { system: SPLIT_SYSTEM, source: "plan", guess: { task: "hard_prompts", why: "splitting a task into parts", alt: "overall" }, maxOut: 3000, effort: "low" });
     if (r.status === "stopped") throw new UserError(499, "Stopped.", "stopped");
     split.cost = r.meta?.spent ?? r.meta?.cost ?? null;
     if (r.status === "ok") {
       split.model = r.meta?.model ? { id: r.meta.model.id, label: r.meta.model.label } : null;
-      parts = readSplit(r.text, input.files);
+      parts = readSplit(r.text, shown);
       if (parts) split.by = "model";
       else split.note = `${split.model?.label ?? "The model"}'s answer did not read as parts, so Leanfare split it by rules.`;
     } else split.note = `No model could split it (${String(r.meta?.error ?? "it failed").replace(/\.$/, "")}), so Leanfare split it by rules.`;
   }
-  parts ??= rulesSplit(input.task, input.files);
+  parts = expand(parts ?? rulesSplit(input.task, shown), shown).map((p) => ({ ...p, files: byRelevance(p.files, `${input.task} ${p.task}`) }));
 
-  const limits = windowsNow("claude", null);
+  const limits = await limitsFor(manager);
   const known = limits.five !== null || limits.week !== null;
   const nearText = [limits.five !== null && limits.five >= NEAR ? `the 5 hours at ${Math.round(limits.five)}%` : "", limits.week !== null && limits.week >= NEAR ? `the week at ${Math.round(limits.week)}%` : ""].filter(Boolean).join(", ") || null;
   const placed: Part[] = [];
   for (const p of parts) placed.push(await place(p, input.files, nearText, manager, input.signal));
   const out = placed.filter((p) => p.where !== "you");
   const costs = out.map((p) => p.cost);
+  const time = chains(placed);
   const totals = {
-    parts: placed.length, out: out.length,
+    parts: placed.length, out: out.length, later: afterYours(placed).size,
     kept: out.reduce((n, p) => n + p.tokens, 0), used: placed.filter((p) => p.where === "you").reduce((n, p) => n + p.tokens, 0),
-    seconds: chainSeconds(out.length ? placed : []),
+    seconds: time.now, after: time.after,
     cost: costs.some((c) => c === null) ? null : costs.reduce<number>((a, b) => a + (b ?? 0), 0),
   };
   const base = { task: input.task, manager, parts: placed, totals, split, limits: known ? limits : null };
   const result: PlanResult = { id: randomId(), ...base, table: tableOf(base), next: nextOf(base) };
-  kept.set(result.id, result);
-  wherePaths.set(result.id, new Map(input.files.filter((f) => f.path).map((f) => [f.name, { path: f.path!, size: f.size }])));
-  while (kept.size > KEEP) { const old = kept.keys().next().value!; kept.delete(old); wherePaths.delete(old); }
+  keep(result, new Map(input.files.filter((f) => f.path).map((f) => [f.name, { path: f.path!, size: f.size }])));
   return result;
 }
 
-// ---- running a plan here (the Plan tab) ---------------------------------------------------------
+// ---- running a plan ---------------------------------------------------------------------------------
 // The parts Leanfare runs, run at once where they can, each as soon as the parts it needs are back,
-// with their answers handed on in its task. The parts that stay with the person are theirs, and a
-// part that needs one of those (or one that failed) waits for them. Each part goes through the
-// delegate (checks included); a search part goes to the model the plan named.
+// with their answers handed on in its task. The parts that stay with the person are theirs, and so is a
+// part that needs one of those (after_yours: they hand it over once theirs is done); a part that needs
+// one that failed waits (blocked) for the next run. Each part goes through the
+// delegate; a search part goes to the model the plan named.
 
-export type RunStatus = "waiting" | "running" | "done" | "failed" | "stopped" | "yours" | "blocked" | "asks";
+// after_yours: it waits for one of the person's parts (directly or through others), so it is theirs to hand over once theirs is done.
+export type RunStatus = "waiting" | "running" | "done" | "failed" | "stopped" | "yours" | "after_yours" | "blocked" | "asks";
 export interface RunPart { n: number; title: string; status: RunStatus; answer: string | null; receipt: string | null; model: string | null; cost: number | null; seconds: number | null; error: string | null }
 export interface RunView { id: string; started: string; running: boolean; parts: RunPart[]; cost: number | null; asks: { parts: number[]; estimate: number | null; cap: number } | null }
 
-// What a plan's paid parts would cost, and whether they may run without asking: the person said
-// yes (paid), or their estimate is within the cap set in Settings. The monthly budget holds either way.
+// What a plan's paid parts would cost.
 export function paidOf(plan: PlanResult): { parts: number[]; estimate: number | null } {
   const paid = plan.parts.filter((p) => p.where === "paid");
   const costs = paid.map((p) => p.cost);
   return { parts: paid.map((p) => p.n), estimate: costs.some((c) => c === null) ? null : costs.reduce<number>((a, b) => a + (b ?? 0), 0) };
 }
-export function paidAllowed(plan: PlanResult, yes: boolean): boolean {
-  const { parts, estimate } = paidOf(plan);
-  return yes || !parts.length || (estimate !== null && estimate <= settings().planAuto);
-}
 
 const KEEP = 20;
 const kept = new Map<string, PlanResult>();
-const wherePaths = new Map<string, Map<string, { path: string; size: number }>>(); // a plan's files, by name, when Leanfare measured them
-const runs = new Map<string, { view: RunView; ac: AbortController; tick: () => void }>();
+const wherePaths = new Map<string, Map<string, { path: string; size: number }>>(); // a plan's files, by name, when Leanfare knows where they are
+const runs = new Map<string, { view: RunView; ac: AbortController; tick: () => void; yes: { on: boolean } }>();
 export const keptPlan = (id: string) => kept.get(id) ?? null;
 export const forgetPlans = () => { for (const r of runs.values()) r.ac.abort(); kept.clear(); runs.clear(); wherePaths.clear(); };
 const HANDED = 20_000; // characters of an earlier part's answer handed on
+const running = (id: string) => !!runs.get(id)?.view.running;
+
+// The last 20 plans are kept, and any plan whose parts are running (it is never dropped mid run).
+function keep(plan: PlanResult, paths: Map<string, { path: string; size: number }>) {
+  kept.set(plan.id, plan);
+  wherePaths.set(plan.id, paths);
+  for (const id of [...kept.keys()]) {
+    if (kept.size <= KEEP) break;
+    if (id === plan.id || running(id)) continue;
+    kept.delete(id); wherePaths.delete(id); runs.delete(id);
+  }
+}
 
 export function runView(id: string): RunView | null { return runs.get(id)?.view ?? null; }
 
@@ -346,25 +472,42 @@ export function startRun(id: string, opts: { paid?: boolean } = {}): RunView {
   const plan = kept.get(id);
   if (!plan) throw new UserError(404, "This plan is no longer in Leanfare (it was restarted, or 20 newer plans were made). Make the plan again.", "plan_gone");
   const had = runs.get(id);
-  if (had?.view.running) {
+  if (had?.view.running && !had.ac.signal.aborted) {
     // A yes for the paid parts while the free ones run: they join this run.
-    if (opts.paid && had.view.asks) { for (const r of had.view.parts) if (r.status === "asks") r.status = "waiting"; had.view.asks = null; had.tick(); }
+    if (opts.paid && !had.yes.on) { had.yes.on = true; for (const r of had.view.parts) if (r.status === "asks") r.status = "waiting"; had.view.asks = null; had.tick(); }
     return had.view;
   }
   // Parts already done in an earlier run of this plan keep their answers; the rest run (again).
   const before = new Map((had?.view.parts ?? []).filter((r) => r.status === "done").map((r) => [r.n, r]));
-  const ok = paidAllowed(plan, !!opts.paid);
-  const paid = paidOf(plan);
-  const view: RunView = { id, started: now().toISOString(), running: true, cost: 0,
-    asks: ok || !paid.parts.length ? null : { ...paid, cap: settings().planAuto },
-    parts: plan.parts.map((p) => before.get(p.n) ?? ({ n: p.n, title: p.title, status: p.where === "you" ? "yours" : p.where === "paid" && !ok ? "asks" : "waiting", answer: null, receipt: null, model: null, cost: null, seconds: null, error: null })) };
+  const yes = { on: !!opts.paid };
+  const cap = settings().planAuto;
+  const view: RunView = { id, started: now().toISOString(), running: true, cost: 0, asks: null,
+    parts: plan.parts.map((p) => before.get(p.n) ?? ({ n: p.n, title: p.title, status: p.where === "you" ? "yours" : "waiting", answer: null, receipt: null, model: null, cost: null, seconds: null, error: null })) };
   const ac = new AbortController();
   const at = (n: number) => view.parts.find((x) => x.n === n)!;
+  const partOf = (n: number) => plan.parts.find((x) => x.n === n)!;
   const going = new Set<number>();
+  // What this run spent on paid parts: as charged, or at the estimate while one runs or when a stopped
+  // or failed one's charge is not known.
+  const spent = () => view.parts.reduce((sum, r) => {
+    const p = partOf(r.n);
+    if (p.where !== "paid" || before.has(r.n)) return sum;
+    if (r.status === "running") return sum + (p.cost ?? 0);
+    if (r.status === "done" || r.status === "failed" || r.status === "stopped") return sum + (r.cost ?? p.cost ?? 0);
+    return sum;
+  }, 0);
+  const asking = () => {
+    const ps = view.parts.filter((r) => r.status === "asks").map((r) => r.n);
+    const ests = ps.map((n) => partOf(n).cost);
+    view.asks = ps.length ? { parts: ps, estimate: ests.some((c) => c === null) ? null : ests.reduce<number>((a, b) => a + (b ?? 0), 0), cap } : null;
+  };
   const finish = () => {
-    for (const r of view.parts) if (r.status === "waiting") r.status = ac.signal.aborted ? "stopped" : "blocked";
-    const costs = view.parts.filter((r) => r.status === "done" || r.status === "failed").map((r) => r.cost);
-    view.cost = costs.some((c) => c === null) ? null : costs.reduce<number>((a, b) => a + (b ?? 0), 0);
+    // Still waiting at the end: stopped, or a paid part that waits for the yes too (on a part that asks), or blocked.
+    for (const r of view.parts) if (r.status === "waiting") r.status = ac.signal.aborted ? "stopped" : partOf(r.n).where === "paid" && !yes.on ? "asks" : "blocked";
+    const ran = view.parts.filter((r) => !before.has(r.n) && ["done", "failed", "stopped"].includes(r.status));
+    // What each part's calls were charged, a stopped or failed one's too; not known if one's charge is not (Savings has every charge).
+    view.cost = ran.some((r) => r.cost === null) ? null : ran.reduce((a, r) => a + (r.cost ?? 0), 0);
+    asking();
     view.running = false;
   };
   const tick = () => {
@@ -372,17 +515,22 @@ export function startRun(id: string, opts: { paid?: boolean } = {}): RunView {
     for (const p of plan.parts) {
       const r = at(p.n);
       if (r.status !== "waiting") continue;
-      if (p.needs.some((n) => ["yours", "failed", "stopped", "blocked"].includes(at(n).status))) { r.status = "blocked"; continue; }
+      if (p.needs.some((n) => ["yours", "after_yours"].includes(at(n).status))) { r.status = "after_yours"; continue; }
+      if (p.needs.some((n) => ["failed", "stopped", "blocked"].includes(at(n).status))) { r.status = "blocked"; continue; }
       if (!p.needs.every((n) => at(n).status === "done")) continue;
+      // A paid part: only with a yes, or while what was spent and its estimate stay within the cap.
+      if (p.where === "paid" && !yes.on && (p.cost === null || spent() + p.cost > cap)) { r.status = "asks"; continue; }
       r.status = "running";
       going.add(p.n);
-      runPart(p, plan, at, ac.signal).then((got) => Object.assign(r, got)).catch((e: any) => {
-        Object.assign(r, { status: ac.signal.aborted || e?.status === 499 ? "stopped" : "failed", error: String(e?.message ?? e).slice(0, 500) });
+      runPart(p, plan, at, ac.signal, yes.on).then((got) => Object.assign(r, got)).catch((e: any) => {
+        // spent: what its calls were charged before it stopped or failed, when known.
+        Object.assign(r, { status: ac.signal.aborted || e?.status === 499 ? "stopped" : "failed", error: String(e?.message ?? e).slice(0, 500), cost: typeof e?.spent === "number" ? e.spent : null });
       }).finally(() => { going.delete(p.n); tick(); });
     }
+    asking();
     if (!going.size) finish();
   };
-  runs.set(id, { view, ac, tick });
+  runs.set(id, { view, ac, tick, yes });
   tick();
   return view;
 }
@@ -391,31 +539,35 @@ export function stopRun(id: string): RunView | null {
   const r = runs.get(id);
   if (!r) return null;
   r.ac.abort();
-  if (r.view.running && ![...r.view.parts].some((p) => p.status === "running")) { for (const p of r.view.parts) if (p.status === "waiting") p.status = "stopped"; r.view.running = false; }
+  if (r.view.running && !r.view.parts.some((p) => p.status === "running")) { for (const p of r.view.parts) if (p.status === "waiting") p.status = "stopped"; r.view.running = false; }
   return r.view;
 }
 
-async function runPart(p: Part, plan: PlanResult, at: (n: number) => RunPart, signal: AbortSignal): Promise<Partial<RunPart>> {
+async function runPart(p: Part, plan: PlanResult, at: (n: number) => RunPart, signal: AbortSignal, yes: boolean): Promise<Partial<RunPart>> {
   const before = p.needs.map((n) => { const x = at(n); return `Part ${n} (${x.title}):\n${(x.answer ?? "").slice(0, HANDED)}`; });
-  const task = `${p.task}${before.length ? `\n\nWhat the earlier parts found:\n\n${before.join("\n\n")}` : ""}\n\nThe whole task, for context: ${plan.task.slice(0, 4000)}`;
+  const context = p.task.includes(CONTEXT) ? "" : `\n\n${CONTEXT} ${plan.task.slice(0, 4000)}`; // a part split by rules carries it already
+  const task = `${p.task}${before.length ? `\n\nWhat the earlier parts found:\n\n${before.join("\n\n")}` : ""}${context}`;
   if (p.kind === "search" && p.model) {
     const r = await runChat([{ role: "user", content: task }], p.model.id, signal, () => {}, `Plan part ${p.n}`, { source: "plan", maxOut: 4096 });
     if (r.status !== "ok") return { status: r.status === "stopped" ? "stopped" : "failed", error: String(r.meta?.error ?? "It failed."), cost: r.meta?.spent ?? r.meta?.cost ?? null, model: r.meta?.model?.label ?? null };
     return { status: "done", answer: r.text, receipt: `${r.meta.model.label}, ${usd(r.meta.cost ?? null)}.`, model: r.meta.model.label, cost: r.meta.spent ?? r.meta.cost ?? null, seconds: (r.meta.ms ?? 0) / 1000 };
   }
-  // Its files, as many as one hand off takes (50, 4 MB in all, 2 MB each), in the plan's order.
+  // Its files, as many as one hand off takes, in the plan's order; one that cannot be read is left out and named.
   const known = wherePaths.get(plan.id) ?? new Map();
   const mine = p.files.map((n) => known.get(n)).filter((x): x is { path: string; size: number } => !!x);
-  const chosen: string[] = [];
-  let total = 0;
-  for (const f of mine) {
-    if (chosen.length >= DELEGATE_LIMITS.count || f.size > DELEGATE_LIMITS.file || total + f.size > DELEGATE_LIMITS.total) continue;
-    chosen.push(f.path); total += f.size;
+  const files: { name: string; text: string }[] = [];
+  const skipped: string[] = [];
+  for (const f of handOff(mine)) {
+    const got = readForDelegate([f.path]);
+    if (typeof got === "string") skipped.push(got.replace(/\.$/, "")); else files.push(...got);
   }
-  const files = readForDelegate(chosen);
-  if (typeof files === "string") throw new UserError(400, files, "plan_files");
-  const d = await runDelegate({ task, files, kind: DELEGATE_KIND[p.kind] ?? null, effort: p.effort, check: "auto", maxOut: DEFAULT_MAX_OUT }, signal);
-  const short = mine.length > chosen.length ? ` Handed over ${chosen.length} of its ${mine.length} files (the most one hand off takes is ${DELEGATE_LIMITS.count} files, ${DELEGATE_LIMITS.total / 1048576} MB).` : "";
-  return { status: "done", answer: d.answer, receipt: d.receipt + short, model: d.model.label, cost: d.total, seconds: d.seconds };
+  if (mine.length && !files.length) throw Object.assign(new UserError(400, `None of its files could be handed over${skipped.length ? `: ${skipped.slice(0, 3).join("; ")}` : ""}.`, "plan_files"), { spent: 0 });
+  // A free part stays on free models, its check too; a paid part within the cap goes unchecked (the estimate holds no check).
+  const free = p.where === "local" || p.where === "free";
+  const d = await runDelegate({ task, files, kind: DELEGATE_KIND[p.kind] ?? null, effort: p.effort, check: free || yes ? "auto" : "never", maxOut: DEFAULT_MAX_OUT, ...(free ? { only: isFree } : {}) }, signal);
+  const notes = [
+    mine.length > files.length + skipped.length ? `Handed over ${files.length} of its ${mine.length} files (the most one hand off takes is ${DELEGATE_LIMITS.count} files, ${DELEGATE_LIMITS.total / 1048576} MB).` : "",
+    skipped.length ? `Left out: ${skipped.slice(0, 3).join("; ")}${skipped.length > 3 ? `, and ${skipped.length - 3} more` : ""}.` : "",
+  ].filter(Boolean).join(" ");
+  return { status: "done", answer: d.answer, receipt: `${d.receipt}${notes ? ` ${notes}` : ""}`, model: d.model.label, cost: d.total, seconds: d.seconds };
 }
-

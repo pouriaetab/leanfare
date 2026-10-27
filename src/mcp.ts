@@ -14,7 +14,7 @@ import { secondsText } from "./util";
 import { reportText } from "./trialtext";
 import { APP_MIME, PLAN_APP_HTML, PLAN_APP_URI } from "./planapp";
 import { readForDelegate, resolvePath, sizesForPlan } from "./readfiles";
-import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -60,9 +60,16 @@ const TOOLS = [
     annotations: { title: "Run Leanfare's parts of a plan", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   },
   {
+    name: "plan_stop",
+    title: "Stop a plan's parts",
+    description: "Stop the parts of a plan that Leanfare is running (plan_run). What was done stays; a part stopped half way may have been charged.",
+    inputSchema: { type: "object", properties: { id: { type: "string", description: "The plan's id, from plan." } }, required: ["id"], additionalProperties: false },
+    annotations: { title: "Stop a plan's parts", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
     name: "plan_status",
     title: "Progress of a plan",
-    description: "Where each part of a plan stands (waiting, running, done, failed, yours, waiting for a yes) and the answers of the parts Leanfare finished. Each answer is also saved in the project, in .leanfare/plans/<id>/ (a folder git ignores), where you and the user can read it. wait: up to that many seconds for something to change before answering (default 0, at most 50).",
+    description: "Where each part of a plan stands (waiting, running, done, failed, yours, after yours, waiting for a yes) and the answers of the parts Leanfare finished. Each answer is also saved in the project, in .leanfare/plans/<id>/ (a folder git ignores), where you and the user can read it. wait: up to that many seconds for something to change before answering (default 0, at most 50).",
     inputSchema: {
       type: "object",
       properties: {
@@ -181,16 +188,26 @@ export function sharedFolder(given?: unknown): string | null {
   try { if (!statSync(dir).isDirectory()) return null; } catch { return null; }
   return dir;
 }
+const PLAN_ID = /^[A-Za-z0-9_-]{6,64}$/; // the ids Leanfare makes (randomId): never a path
+// Each folder on the way and each file is checked not to be a link (a cloned repo could carry one
+// that points anywhere), and a file is written only as a plain file.
+const isLink = (p: string) => { try { return lstatSync(p).isSymbolicLink(); } catch { return false; } };
 function writeShared(folder: string, id: string, files: Record<string, string>): string | null {
+  if (!PLAN_ID.test(id)) return null;
   try {
-    const root = join(folder, ".leanfare");
-    mkdirSync(join(root, "plans", id), { recursive: true });
-    if (!existsSync(join(root, ".gitignore"))) writeFileSync(join(root, ".gitignore"), "# Leanfare's plans and their answers: kept out of git.\n*\n");
-    for (const [name, text] of Object.entries(files)) writeFileSync(join(root, "plans", id, name), text);
+    const root = join(folder, ".leanfare"), dir = join(root, "plans", id);
+    for (const d of [root, join(root, "plans"), dir]) { if (isLink(d)) return null; if (!existsSync(d)) mkdirSync(d); }
+    const ignore = join(root, ".gitignore");
+    if (!isLink(ignore) && !existsSync(ignore)) writeFileSync(ignore, "# Leanfare's plans and their answers: kept out of git.\n*\n", { flag: "wx" });
+    for (const [name, text] of Object.entries(files)) {
+      const f = join(dir, name);
+      if (isLink(f)) continue;
+      writeFileSync(f, text);
+    }
     return `.leanfare/plans/${id}`;
   } catch { return null; } // a folder Leanfare may not write in: the answers are in the tool's result anyway
 }
-const STATUS: Record<string, string> = { waiting: "waiting", running: "running", done: "done", failed: "failed", stopped: "stopped", yours: "yours to do", blocked: "waits for a part that is not done", asks: "paid: waits for a yes" };
+const STATUS: Record<string, string> = { waiting: "waiting", running: "running", done: "done", failed: "failed", stopped: "stopped", yours: "yours to do", after_yours: "after yours: hand it to delegate once yours is done", blocked: "waits for a part that is not done", asks: "paid: waits for a yes" };
 const SHOWN = 3000; // characters of an answer in the tool's result (the whole answer is in its file)
 export function statusText(v: any, saved: string | null): string {
   const rows = v.parts.map((r: any) => `| ${r.n} | ${String(r.title).replace(/\|/g, "/")} | ${STATUS[r.status] ?? r.status} | ${r.model ?? ""} | ${r.cost === null || r.cost === undefined ? "" : usd(r.cost)} |`);
@@ -213,10 +230,23 @@ function sharedFiles(v: any): Record<string, string> {
 let canAsk = false;
 const asked = new Map<string, (msg: any) => void>();
 let askId = 0;
-function askUser(params: unknown, ms = 120_000): Promise<any> {
+// After ms the tool stops waiting and says the parts wait; an answer that still comes (within half
+// an hour: the app may keep showing the question) goes to late.
+const LATE_MS = 30 * 60_000;
+const ASK_MS = Number(process.env.LEANFARE_ASK_WAIT_MS) > 0 ? Number(process.env.LEANFARE_ASK_WAIT_MS) : 120_000; // the tests' wait is shorter
+function askUser(params: unknown, opts: { ms?: number; late?: (result: any) => void } = {}): Promise<any> {
   const id = `leanfare-${++askId}`;
   return new Promise((done) => {
-    const t = setTimeout(() => { asked.delete(id); done(null); }, ms);
+    const t = setTimeout(() => {
+      asked.delete(id);
+      out({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: id, reason: "No answer in time: the paid parts wait. A yes here later still runs them, or plan_run can be called again." } });
+      done(null);
+      if (opts.late) {
+        const gone = setTimeout(() => asked.delete(id), LATE_MS);
+        (gone as any).unref?.();
+        asked.set(id, (msg) => { clearTimeout(gone); opts.late!(msg?.result ?? null); });
+      }
+    }, opts.ms ?? ASK_MS);
     asked.set(id, (msg) => { clearTimeout(t); done(msg?.result ?? null); });
     out({ jsonrpc: "2.0", id, method: "elicitation/create", params });
   });
@@ -224,20 +254,29 @@ function askUser(params: unknown, ms = 120_000): Promise<any> {
 
 async function runTool(name: string, args: any, signal: AbortSignal): Promise<any> {
   if (name === "plan_run") {
-    if (typeof args?.id !== "string" || !args.id.trim()) return failure("plan_run needs the plan's id, from plan.");
+    if (typeof args?.id !== "string" || !PLAN_ID.test(args.id)) return failure("plan_run needs the plan's id, from plan.");
     const yes = args.paid === "yes";
     let { j: v } = await call("/api/plan/run", { method: "POST", json: { id: args.id, paid: yes } }, signal);
     if (v.asks && !yes && canAsk) {
+      const yesTo = (a: any) => a?.action === "accept" && a.content?.run === true;
       const a = await askUser({
         message: `Leanfare's plan has paid parts (${v.asks.parts.map((n: number) => `part ${n}`).join(", ")}), about ${usd(v.asks.estimate)} on pay per use, over your cap of ${usd(v.asks.cap)}. The free and local parts are running. Run the paid ones too?`,
         requestedSchema: { type: "object", properties: { run: { type: "boolean", title: "Run the paid parts", description: `About ${usd(v.asks.estimate)}, within your monthly budget in Leanfare.`, default: false } }, required: ["run"] },
+      }, {
+        // A yes after the tool stopped waiting: the person said yes to these parts, so they run (once: a run that has them going is left as it is).
+        late: (r) => { if (yesTo(r)) call("/api/plan/run", { method: "POST", json: { id: args.id, paid: true } }, new AbortController().signal).catch(() => {}); },
       });
-      if (a?.action === "accept" && a.content?.run === true) ({ j: v } = await call("/api/plan/run", { method: "POST", json: { id: args.id, paid: true } }, signal));
+      if (yesTo(a)) ({ j: v } = await call("/api/plan/run", { method: "POST", json: { id: args.id, paid: true } }, signal));
     }
     return text(statusText(v, null), { id: v.id, running: v.running, parts: v.parts.map((r: any) => ({ n: r.n, status: r.status })), asks: v.asks });
   }
+  if (name === "plan_stop") {
+    if (typeof args?.id !== "string" || !PLAN_ID.test(args.id)) return failure("plan_stop needs the plan's id, from plan.");
+    const { j: v } = await call("/api/plan/stop", { method: "POST", json: { id: args.id } }, signal);
+    return text(statusText(v, null), { id: v.id, running: v.running, parts: v.parts.map((r: any) => ({ n: r.n, status: r.status })) });
+  }
   if (name === "plan_status") {
-    if (typeof args?.id !== "string" || !args.id.trim()) return failure("plan_status needs the plan's id, from plan.");
+    if (typeof args?.id !== "string" || !PLAN_ID.test(args.id)) return failure("plan_status needs the plan's id, from plan.");
     const wait = Number.isInteger(args.wait) ? Math.min(50, Math.max(0, args.wait)) : 0;
     const look = async () => (await call(`/api/plan/run?id=${encodeURIComponent(args.id)}`, {}, signal)).j;
     let v = await look();
@@ -252,14 +291,15 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
     if (typeof args?.task !== "string" || !args.task.trim()) return failure("plan needs a task.");
     const files = sizesForPlan(args.files, args.folder);
     if (typeof files === "string") return failure(files);
-    const { j } = await call("/api/plan", { method: "POST", json: { task: args.task, files: files.map((f) => ({ name: f.name, size: f.size })), manager: client, split: args.split === "rules" ? "rules" : "auto" } }, signal);
+    const { j } = await call("/api/plan", { method: "POST", json: { task: args.task, files, manager: client, split: args.split === "rules" ? "rules" : "auto" } }, signal);
     const note = j.split?.note ? `\n\n(${j.split.note})` : j.split?.model ? `\n\n(Split by ${j.split.model.label}${typeof j.split.cost === "number" ? `, ${usd(j.split.cost)}` : ""}.)` : "";
     const folder = sharedFolder(args.folder);
     const saved = folder ? writeShared(folder, j.id, { "plan.md": `# Plan ${j.id}\n\n${args.task.trim()}\n\n${j.table}\n\n${j.next}\n` }) : null;
-    const runNote = j.totals.out ? `\n\nOr call plan_run with id ${j.id} to run Leanfare's parts in the background, then plan_status for their answers.${saved ? ` The plan is saved in ${saved}/plan.md.` : ""}` : "";
+    const runNote = j.totals.out - (j.totals.later ?? 0) > 0 ? `\n\nOr call plan_run with id ${j.id} to run Leanfare's parts in the background, then plan_status for their answers.${saved ? ` The plan is saved in ${saved}/plan.md.` : ""}` : "";
     return text(`${j.table}\n\n${j.next}${runNote}${note}`, {
       id: j.id, saved_in: saved,
-      parts: j.parts.map((p: any) => ({ n: p.n, title: p.title, kind: p.kind, effort: p.effort, needs: p.needs, runs_on: p.where, model: p.model?.id ?? null, model_label: p.model?.label ?? null, seconds: p.seconds, tokens: p.tokens, cost_usd: p.cost, files: p.files, task: p.task })),
+      parts: j.parts.map((p: any) => ({ n: p.n, title: p.title, kind: p.kind, effort: p.effort, needs: p.needs, runs_on: p.where, model: p.model?.id ?? null, model_label: p.model?.label ?? null, seconds: p.seconds, tokens: p.tokens, cost_usd: p.cost,
+        files: p.files.slice(0, 50), more_files: Math.max(0, p.files.length - 50), task: p.task })),
       totals: j.totals, split: j.split, limits: j.limits,
     });
   }
@@ -360,11 +400,11 @@ const error = (id: Id | null, code: number, message: string, data?: unknown): vo
 const inflight = new Map<Id, AbortController>();
 
 export async function handleMessage(msg: any, send = { reply, error }): Promise<void> {
-  // The answer to a question Leanfare asked the client (elicitation/create).
-  if (msg && msg.jsonrpc === "2.0" && msg.method === undefined && typeof msg.id === "string" && asked.has(msg.id)) {
-    const done = asked.get(msg.id)!;
-    asked.delete(msg.id);
-    done(msg);
+  // An answer to a question Leanfare asked the client (elicitation/create), on time or late (see
+  // askUser); one Leanfare no longer waits for is dropped. An answer is never answered.
+  if (msg && msg.jsonrpc === "2.0" && msg.method === undefined && msg.id !== undefined && ("result" in msg || "error" in msg)) {
+    const done = asked.get(msg.id);
+    if (done) { asked.delete(msg.id); done(msg); }
     return;
   }
   if (!msg || msg.jsonrpc !== "2.0" || typeof msg.method !== "string") {

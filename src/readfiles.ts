@@ -14,7 +14,7 @@
 //
 // What a model sees as a file's name: the path from the folder when the file is inside it,
 // otherwise the full path with the home folder written as ~ (your user name stays out).
-import { closeSync, constants, fstatSync, openSync, readdirSync, readSync, realpathSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -153,15 +153,16 @@ export function readForDelegate(list: unknown, folderGiven?: unknown): DelegateF
 }
 
 // ---- for the plan (planner.ts): names and sizes only ----------------------------------------------
-// The plan needs to know how much each part reads, not what: so files and folders are only
-// listed and measured here, never opened. A folder counts the files in it (at most 5,000, six
-// folders deep), leaving out what never belongs in a reading: hidden folders, dependencies and
-// build output, files over 2 MB, pictures, archives and compiled files, and every file delegate
-// would refuse as a secret. More than 200 are summed by their first folder.
+// The plan needs to know how much each part reads, not what: so files and folders are only listed
+// and measured here, never opened. A folder counts the files in it (at most 5,000, six folders deep),
+// leaving out what never belongs in a reading: hidden files and folders, links (a walk never follows
+// one), dependencies and build output, files over 2 MB, pictures, archives and compiled files, and
+// every file delegate would refuse as a secret.
 export const PLAN_FILES = { list: 200, walk: 5000, depth: 6 };
 const SKIP_DIRS = new Set(["node_modules", "dist", "build", "target", "vendor", "out", "coverage", "__pycache__", "venv", "env"]);
 const BINARY = /\.(png|jpe?g|gif|webp|bmp|ico|icns|tiff?|psd|pdf|zip|gz|tgz|bz2|xz|zst|7z|rar|jar|war|so|dylib|dll|exe|bin|o|a|class|pyc|wasm|woff2?|ttf|otf|eot|mp3|mp4|mov|avi|mkv|wav|flac|ogg|sqlite|db|lock)$/i;
-export function sizesForPlan(list: unknown, folderGiven?: unknown): { name: string; size: number; path?: string }[] | string {
+export interface PlanSize { name: string; size: number; path: string }
+export function sizesForPlan(list: unknown, folderGiven?: unknown): PlanSize[] | string {
   if (list === undefined || list === null) return [];
   if (!Array.isArray(list) || list.some((p) => typeof p !== "string" || !p.trim())) return "files must be a list of file or folder paths.";
   if (list.length > PLAN_FILES.list) return `At most ${PLAN_FILES.list} paths go with one plan; name folders instead.`;
@@ -172,20 +173,20 @@ export function sizesForPlan(list: unknown, folderGiven?: unknown): { name: stri
     try { if (!statSync(f).isDirectory()) return `${folderGiven} is not a folder.`; } catch { return `The folder ${folderGiven} does not exist.`; }
     folder = realpathSync(f);
   }
-  const out = new Map<string, { name: string; size: number; path?: string }>();
-  let walked = 0;
-  const add = (path: string, size: number) => { if (!out.has(path)) out.set(path, { name: shownName(path, folder), size, path }); };
+  const out = new Map<string, PlanSize>();
+  const add = (path: string, size: number) => { if (!out.has(path) && out.size < PLAN_FILES.walk) out.set(path, { name: shownName(path, folder), size, path }); };
   const walk = (dir: string, depth: number) => {
     let names: string[] = [];
     try { names = readdirSync(dir).sort(); } catch { return; }
     for (const n of names) {
-      if (walked >= PLAN_FILES.walk) return;
+      if (out.size >= PLAN_FILES.walk) return;
+      if (n.startsWith(".")) continue; // hidden: .git, .env, .DS_Store, your shell's history
       const path = join(dir, n);
       let st;
-      try { st = statSync(path); } catch { continue; }
-      if (st.isDirectory()) { if (depth < PLAN_FILES.depth && !n.startsWith(".") && !SKIP_DIRS.has(n.toLowerCase()) && !secretReason(path)) walk(path, depth + 1); continue; }
+      try { st = lstatSync(path); } catch { continue; }
+      if (st.isSymbolicLink()) continue; // a walk never follows a link: it could lead anywhere
+      if (st.isDirectory()) { if (depth < PLAN_FILES.depth && !SKIP_DIRS.has(n.toLowerCase()) && !secretReason(path)) walk(path, depth + 1); continue; }
       if (!st.isFile() || st.size > DELEGATE_LIMITS.file || BINARY.test(n) || secretReason(path)) continue;
-      walked++;
       add(path, st.size);
     }
   };
@@ -205,10 +206,5 @@ export function sizesForPlan(list: unknown, folderGiven?: unknown): { name: stri
     else if (st.isFile()) add(real, st.size);
     else return `${t} is not a plain file or a folder.`;
   }
-  const files = [...out.values()];
-  if (files.length <= PLAN_FILES.list) return files;
-  // Too many to name one by one: summed by their first folder.
-  const groups = new Map<string, { n: number; size: number }>();
-  for (const f of files) { const head = f.name.includes("/") ? f.name.split("/")[0] + "/" : f.name; const g = groups.get(head) ?? { n: 0, size: 0 }; g.n++; g.size += f.size; groups.set(head, g); }
-  return [...groups].map(([head, g]) => ({ name: g.n > 1 ? `${head} (${g.n.toLocaleString("en-US")} files)` : head, size: g.size })).slice(0, PLAN_FILES.list);
+  return [...out.values()];
 }
