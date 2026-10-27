@@ -16,6 +16,7 @@ import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkS
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { selfCommand } from "./self";
+import { keepingFolderTimes } from "./foldertime";
 import { shellEnv } from "./shellenv";
 import { autoView, setAuto, type AutoView } from "./workers";
 
@@ -105,11 +106,13 @@ function writeTarget(file: string): string {
 function writeWhole(file: string, text: string) {
   const target = writeTarget(file);
   const backup = `${file}.leanfare-backup`;
-  if (existsSync(target) && !existsSync(backup)) copyFileSync(target, backup); // the file as it was before Leanfare first changed it
-  mkdirSync(dirname(target), { recursive: true });
-  const tmp = `${target}.leanfare-${process.pid}`;
-  writeFileSync(tmp, text, { mode: 0o600 });
-  renameSync(tmp, target);
+  keepingFolderTimes([file, target], () => { // Leanfare's write is not use of the app (found.ts)
+    if (existsSync(target) && !existsSync(backup)) copyFileSync(target, backup); // the file as it was before Leanfare first changed it
+    mkdirSync(dirname(target), { recursive: true });
+    const tmp = `${target}.leanfare-${process.pid}`;
+    writeFileSync(tmp, text, { mode: 0o600 });
+    renameSync(tmp, target);
+  });
 }
 
 function jsonStatus(a: AppDef): AppStatus {
