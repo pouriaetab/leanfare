@@ -14,7 +14,7 @@
 //
 // What a model sees as a file's name: the path from the folder when the file is inside it,
 // otherwise the full path with the home folder written as ~ (your user name stays out).
-import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readdirSync, readSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -150,4 +150,65 @@ export function readForDelegate(list: unknown, folderGiven?: unknown): DelegateF
     out.push({ name: shownName(path, folder), text: new TextDecoder("utf-8").decode(bytes).replace(/^\uFEFF/, "") });
   }
   return out;
+}
+
+// ---- for the plan (planner.ts): names and sizes only ----------------------------------------------
+// The plan needs to know how much each part reads, not what: so files and folders are only
+// listed and measured here, never opened. A folder counts the files in it (at most 5,000, six
+// folders deep), leaving out what never belongs in a reading: hidden folders, dependencies and
+// build output, files over 2 MB, pictures, archives and compiled files, and every file delegate
+// would refuse as a secret. More than 200 are summed by their first folder.
+export const PLAN_FILES = { list: 200, walk: 5000, depth: 6 };
+const SKIP_DIRS = new Set(["node_modules", "dist", "build", "target", "vendor", "out", "coverage", "__pycache__", "venv", "env"]);
+const BINARY = /\.(png|jpe?g|gif|webp|bmp|ico|icns|tiff?|psd|pdf|zip|gz|tgz|bz2|xz|zst|7z|rar|jar|war|so|dylib|dll|exe|bin|o|a|class|pyc|wasm|woff2?|ttf|otf|eot|mp3|mp4|mov|avi|mkv|wav|flac|ogg|sqlite|db|lock)$/i;
+export function sizesForPlan(list: unknown, folderGiven?: unknown): { name: string; size: number }[] | string {
+  if (list === undefined || list === null) return [];
+  if (!Array.isArray(list) || list.some((p) => typeof p !== "string" || !p.trim())) return "files must be a list of file or folder paths.";
+  if (list.length > PLAN_FILES.list) return `At most ${PLAN_FILES.list} paths go with one plan; name folders instead.`;
+  const named = typeof folderGiven === "string" && folderGiven.trim() !== "";
+  let folder = process.cwd();
+  if (named) {
+    const f = resolvePath(folderGiven as string, process.cwd());
+    try { if (!statSync(f).isDirectory()) return `${folderGiven} is not a folder.`; } catch { return `The folder ${folderGiven} does not exist.`; }
+    folder = realpathSync(f);
+  }
+  const out = new Map<string, { name: string; size: number }>();
+  let walked = 0;
+  const add = (path: string, size: number) => { if (!out.has(path)) out.set(path, { name: shownName(path, folder), size }); };
+  const walk = (dir: string, depth: number) => {
+    let names: string[] = [];
+    try { names = readdirSync(dir).sort(); } catch { return; }
+    for (const n of names) {
+      if (walked >= PLAN_FILES.walk) return;
+      const path = join(dir, n);
+      let st;
+      try { st = statSync(path); } catch { continue; }
+      if (st.isDirectory()) { if (depth < PLAN_FILES.depth && !n.startsWith(".") && !SKIP_DIRS.has(n.toLowerCase()) && !secretReason(path)) walk(path, depth + 1); continue; }
+      if (!st.isFile() || st.size > DELEGATE_LIMITS.file || BINARY.test(n) || secretReason(path)) continue;
+      walked++;
+      add(path, st.size);
+    }
+  };
+  for (const given of list as string[]) {
+    const t = given.trim();
+    const isRelative = !isAbsolute(t) && !t.startsWith("~") && !/^file:\/\//i.test(t);
+    if (isRelative && !named && folder === resolve("/")) return `${t} is a relative path, and Leanfare does not know your project's folder here. Give full paths, or the folder in folder.`;
+    let path: string;
+    try { path = resolvePath(t, folder); } catch { return `${t} is not a path Leanfare can read.`; }
+    let real: string;
+    try { real = realpathSync(path); } catch { return `${t} does not exist${isRelative ? ` (Leanfare looked in ${tilde(folder)})` : ""}.`; }
+    const why = secretReason(path) ?? (real !== path ? secretReason(real) : null);
+    if (why) return `${t} was not counted: ${why}. Leanfare never hands those to a model.`;
+    let st;
+    try { st = statSync(real); } catch { return `${t} could not be read.`; }
+    if (st.isDirectory()) walk(real, 0);
+    else if (st.isFile()) add(real, st.size);
+    else return `${t} is not a plain file or a folder.`;
+  }
+  const files = [...out.values()];
+  if (files.length <= PLAN_FILES.list) return files;
+  // Too many to name one by one: summed by their first folder.
+  const groups = new Map<string, { n: number; size: number }>();
+  for (const f of files) { const head = f.name.includes("/") ? f.name.split("/")[0] + "/" : f.name; const g = groups.get(head) ?? { n: 0, size: 0 }; g.n++; g.size += f.size; groups.set(head, g); }
+  return [...groups].map(([head, g]) => ({ name: g.n > 1 ? `${head} (${g.n.toLocaleString("en-US")} files)` : head, size: g.size })).slice(0, PLAN_FILES.list);
 }

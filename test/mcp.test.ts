@@ -1,7 +1,7 @@
 // leanfare mcp, the real command over stdio, against the test server: both eras
 // of the protocol, and every tool.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ALL_TICKED, boot, fake, keys, ledger, reset } from "./app";
@@ -55,7 +55,7 @@ describe("the protocol", () => {
     const unknown = await rpc("initialize", { protocolVersion: "2019-01-01", capabilities: {} });
     expect(unknown.result.protocolVersion).toBe("2025-11-25");
     const list = await rpc("tools/list", {});
-    expect(list.result.tools.map((t: any) => t.name)).toEqual(["ask", "delegate", "spend", "models", "estimate", "trial"]);
+    expect(list.result.tools.map((t: any) => t.name)).toEqual(["plan", "ask", "delegate", "spend", "models", "estimate", "trial"]);
     expect(list.result.resultType).toBeUndefined();
   });
 
@@ -65,7 +65,7 @@ describe("the protocol", () => {
     expect(d.result._meta["io.modelcontextprotocol/serverInfo"].name).toBe("leanfare");
     const list = await rpc("tools/list", modern());
     expect(list.result.resultType).toBe("complete");
-    expect(list.result.tools).toHaveLength(6);
+    expect(list.result.tools).toHaveLength(7);
     for (const t of list.result.tools) expect(t.inputSchema.type).toBe("object");
   });
 
@@ -83,6 +83,34 @@ describe("the protocol", () => {
 });
 
 describe("the tools", () => {
+  test("plan: a table of the parts, the app's own name in it, and the files only measured", async () => {
+    await keys("openai", "google", "deepseek");
+    // Its real path: on macOS the temp folder is a link (/var/folders is /private/var/folders), and the plan names files by their real paths.
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "plan-project-")));
+    mkdirSync(join(dir, "src"), { recursive: true });
+    mkdirSync(join(dir, "node_modules", "x"), { recursive: true });
+    writeFileSync(join(dir, "src", "router.ts"), "x".repeat(40_000));
+    writeFileSync(join(dir, "src", "logo.png"), "png");
+    writeFileSync(join(dir, ".env"), "OPENAI_API_KEY=sk-should-never-be-read");
+    writeFileSync(join(dir, "node_modules", "x", "index.js"), "y".repeat(90_000));
+    await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "claude-code", version: "2.1" } });
+    const r = await rpc("tools/call", { name: "plan", arguments: { task: "Reverse engineer the router in this project and build a smaller one", files: [dir], split: "rules" } });
+    expect(r.result.isError).toBeUndefined();
+    const t = r.result.content[0].text;
+    expect(t).toContain("| # | Part | Kind | Runs on | Model | Time | Tokens | Cost | When |");
+    expect(t).toContain("you (Claude Code)");
+    expect(t).toContain("Run part 1 now with delegate");
+    const parts = r.result.structuredContent.parts;
+    expect(parts.map((p: any) => p.kind)).toEqual(["read", "read", "reason", "code", "reason"]);
+    expect(parts[0].files).toEqual([`${dir}/src/router.ts`.replace(process.env.HOME!, "~")]); // the logo, the dependencies and .env are not counted
+    expect(parts[0].tokens).toBeGreaterThan(10_000); // 40 KB, about 10k tokens, and the task
+    expect(parts[3]).toMatchObject({ runs_on: "you", model: null });
+    const named = await rpc("tools/call", { name: "plan", arguments: { task: "Look at it", files: [join(dir, ".env")] } });
+    expect(named.result.isError).toBe(true);
+    expect(named.result.content[0].text).toContain("was not counted");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   test("ask: the answer, the model, the cost, and it counts in the ledger", async () => {
     await keys("openai");
     const r = await rpc("tools/call", modern({ name: "ask", arguments: { prompt: "Hi [usage 2000 500]", model: "openai/gpt-5-mini" } }));
@@ -198,6 +226,6 @@ describe("the end of the input", () => {
     expect((await run('{"jsonrpc":"2.0","id":1,"method":"ping"}')).map((m) => m.id)).toEqual([1]);
     const two = await run('{"jsonrpc":"2.0","id":1,"method":"ping"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}');
     expect(two.map((m) => m.id)).toEqual([1, 2]);
-    expect(two[1].result.tools).toHaveLength(6);
+    expect(two[1].result.tools).toHaveLength(7);
   }, 20000);
 });
