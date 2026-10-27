@@ -58,7 +58,7 @@ describe("the protocol", () => {
     const unknown = await rpc("initialize", { protocolVersion: "2019-01-01", capabilities: {} });
     expect(unknown.result.protocolVersion).toBe("2025-11-25");
     const list = await rpc("tools/list", {});
-    expect(list.result.tools.map((t: any) => t.name)).toEqual(["plan", "plan_run", "plan_stop", "plan_status", "ask", "delegate", "spend", "models", "estimate", "trial", "local_model"]);
+    expect(list.result.tools.map((t: any) => t.name)).toEqual(["plan", "plan_run", "plan_stop", "plan_status", "grade", "ask", "delegate", "spend", "models", "estimate", "trial", "local_model"]);
     expect(list.result.resultType).toBeUndefined();
   });
 
@@ -68,7 +68,7 @@ describe("the protocol", () => {
     expect(d.result._meta["io.modelcontextprotocol/serverInfo"].name).toBe("leanfare");
     const list = await rpc("tools/list", modern());
     expect(list.result.resultType).toBe("complete");
-    expect(list.result.tools).toHaveLength(11);
+    expect(list.result.tools).toHaveLength(12);
     for (const t of list.result.tools) expect(t.inputSchema.type).toBe("object");
   });
 
@@ -161,6 +161,18 @@ describe("the tools", () => {
       expect(t).toContain("Three timeouts at 10:02.");
       expect(st.result.structuredContent.saved_in).toBe(`.leanfare/plans/${id}`);
       expect(readFileSync(join(dir, ".leanfare", "plans", id, "part-1.md"), "utf8")).toContain("Three timeouts at 10:02.");
+      // Once it used the answer, the app grades it: the grade goes with the model and the kind, never the words.
+      expect(t).toContain("grade it with grade (good, partly or wrong, with the plan's id and the part)");
+      const g = await rpc("tools/call", { name: "grade", arguments: { id, part: 1, verdict: "partly" } });
+      expect(g.result.isError).toBeUndefined();
+      expect(g.result.content[0].text).toMatch(/^Graded partly\. .+ for reading: 1 partly of its last 1 \(it moves down below half good, from 3 grades on\)\.$/);
+      expect(g.result.structuredContent).toMatchObject({ kind: "read", n: 1, partly: 1, down: false });
+      const mine = await rpc("tools/call", { name: "grade", arguments: { id, part: 2, verdict: "good" } });
+      expect(mine.result.isError).toBe(true);
+      expect(mine.result.content[0].text).toContain("Part 2 has no answer to grade (it is yours).");
+      const none = await rpc("tools/call", { name: "grade", arguments: { verdict: "good" } });
+      expect(none.result.isError).toBe(true);
+      expect(none.result.content[0].text).toContain("grade needs the plan's id and the part's number");
       // No yes: the paid part waits, and the tool says to ask the user.
       onRequest = (msg) => write({ jsonrpc: "2.0", id: msg.id, result: { action: "decline" } });
       const again = await rpc("tools/call", { name: "plan", arguments: { task: "The nightly job fails again: find out why", folder: dir } });
@@ -246,8 +258,11 @@ describe("the tools", () => {
       writeFileSync(join(folder, "logs", "app.log"), "10:00 start\n10:01 error: disk full\n");
       const r = await rpc("tools/call", modern({ name: "delegate", arguments: { task: "List the errors.", files: ["logs/app.log"], folder, kind: "read", effort: "low", check: "never" } }));
       expect(r.result.isError).toBeUndefined();
-      const [answer, receipt] = r.result.content[0].text.split("\n\n");
+      const [answer, receipt, gradeIt] = r.result.content[0].text.split("\n\n");
       expect(answer).toBe("Hello from deepseek-v4-flash.");
+      expect(gradeIt).toBe("(Once you have used it: grade, with model deepseek/deepseek-v4-flash and kind read.)");
+      const g = await rpc("tools/call", { name: "grade", arguments: { model: "deepseek/deepseek-v4-flash", kind: "read", verdict: "good" } });
+      expect(g.result.content[0].text).toBe("Graded good. DeepSeek V4 Flash for reading: 1 good of its last 1 (it moves down below half good, from 3 grades on).");
       expect(receipt).toMatch(/^\(Leanfare delegate: DeepSeek V4 Flash, \$[\d.e-]+\. About 9 tokens of files stayed out of your context; this answer is about 8\. It took about (a second|\d+ s)\.\)$/);
       expect(r.result.structuredContent).toMatchObject({ answer: "Hello from deepseek-v4-flash.", model: "deepseek/deepseek-v4-flash", task: "longer_query", effort: "low", check: null, first: null, tokens: { files: 9, answer: 8 }, cut: false });
       expect(ledger().map((l) => l.source)).toEqual(["delegate"]);
@@ -285,6 +300,6 @@ describe("the end of the input", () => {
     expect((await run('{"jsonrpc":"2.0","id":1,"method":"ping"}')).map((m) => m.id)).toEqual([1]);
     const two = await run('{"jsonrpc":"2.0","id":1,"method":"ping"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}');
     expect(two.map((m) => m.id)).toEqual([1, 2]);
-    expect(two[1].result.tools).toHaveLength(11);
+    expect(two[1].result.tools).toHaveLength(12);
   }, 20000);
 });

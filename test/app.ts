@@ -9,6 +9,7 @@ import { resetSettingsCache, saveSettings, type Settings } from "../src/settings
 import { resetBudget } from "../src/budget";
 import { forgetHistoryCache, setPaused, stopRunning } from "../src/engine";
 import { forgetSpeeds } from "../src/speed";
+import { forgetGrades } from "../src/grades";
 import { stopTrial } from "../src/trial";
 import { setNow } from "../src/util";
 import { KEYS, type startFake } from "./fake";
@@ -36,7 +37,8 @@ export async function reset(patch: Partial<Settings> = {}) {
   setPaused(false);
   setNow("2026-10-21T12:00:00Z");
   await stopTrial();
-  db.exec("DELETE FROM ledger; DELETE FROM messages; DELETE FROM chats; DELETE FROM settings; DELETE FROM files; DELETE FROM delegations; DELETE FROM trials;");
+  db.exec("DELETE FROM ledger; DELETE FROM messages; DELETE FROM chats; DELETE FROM settings; DELETE FROM files; DELETE FROM delegations; DELETE FROM trials; DELETE FROM grades;");
+  forgetGrades();
   resetSettingsCache();
   resetBudget();
   forgetHistoryCache();

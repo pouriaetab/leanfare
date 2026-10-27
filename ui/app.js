@@ -531,11 +531,21 @@
       run?.running ? runButton("Stop", async () => { clearTimeout(planTimer); S.planRun = await api("/api/plan/stop", { body: { id: P.id } }); redrawPlanResult(); toast("Stopped.", "done"); if (S.planRun.running) pollPlan(); }, "btn small") : null,
       h("button", { class: "btn small", type: "button", text: "Copy for Claude Code", onclick: () => copyText(forClaudeCode(P)) }),
       h("button", { class: "btn small", type: "button", text: "Copy the table", onclick: () => copyText(P.table) }));
+    // Your grade of a part's answer (grades.ts): it goes with the model that answered and the part's kind.
+    const GRADED = ["read", "write", "reason", "search"];
+    const gradeRow = (r) => (!r.answer || !r.modelId || !GRADED.includes(P.parts.find((p) => p.n === r.n)?.kind) ? null : h("div", { class: "row grade-row" },
+      h("span", { class: "fine grow", text: !r.verdict ? "How good was it?" : `${r.gradedBy === "you" ? "You" : P.manager === "you" ? "Your app" : P.manager} graded it ${r.verdict}.` }),
+      ...["good", "partly", "wrong"].map((v) => h("button", { class: "btn small" + (r.verdict === v ? " primary" : ""), type: "button", "aria-pressed": String(r.verdict === v), text: v[0].toUpperCase() + v.slice(1),
+        onclick: async () => {
+          try { const g = await api("/api/grades", { body: { id: P.id, part: r.n, verdict: v, source: "you" } }); r.verdict = v; r.gradedBy = "you"; S.grades = undefined; redrawPlanResult(); toast(g.text, "done"); }
+          catch (e) { failed(e); }
+        } }))));
     const answers = run ? run.parts.filter((r) => r.answer || r.error).map((r) => h("details", { class: "plan-answer", open: r.n === run.parts.filter((x) => x.answer).at(-1)?.n },
       h("summary", { text: `Part ${r.n} · ${r.title} · ${STATUS[r.status]}${r.model ? ` · ${r.model}` : ""}${r.cost !== null && r.cost !== undefined ? ` · ${money(r.cost)}` : ""}${r.seconds ? ` · ${secsShort(r.seconds)}` : ""}` }),
       r.answer ? (() => { const md = h("div", { class: "md" }); md.innerHTML = markdown(r.answer); return md; })() : null,
       r.error ? h("p", { class: "pl-note", text: r.error }) : null,
-      r.receipt ? h("p", { class: "fine", text: r.receipt }) : null)) : [];
+      r.receipt ? h("p", { class: "fine", text: r.receipt }) : null,
+      gradeRow(r))) : [];
     return h("div", { class: "card plan-result", id: "planResult" }, h("h3", {}, "The plan", h("span", { class: "grow" }), h("small", { text: P.task.length > 80 ? P.task.slice(0, 80) + "…" : P.task })),
       table, sum, localNote, laterNote, lim, buttons, how, ...answers);
   }
@@ -2242,6 +2252,24 @@
       runButton("Look again", () => loadCodex(true), "btn small quiet"));
   }
 
+  // ---- How the models did for you (Settings) ---------------------------------------------------------
+  const GRADE_KIND = { read: "reading", write: "drafting", reason: "working things out", search: "searching" };
+  async function loadGrades() { try { S.grades = (await api("/api/grades")).standings; } catch { S.grades = []; } renderSettings(); }
+  function gradesSettingEl() {
+    if (S.grades === undefined) { S.grades = null; loadGrades(); }
+    const list = S.grades ?? [];
+    return h("div", { class: "setting", id: "gradesCard" }, h("h3", { text: "How the models did for you" }),
+      h("p", { text: "When the app you work in uses an answer one of Leanfare's models gave for a part, it grades it: good, partly or wrong (you can too, in the Plan tab). Leanfare keeps only the grade, never the words. A model graded below good too often for a kind (at least 3 of its last 20 grades, under half good) is moved down: Auto, plans and the delegate skip it for that kind while another model can take it." }),
+      !list.length ? h("p", { class: "note", text: S.grades === null ? "Reading the grades…" : "No grades yet." })
+        : h("div", { class: "lmodels" }, ...list.map((g) => h("div", { class: "lrow" + (g.down ? " down" : "") },
+          h("span", { class: "nm", title: g.model, text: `${g.label} · ${GRADE_KIND[g.kind] ?? g.kind}` }),
+          h("span", { class: "facts" }, h("span", { text: `${g.good} good, ${g.partly} partly, ${g.wrong} wrong` }), g.down ? h("span", { class: "chip bad", text: "moved down" }) : null),
+          g.down ? runButton("Give it another chance", async () => {
+            const r = await api("/api/grades/reset", { body: { model: g.model, kind: g.kind } });
+            S.grades = r.standings; renderSettings(); toast(`${g.label} is picked again for ${GRADE_KIND[g.kind] ?? g.kind}.`, "done");
+          }, "btn small") : h("span", {})))));
+  }
+
   function speedSettingEl(s) {
     const sel = h("select", { "aria-label": "Speed", onchange: (e) => patchSettings({ speed: speedValue(e.target.value) }, `Speed: ${e.target.selectedOptions[0].textContent.toLowerCase()}.`) },
       ...speedOptions(s.speed ?? "cheapest", 1));
@@ -2362,7 +2390,7 @@
         h("div", { class: "seg", role: "group", "aria-label": "Thinking effort" }, ...[["auto", "Model's default"], ["low", "Low"], ["medium", "Medium"], ["high", "High"]].map(([k, label]) =>
           h("button", { type: "button", "aria-pressed": String((s.effort ?? "auto") === k), text: label, onclick: () => patchSettings({ effort: k }, k === "auto" ? "Thinking models think as they do by default." : `Thinking effort: ${label.toLowerCase()}.`) }))),
         h("p", { text: "For models that think before they answer, at the levels each one takes. Thinking is billed as output, so a higher effort costs more and takes longer; the estimate learns from your answers at each level." })),
-      planCapSettingEl(s), codexSettingEl(s),
+      planCapSettingEl(s), codexSettingEl(s), gradesSettingEl(),
       h("div", { class: "setting" }, h("h3", { text: "Your usual model" }), usualSel,
         h("p", { text: "The model you would use without Leanfare. Savings are measured against it." })),
       h("div", { class: "setting" }, h("h3", { text: "Monthly budget" }),
