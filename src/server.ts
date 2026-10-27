@@ -451,6 +451,13 @@ async function api(req: Request, url: URL): Promise<Response> {
         await keySaved(f.provider, req.signal, check.models);
         results.push({ ref, ok: true, message: `${f.label}: ${check.message}` });
       } else if (f.registry) {
+        const already = extra.customFor(f.registry.id, f.registry.api);
+        if (already) { // added before: the key goes to it, not to a second provider
+          await saveKey(already.id, key);
+          await keySaved(already.id, req.signal);
+          results.push({ ref, ok: true, message: `${f.label}: key saved.` });
+          continue;
+        }
         const added = await extra.addCustomProvider({ name: f.registry.name, base: f.registry.api, key, registry: f.registry.id });
         if (!added.ok) { results.push({ ref, ok: false, message: `${f.label}: ${redact(added.message, [key])}` }); continue; }
         await saveKey(added.id, key);
@@ -502,10 +509,10 @@ async function api(req: Request, url: URL): Promise<Response> {
     }
     if (m === "DELETE") {
       const old = getKey(def.id);
-      if (old && keyWhere(def.id) !== "environment") removedKeys.set(def.id, { key: old, until: Date.now() + 30_000 });
-      const env = await removeKey(def.id);
+      if (old && keyWhere(def.id) !== "environment" && keyWhere(def.id) !== "shell") removedKeys.set(def.id, { key: old, until: Date.now() + 30_000 });
+      const still = await removeKey(def.id);
       if (def.id === "openrouter") connect.forgetCredit();
-      return json({ ok: true, env, state: state() });
+      return json({ ok: true, env: still?.env ?? null, from: still?.from ?? null, state: state() });
     }
   }
   const provMatch = /^\/api\/providers\/([a-z0-9-]+)$/.exec(p);
@@ -716,7 +723,8 @@ export async function handle(req: Request, server: { timeout(r: Request, s: numb
     if (!ownOrigin) return fail(403, "Only Leanfare's own page can use this.");
     if (url.pathname !== "/api/control/stop" && req.headers.get("x-leanfare") !== "1") return fail(403, "Missing the x-leanfare header.");
     if (url.pathname !== "/api/unlock" && !url.pathname.startsWith("/api/control/") && !pageAllowed(req, controlToken)) return json({ error: "Leanfare is locked. Paste its access key to open it.", locked: true }, 401);
-    if (url.pathname === "/api/chat" || url.pathname === "/api/delegate" || url.pathname === "/api/keys" || url.pathname === "/api/refresh" || url.pathname === "/api/import") server?.timeout(req, 0);
+    // Requests that can wait a long time on providers or other programs: no idle cut-off.
+    if (["/api/chat", "/api/delegate", "/api/keys", "/api/refresh", "/api/import", "/api/keys/import", "/api/keys/recognize", "/api/keys/found", "/api/providers/custom", "/api/providers/registry", "/api/apps", "/api/trial/stop"].includes(url.pathname)) server?.timeout(req, 0);
     try { return await api(req, url); }
     catch (e: any) { return fail(e instanceof UserError ? e.status : 500, e instanceof UserError ? e.message : `Leanfare hit an unexpected problem: ${String(e?.message ?? e)}`); }
   }

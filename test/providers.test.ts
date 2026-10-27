@@ -70,9 +70,14 @@ describe("a pasted key finds its provider", () => {
     expect(recognize(SHAPED.mistral).providers).toEqual(["mistral"]);
     expect(recognize("something-else-entirely-1234").providers).toEqual([]);
   });
-  test("a Claude subscription login and an admin key are refused, with why", () => {
-    expect(recognize("sk-ant-oat01-" + "z".repeat(80)).refuse).toContain("subscription login");
+  test("a Claude login, its refresh token, a claude.ai session and an admin key are refused, and never tested anywhere", () => {
+    for (const k of ["sk-ant-oat01-", "sk-ant-ort01-", "sk-ant-sid01-", "sk-ant-anything-"]) {
+      const r = recognize(k + "z".repeat(80));
+      expect(r.refuse).toContain("Claude login or session token");
+      expect(r.providers).toEqual([]);
+    }
     expect(recognize("sk-ant-admin01-" + "z".repeat(80)).refuse).toContain("admin key");
+    expect(recognize(SHAPED.anthropic)).toEqual({ providers: ["anthropic"], refuse: null });
   });
   test("Add key tests it with its provider and saves it there", async () => {
     const r = (await ui(url, "/api/keys/recognize", { key: SHAPED.perplexity })).json;
@@ -95,7 +100,7 @@ describe("a pasted key finds its provider", () => {
   });
   test("an unknown key opens Add a provider; a refused one says why; junk is not a key", async () => {
     expect((await ui(url, "/api/keys/recognize", { key: "zzzz-unknown-key-1234567" })).json).toMatchObject({ ok: false, unknown: true });
-    expect((await ui(url, "/api/keys/recognize", { key: "sk-ant-oat01-" + "z".repeat(80) })).json.message).toContain("subscription login");
+    expect((await ui(url, "/api/keys/recognize", { key: "sk-ant-oat01-" + "z".repeat(80) })).json.message).toContain("Claude login or session token");
     expect((await ui(url, "/api/keys/recognize", { key: "two words" })).status).toBe(400);
   });
 });
@@ -163,6 +168,11 @@ describe("providers you add", () => {
     expect((await bad({ name: "", base: "https://x.example/v1" })).json.error).toBe("Give the provider a name.");
     expect((await bad({ name: "X", base: "ftp://x" })).json.error).toContain("must start with https://");
     expect((await bad({ name: "X", base: "http://example.com/v1" })).json.error).toContain("Use https://"); // a key would travel in the clear
+    for (const sly of ["http://localhost.evil.example/v1", "http://10.evil.example/v1", "http://127.0.0.1.nip.io/v1", "http://192.168.1.5.evil.example/v1"]) expect((await bad({ name: "X", base: sly })).json.error).toContain("Use https://");
+    expect((await bad({ name: "X", base: "http://127.0.0.1@evil.example/v1" })).json.error).toContain("Leave any name or password out");
+    expect((await bad({ name: "X", base: "https://x.example/v1?key=1" })).json.error).toContain("nothing after a ? or #");
+    for (const home of ["localhost", "127.0.0.1", "[::1]", "10.0.0.7", "192.168.1.5", "172.20.0.2", "box.local"]) expect(extra.onThisNetwork(new URL(`http://${home}:8000/v1`).hostname)).toBe(true);
+    for (const away of ["172.32.0.1", "11.0.0.1", "example.com", "localhost.evil.example"]) expect(extra.onThisNetwork(away)).toBe(false);
     expect((await bad({ name: "OpenAI", base: "https://x.example/v1" })).json.error).toContain("is built in");
     const none = (await ui(url, "/api/providers/custom", { name: "Nobody", base: "http://127.0.0.1:9/v1" })).json;
     expect(none.ok).toBe(false);
@@ -176,6 +186,26 @@ describe("providers you add", () => {
     };
     const r = (await ui(url, "/api/providers/registry")).json;
     expect(r.choices).toEqual([{ id: "nvidia", name: "Nvidia", api: "https://integrate.api.nvidia.com/v1", env: ["NVIDIA_API_KEY"], doc: "https://docs.nvidia.com", models: 2 }]);
+  });
+});
+
+describe("which models.dev provider a variable's key goes to", () => {
+  const r: any = { at: new Date().toISOString(), providers: {
+    nvidia: { name: "Nvidia", env: ["NVIDIA_API_KEY"], api: "https://integrate.api.nvidia.com/v1", doc: null, models: {} },
+    "github-copilot": { name: "GitHub Copilot", env: ["GITHUB_TOKEN"], api: "https://api.githubcopilot.com", doc: null, models: {} },
+    "zhipuai-coding-plan": { name: "Zhipu AI Coding Plan", env: ["ZHIPU_API_KEY"], api: "https://open.bigmodel.cn/api/coding/paas/v4", doc: null, models: {} },
+    "opencode-go": { name: "OpenCode Go", env: ["OPENCODE_API_KEY"], api: "https://opencode.ai/zen/go/v1", doc: null, models: {} },
+    moonshotai: { name: "Moonshot AI", env: ["MOONSHOT_API_KEY"], api: "https://api.moonshot.ai/v1", doc: null, models: {} },
+    "moonshotai-cn": { name: "Moonshot AI (China)", env: ["MOONSHOT_API_KEY"], api: "https://api.moonshot.cn/v1", doc: null, models: {} },
+    digitalocean: { name: "DigitalOcean", env: ["DIGITALOCEAN_ACCESS_TOKEN"], api: "https://inference.do-ai.run/v1", doc: null, models: {} },
+  } };
+  test("only *_API_KEY names, never a plan endpoint or a general token, and no guess when several share it", () => {
+    expect(extra.registryForEnv(r, "NVIDIA_API_KEY")).toEqual({ id: "nvidia", name: "Nvidia", api: "https://integrate.api.nvidia.com/v1" });
+    expect(extra.registryForEnv(r, "GITHUB_TOKEN")).toBeNull();
+    expect(extra.registryForEnv(r, "DIGITALOCEAN_ACCESS_TOKEN")).toBeNull();
+    expect(extra.registryForEnv(r, "ZHIPU_API_KEY")).toBeNull();
+    expect(extra.registryForEnv(r, "OPENCODE_API_KEY")).toBeNull();
+    expect(extra.registryForEnv(r, "MOONSHOT_API_KEY")).toBeNull();
   });
 });
 
@@ -245,9 +275,13 @@ describe("Find my keys", () => {
     expect(getKey("groq")).toBe(SHAPED.groq);
     expect(imp.state.providers.find((p: any) => p.id === "custom-nvidia")).toMatchObject({ custom: true, ready: true });
     expect(getModel("custom-nvidia/nv-model")).toMatchObject({ input: 0.5, output: 1 });
-    // Found again: now the same as what Leanfare has.
+    // Found again: now the same as what Leanfare has, the added provider too; using it again adds no second one.
     const again = (await ui(url, "/api/keys/found")).json.keys as any[];
     expect(again.find((k) => k.label === "OpenAI").status).toBe("same");
+    expect(again.find((k) => k.label === "Nvidia").status).toBe("same");
+    const twice = (await ui(url, "/api/keys/import", { refs: [again.find((k) => k.label === "Nvidia").ref] })).json;
+    expect(twice.results[0]).toMatchObject({ ok: true, message: "Nvidia: key saved." });
+    expect(twice.state.settings.custom.map((c: any) => c.id)).toEqual(["custom-nvidia"]);
     tiny.stop();
   });
   test("the .env and aider readers", () => {
@@ -262,8 +296,12 @@ describe("your login shell's keys (for the Mac app)", () => {
   afterAll(() => { process.env.LEANFARE_SHELL_ENV = "off"; process.env.SHELL = "/bin/sh"; forgetShellEnv(); rmSync(dir, { recursive: true, force: true }); });
 
   test("only what is between the markers counts: banners and noise are dropped", () => {
-    expect(parseEnv("Welcome!\nMARKA=1\0B=two words\0C=x=y\0MARK more noise", "MARK")).toEqual({ A: "1", B: "two words", C: "x=y" });
+    expect(parseEnv("Welcome!\nMARKA_KEY=1\0B_API_KEY=two words\0C_KEY=x=y\0MARK more noise", "MARK")).toEqual({ A_KEY: "1", B_API_KEY: "two words", C_KEY: "x=y" });
     expect(parseEnv("no markers here", "MARK")).toEqual({});
+  });
+  test("only key variables (and PATH) are kept; an env without -0 is read line by line", () => {
+    expect(parseEnv("MARKHOME=/home/me\0SECRET_TOKEN=t\0GROQ_API_KEY=g\0PATH=/bin\0MARK", "MARK")).toEqual({ GROQ_API_KEY: "g", PATH: "/bin" });
+    expect(parseEnv("MARKGROQ_API_KEY=g\nNOTES=line one\nline two\nOPENAI_API_KEY=o\nMARK", "MARK")).toEqual({ GROQ_API_KEY: "g", OPENAI_API_KEY: "o" });
   });
   test("a key exported by the shell is picked up and marked as from your shell", async () => {
     process.env.LEANFARE_SHELL_ENV = "on";
@@ -273,6 +311,36 @@ describe("your login shell's keys (for the Mac app)", () => {
     await loadKeys();
     expect(getKey("groq")).toBe(SHAPED.groq);
     expect(keyWhere("groq")).toBe("shell");
+  });
+  test("a key from your shell's settings is not removed by Remove: the screen says where it comes from", async () => {
+    process.env.LEANFARE_SHELL_ENV = "on";
+    process.env.SHELL = fakeShell(`export GROQ_API_KEY="${SHAPED.groq}"; /bin/sh -c "$2"`);
+    forgetShellEnv();
+    await loadKeys();
+    expect(keyWhere("groq")).toBe("shell");
+    const r = (await ui(url, "/api/keys/groq", undefined, "DELETE")).json;
+    expect(r).toMatchObject({ ok: true, env: "GROQ_API_KEY", from: "shell" });
+    process.env.LEANFARE_SHELL_ENV = "off";
+    forgetShellEnv();
+    await loadKeys({ shell: false });
+  });
+  test("a key saved or removed while the shell is slow to answer stays saved or removed", async () => {
+    const { saveKey, removeKey } = await import("../src/keys");
+    process.env.LEANFARE_SHELL_ENV = "on";
+    process.env.SHELL = fakeShell(`sleep 1; /bin/sh -c "$2"`);
+    forgetShellEnv();
+    await saveKey("cerebras", SHAPED.cerebras);
+    const loading = loadKeys();
+    await Bun.sleep(200);
+    await saveKey("fireworks", SHAPED.fireworks);
+    await removeKey("cerebras");
+    await loading;
+    expect(getKey("fireworks")).toBe(SHAPED.fireworks);
+    expect(getKey("cerebras")).toBeNull();
+    process.env.LEANFARE_SHELL_ENV = "off";
+    forgetShellEnv();
+    await removeKey("fireworks");
+    await loadKeys({ shell: false });
   });
   test("a shell that hangs gives nothing after the time limit, and never blocks", async () => {
     process.env.LEANFARE_SHELL_ENV = "on";
