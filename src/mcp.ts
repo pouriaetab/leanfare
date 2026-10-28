@@ -143,7 +143,7 @@ const TOOLS = [
   {
     name: "spend",
     title: "What was spent",
-    description: "What the user spent on AI through Leanfare today and this month, the budget left, what Auto saved against their usual model, the top models, and the work Leanfare did for apps this month (plan and delegate): the share kept out of their plans, its cost and the grades.",
+    description: "What the user spent on AI through Leanfare today and this month, the budget left, what Auto saved against their usual model, the top models, the work Leanfare did for apps this month (plan and delegate): the share kept out of their plans, its cost and the grades; and each platform Leanfare may send work to, with what is left before its nearest limit (the 5 hours before the week).",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { title: "What was spent", readOnlyHint: true, openWorldHint: false },
   },
@@ -502,16 +502,19 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
   if (name === "spend") {
     const { j: s } = await call("/api/summary", {}, signal);
     const { j: v } = await call("/api/savings", {}, signal);
+    const { j: pv } = await call("/api/platforms", {}, signal);
     const lines = [
       `Today: ${usd(s.today)}. This month: ${usd(s.month)} over ${s.answers} answers.`,
       s.budget ? `Budget: ${usd(s.budget.amount)} a month, ${usd(s.budget.left)} left (${Math.floor(s.budget.pct ?? 0)}% used).` : "No monthly budget is set.",
       v.saved?.amount ? `Auto saved ${usd(v.saved.amount)} against the usual model this month${v.more?.ratio ? `: ${v.more.ratio.toFixed(1)} times as many answers for the money` : ""}.` : "Auto has not saved anything against the usual model yet this month.",
       v.byModel?.length ? `By model: ${v.byModel.slice(0, 5).map((r: any) => `${r.label} ${usd(r.cost)} (${r.answers})`).join(", ")}.` : "",
       workLines(v.work),
+      pv.lines?.length ? `Where Leanfare may send work, and what is left before each one's nearest limit:\n${pv.lines.map((l: string) => `- ${l}`).join("\n")}` : "",
       s.paused ? "Leanfare is paused: new requests wait." : "",
     ].filter(Boolean);
     const w = v.work;
     return text(lines.join("\n"), { today_usd: s.today, month_usd: s.month, answers: s.answers, budget: s.budget, saved_usd: v.saved?.amount ?? 0, top: s.top,
+      platforms: (pv.rows ?? []).map((r: any) => ({ id: r.id, label: r.label, on: r.on, ready: r.ready, windows: r.windows, limit: r.limit })),
       work: w ? { tasks: w.tasks, kept_share: w.keptPct, tokens_kept_out: w.kept, tokens_came_back: w.back, cost_usd: w.cost, grades: w.grades, checks: { passed: w.checks.passed, failed: w.checks.failed } } : null });
   }
   if (name === "models") {
