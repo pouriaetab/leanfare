@@ -979,7 +979,7 @@ describe("The plan meter", () => {
   }, 20000);
 });
 
-describe("Delegated tasks", () => {
+describe("What Leanfare did for your apps (Savings)", () => {
   const bad = (doc: any) => /\bnull\b|\bundefined\b|NaN|\[object Object\]/.test(doc.body.textContent);
   async function waitFor(ok: () => boolean, ms = 8000) { for (let i = 0; i < ms / 50 && !ok(); i++) await Bun.sleep(50); }
   const goSavings = async (doc: any) => {
@@ -989,26 +989,53 @@ describe("Delegated tasks", () => {
   const LOG = { name: "app.log", text: "10:00 start\n10:01 error: disk full\n" };
   beforeEach(async () => { await reset({ ticked: ALL_TICKED }); });
 
-  test("no card until something is handed over; then what it cost, what stayed out of context, and how the checks went", async () => {
+  test("no card until something is handed over; then what stayed out, the cost, the grades and the checks, and the last few", async () => {
     await keys("openai", "anthropic", "google", "deepseek", "xai", "mistral");
     let doc = await openApp();
     await goSavings(doc);
-    expect(doc.querySelector("#delegateCard")).toBeNull();
+    expect(doc.querySelector("#workCard")).toBeNull();
     closeApp();
-    await ui(url, "/api/delegate", { task: "Summarize. [reply@google PASS]", files: [LOG], kind: "read", effort: "low", check: "always" });
+    const one = await ui(url, "/api/delegate", { task: "Summarize. [reply@google PASS]", files: [LOG], kind: "read", effort: "low", check: "always" });
     await ui(url, "/api/delegate", { task: "Find the errors. [reply@google FAIL: misses one]", files: [LOG], kind: "read", effort: "low", check: "always" });
     doc = await openApp();
     await goSavings(doc);
-    const t = doc.querySelector("#delegateCard").textContent;
-    expect(t).toContain("Delegated tasks");
-    expect(t).toContain("2 tasks handed over this month, $");
-    expect(t).toContain("(checks $");
-    expect(t).toContain("Leanfare read about 18 tokens of files so the app that asked did not have to");
+    const card = doc.querySelector("#workCard");
+    // At the top of Savings, before the subscriptions.
+    expect(card.previousElementSibling.className).toBe("sv-head");
+    const t = card.textContent;
+    expect(t).toContain("What Leanfare did for your apps");
+    expect(t).toContain("2 tasks this month, through plan and delegate");
+    expect(t).toMatch(/Kept out of your plans\S*\d+%18 tokens stayed out · \d+ came back/);
+    expect(t).toContain("Cost of that work");
+    expect(t).toContain("2 paid");
+    expect(t).toContain("QualityiNot graded yet");
+    expect(t).toContain("1 of 2 passed1 was asked again one tier up");
     expect(t).toMatch(/Checks: 2 run, 1 passed \(50%, 90% range 12% to 88%\), 1 failed and was asked again one tier up\./);
     expect(t).not.toContain("Weighted"); // shown from five checks on
+    const rows = [...card.querySelectorAll(".work-table tbody tr")].map((r: any) => [...r.querySelectorAll("td")].map((c: any) => c.textContent));
+    expect(rows).toHaveLength(2);
+    expect(rows[0][0]).toMatch(/^(Today \d|Yesterday \d|[A-Z][a-z]{2} \d{1,2}$|\d{1,2} [A-Z][a-z]{2}$)/); // the tests' clock is not the page's
+    expect(rows[0][1]).toBe("Hand off: reading · 1 file");
+    expect(rows[0][2]).toMatch(/^paid: /);
+    expect(rows[0][5]).toBe("check failed");
+    expect(rows[1][5]).toBe("check passed");
     const by = doc.querySelector("#tab-savings .sv-grid h3 small").textContent;
     expect(by).toContain("Delegated: 3");
     expect(by).toContain("Checks: 2");
+    expect(bad(doc)).toBe(false);
+    // The first one graded good by the app that asked, with its handoff: the quality and its chip.
+    closeApp();
+    const g = await ui(url, "/api/grades", { model: one.json.model.id, kind: "read", verdict: "good", handoff: one.json.row });
+    expect(g.status).toBe(200);
+    doc = await openApp();
+    await goSavings(doc);
+    const after = doc.querySelector("#workCard");
+    expect(after.textContent).toContain("1 of 1 good0 partly · 0 wrong · graded by your apps");
+    expect(after.querySelector(".work-table tbody tr:last-child td:last-child").textContent).toBe("good");
+    // What a number means, a press away.
+    const info = [...after.querySelectorAll(".stat .lbl button")].find((b: any) => b.getAttribute("aria-label") === 'What "Kept out of your plans" means') as any;
+    info.click();
+    expect(doc.querySelector("#workCard .def").textContent).toContain("the least it kept out");
     expect(bad(doc)).toBe(false);
   }, 20000);
 });

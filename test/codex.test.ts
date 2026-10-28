@@ -184,6 +184,12 @@ describe("running a part on Codex", () => {
       expect(prompts()).toContain("app.log");
       expect(prompts()).toContain("Do not change any file");
       expect(fake.seen.some((s) => s.path.endsWith("/chat/completions") && JSON.stringify(s.body).includes("disk full"))).toBe(false); // no model got the files
+      // In Savings: the part on your ChatGPT plan, its files counted as kept out of the app that asked.
+      const w = (await ui(url, "/api/savings")).json.work;
+      expect(w.where.plan).toBe(v.parts.filter((x: any) => x.status === "done" && x.model === "Codex (your ChatGPT plan)").length);
+      expect(w.recent[0].models).toContainEqual({ label: "Codex", where: "plan" });
+      expect(w.recent[0].files).toBeGreaterThan(0);
+      expect(w.kept).toBeGreaterThan(0);
     } finally { rmSync(p, { recursive: true, force: true }); }
   });
   test("Codex at its limit: the part fails with what Codex said, and nothing else is run in its place", async () => {

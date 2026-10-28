@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ALL_TICKED, boot, fake, keys, ledger, reset } from "./app";
+import { ALL_TICKED, boot, fake, keys, ledger, reset, ui } from "./app";
 import { db } from "../src/db";
 import { forgetSpeeds } from "../src/speed";
 
@@ -204,6 +204,8 @@ describe("the tools", () => {
     await rpc("tools/call", { name: "ask", arguments: { prompt: "Hi [usage 2000 500]", model: "openai/gpt-5-mini" } });
     const s = await rpc("tools/call", { name: "spend", arguments: {} });
     expect(s.result.content[0].text).toContain("This month: $0.0015 over 1 answers.");
+    expect(s.result.content[0].text).toContain("No work was handed to Leanfare by your apps this month (plan and delegate).");
+    expect(s.result.structuredContent.work).toMatchObject({ tasks: 0 });
     expect(s.result.structuredContent.month_usd).toBeCloseTo(0.0015, 8);
     const m = await rpc("tools/call", { name: "models", arguments: { provider: "openai" } });
     expect(m.result.content[0].text).toContain("openai/gpt-5-mini: GPT-5 mini, $0.25 in / $2 out per 1M tokens");
@@ -260,9 +262,21 @@ describe("the tools", () => {
       expect(r.result.isError).toBeUndefined();
       const [answer, receipt, gradeIt] = r.result.content[0].text.split("\n\n");
       expect(answer).toBe("Hello from deepseek-v4-flash.");
-      expect(gradeIt).toBe("(Once you have used it: grade, with model deepseek/deepseek-v4-flash and kind read.)");
+      const row = r.result.structuredContent.handoff;
+      expect(row).toBeGreaterThan(0);
+      expect(gradeIt).toBe(`(Once you have used it: grade, with model deepseek/deepseek-v4-flash, kind read and handoff ${row}.)`);
+      // Graded without its handoff (an older app): the grade still finds its hand off, the last one of that model and kind.
       const g = await rpc("tools/call", { name: "grade", arguments: { model: "deepseek/deepseek-v4-flash", kind: "read", verdict: "good" } });
       expect(g.result.content[0].text).toBe("Graded good. DeepSeek V4 Flash for reading: 1 good of its last 1 (it moves down below half good, from 3 grades on).");
+      const work = (await ui(url, "/api/savings")).json.work;
+      expect(work).toMatchObject({ tasks: 1, kept: 9, back: 8, grades: { good: 1, partly: 0, wrong: 0 } });
+      expect(work.recent[0]).toMatchObject({ plan: false, kinds: ["reading"], files: 1, models: [{ label: "DeepSeek V4 Flash", where: "paid" }], grades: ["good"] });
+      // Graded again with its handoff: that grade replaces the first.
+      await rpc("tools/call", { name: "grade", arguments: { model: "deepseek/deepseek-v4-flash", kind: "read", verdict: "partly", handoff: row } });
+      expect((await ui(url, "/api/savings")).json.work.grades).toEqual({ good: 0, partly: 1, wrong: 0 });
+      const spent = (await rpc("tools/call", { name: "spend", arguments: {} })).result;
+      expect(spent.content[0].text).toMatch(/Work for your apps this month \(plan and delegate\): 1 task, 53% kept out of your plans \(9 tokens stayed out, 8 came back\), \$[\d.e-]+\.\nQuality: 0 of 1 graded good, 1 partly, 0 wrong; checks: none yet\./);
+      expect(spent.structuredContent.work).toMatchObject({ tasks: 1, tokens_kept_out: 9, tokens_came_back: 8, grades: { partly: 1 }, checks: { passed: 0, failed: 0 } });
       expect(receipt).toMatch(/^\(Leanfare delegate: DeepSeek V4 Flash, \$[\d.e-]+\. About 9 tokens of files stayed out of your context; this answer is about 8\. It took about (a second|\d+ s)\.\)$/);
       expect(r.result.structuredContent).toMatchObject({ answer: "Hello from deepseek-v4-flash.", model: "deepseek/deepseek-v4-flash", task: "longer_query", effort: "low", check: null, first: null, tokens: { files: 9, answer: 8 }, cut: false });
       expect(ledger().map((l) => l.source)).toEqual(["delegate"]);
