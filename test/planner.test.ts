@@ -220,6 +220,34 @@ describe("running a plan here (the Plan tab)", () => {
     expect(runView(plan.id)!.cost).not.toBeNull();
   });
 
+  test("each part runs on the model its table names; when that one cannot answer, another does, and the receipt says which", async () => {
+    await keys("openai", "google", "deepseek");
+    fake.hooks.answer = (prompt) => (prompt.includes("The person works in") ? SPLIT : null);
+    try {
+      const plan = await makePlan({ task: "Reverse engineer LiteLLM", files: [], manager: "Claude Code", signal: signal() });
+      const named = plan.parts[0].model!;
+      startRun(plan.id, { paid: true });
+      await until(() => !runView(plan.id)!.running);
+      const one = runView(plan.id)!.parts[0];
+      expect(one.status).toBe("done");
+      expect(one.modelId).toBe(named.id);
+      expect(one.receipt).not.toContain("The plan named");
+      // The named model's company is busy for that part: another model answers, and the receipt says so.
+      const busy = named.id.split("/")[0];
+      fake.hooks.fail = (text, provider) => (provider === busy && text.includes("List the modules") ? 429 : null);
+      const again = await makePlan({ task: "Reverse engineer LiteLLM", files: [], manager: "Claude Code", signal: signal() });
+      const named2 = again.parts[0].model!;
+      expect(named2.id).toBe(named.id);
+      startRun(again.id, { paid: true });
+      await until(() => !runView(again.id)!.running);
+      const p1 = runView(again.id)!.parts[0];
+      expect(p1.status).toBe("done");
+      expect(p1.modelId).not.toBe(named2.id);
+      expect(p1.receipt).toContain(`The plan named ${named2.label}, which could not answer`);
+      expect(p1.receipt).toContain(`so ${p1.model} answered.`);
+    } finally { fake.hooks.fail = null; }
+  });
+
   test("files named by path in the Plan tab are measured, then handed over when their part runs", async () => {
     await keys("openai", "google", "deepseek");
     const dir = mkdtempSync(join(tmpdir(), "plan-tab-"));
