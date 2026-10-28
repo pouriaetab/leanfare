@@ -73,7 +73,7 @@ describe("the door while Leanfare is off", () => {
     for (const [name, args] of [["delegate", { task: "Find the errors.", files: [] }], ["ask", { prompt: "Hello" }], ["plan", { task: "Find out why the job fails" }], ["plan_run", { id: "p-123" }], ["trial", { action: "start" }]] as const) {
       const r = (await call(name, args)).result;
       expect(r.isError).toBeUndefined();
-      expect(r.content[0].text).toBe("Leanfare is switched off, so nothing was handed over. Do this yourself, as usual.");
+      expect(r.content[0].text).toBe("Leanfare is switched off (the switch at the top of the Leanfare app), so nothing was handed over. Do this yourself, as usual.");
       expect(r.structuredContent).toEqual({ off: true });
     }
     expect(fake.seen.length).toBe(before);

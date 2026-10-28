@@ -132,7 +132,7 @@ export function state() {
     usual: usual ? { id: usual.id, label: usual.label } : null,
     readyCount: ready.length,
     usableCount: usableModels().length,
-    switchOn: switchedOn(), // Leanfare in your apps, on or off (switch.ts)
+    switchOn: switchedOn(), // Leanfare in your apps, on or off (switch.ts): the switch at the top of the page
     budget: b,
     month: (() => { const v = savings(); return { spent: v.spent, today: v.today, answers: v.answers }; })(),
     notices,

@@ -15,12 +15,16 @@ export async function closeApp() {
   try { await w?.happyDOM?.abort(); } catch {} // ends the page's timers (window.close() does not)
 }
 
-export async function openApp(url: string) {
+// screen: the screen the page starts on, as if it was the last one used (most tests are about the
+// whole app, so Chat); null starts as a new person does (Set up on the first run, then Chat).
+export async function openApp(url: string, opts: { screen?: string | null; width?: number } = {}) {
   await closeApp();
-  const w: any = new Window({ url: url + "/", width: 1440, height: 800 });
+  const w: any = new Window({ url: url + "/", width: opts.width ?? 1440, height: 800 }); // width 390: a phone
   win = w;
+  const screen = opts.screen === undefined ? "chat" : opts.screen;
+  if (screen) w.localStorage.setItem("leanfare.screen", JSON.stringify(screen));
   const doc = w.document;
-  doc.write(html.replace(/<script[^>]*><\/script>/, ""));
+  doc.write(html.replace(/<script[^>]*><\/script>/g, "")); // the page's scripts run below, theme.js's job included
   // A closed page sends nothing more: its next request never leaves, and nothing waits on it.
   const f = (path: string, opts: any = {}) => (win === w ? fetch(new URL(path, url), opts) : new Promise<Response>(() => {}));
   const run = new Function("window", "document", "localStorage", "fetch", "matchMedia", "requestAnimationFrame", "navigator", "location", "Event", "AbortController", "TextDecoder", "Element", "DocumentFragment", "Node", "setTimeout", "setInterval", "clearTimeout", appJs);
