@@ -232,3 +232,45 @@ describe("the switch at the top", () => {
     expect(notices(doc)).toContain("Leanfare is off in your apps");
   }, 30000);
 });
+
+describe("the header", () => {
+  // Auto is day from 7 AM to 7 PM by this computer's clock.
+  const byClock = () => { const h = new Date().getHours(); return h >= 7 && h < 19 ? "light" : "dark"; };
+  const pressed = (doc: any) => [...doc.querySelectorAll("#themeSwitch button")].filter((b: any) => b.getAttribute("aria-pressed") === "true").map((b: any) => b.dataset.mode);
+  test("Day, Auto and Night: three buttons, the current one marked, kept in this browser; Settings names them the same", async () => {
+    const doc = await openApp(url, { screen: null });
+    await waitFor(() => pressed(doc).length === 1);
+    expect([...doc.querySelectorAll("#themeSwitch button")].map((b: any) => b.getAttribute("aria-label"))).toEqual(["Day", "Auto: day from 7 AM to 7 PM", "Night"]);
+    expect(pressed(doc)).toEqual(["auto"]);
+    expect(doc.documentElement.getAttribute("data-theme")).toBe(byClock());
+    doc.querySelector('#themeSwitch [data-mode="dark"]').click();
+    expect(doc.documentElement.getAttribute("data-theme")).toBe("dark");
+    expect(pressed(doc)).toEqual(["dark"]);
+    expect(win.localStorage.getItem("leanfare.theme")).toBe('"dark"');
+    doc.querySelector('#themeSwitch [data-mode="light"]').click();
+    expect(doc.documentElement.getAttribute("data-theme")).toBe("light");
+    doc.querySelector('#themeSwitch [data-mode="auto"]').click();
+    expect(doc.documentElement.getAttribute("data-theme")).toBe(byClock());
+    expect(pressed(doc)).toEqual(["auto"]);
+    doc.querySelector('.tabs button[data-tab="settings"]').click();
+    await waitFor(() => on(doc, "settings") && text(doc, "#tab-settings").includes("Auto is day from 7 AM to 7 PM"));
+    const seg = [...doc.querySelectorAll('#tab-settings .seg[aria-label="Theme"] button')];
+    expect(seg.map((b: any) => [b.textContent, b.getAttribute("aria-pressed")])).toEqual([["Day", "false"], ["Auto", "true"], ["Night", "false"]]);
+    (seg[2] as any).click();
+    expect(pressed(doc)).toEqual(["dark"]);
+  }, 20000);
+
+  test("on a phone only the current one shows, and a tap moves it on: Day, Auto, Night", async () => {
+    const doc = await openApp(url, { screen: null, width: 390 });
+    await waitFor(() => pressed(doc).length === 1);
+    const cur = () => doc.querySelector('#themeSwitch button[aria-pressed="true"]');
+    expect(cur().dataset.mode).toBe("auto");
+    cur().click();
+    expect(cur().dataset.mode).toBe("dark");
+    expect(doc.documentElement.getAttribute("data-theme")).toBe("dark");
+    cur().click();
+    expect(cur().dataset.mode).toBe("light");
+    cur().click();
+    expect(cur().dataset.mode).toBe("auto");
+  }, 20000);
+});

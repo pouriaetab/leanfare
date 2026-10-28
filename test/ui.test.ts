@@ -37,7 +37,50 @@ test("the page loads nothing from the internet", () => {
   expect(js).not.toMatch(/fetch\(\s*["'`]https?:/);
 });
 
-test("the page starts simple, and shows no screen before the script picks one", () => {
+// Day, Auto and Night: every color is a token that both themes define.
+const css = await Bun.file(new URL("../ui/app.css", import.meta.url)).text();
+const themeJs = await Bun.file(new URL("../ui/theme.js", import.meta.url)).text();
+test("every color in the styles is a token, and Night defines every color Day does", () => {
+  const day = /^:root \{([^}]*)\}/m.exec(css)![1];
+  const nights = [/:root:not\(\[data-theme="light"\]\) \{([^}]*)\}/.exec(css)![1], /:root\[data-theme="dark"\] \{([^}]*)\}/.exec(css)![1]];
+  const colorNames = [...day.matchAll(/(--[\w-]+):\s*(#[0-9a-f]{3,8}|rgba?\([^)]*\))/gi)].map((m) => m[1]);
+  expect(colorNames.length).toBeGreaterThan(15);
+  for (const night of nights) expect(colorNames.filter((n) => !night.includes(n + ":"))).toEqual([]);
+  // Outside the token blocks, no light color is written straight into a rule.
+  const rest = css.replace(/^:root \{[^}]*\}/m, "").replace(/:root:not\(\[data-theme="light"\]\) \{[^}]*\}/, "").replace(/:root\[data-theme="dark"\] \{[^}]*\}/, "");
+  const light = (c: string) => {
+    const hex = /^#([0-9a-f]{3,8})$/i.exec(c);
+    const rgb = hex ? (hex[1].length <= 4 ? [...hex[1].slice(0, 3)].map((x) => parseInt(x + x, 16)) : [0, 2, 4].map((i) => parseInt(hex[1].slice(i, i + 2), 16)))
+      : (/rgba?\(([^)]*)\)/.exec(c)![1].split(",").slice(0, 3).map((x) => parseFloat(x)));
+    return (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255 > 0.5;
+  };
+  const written = [...rest.matchAll(/#[0-9a-f]{3,8}\b|rgba?\([^)]*\)/gi)].map((m) => m[0]);
+  expect(written.filter(light)).toEqual([]);
+  expect(rest).not.toMatch(/:\s*white\b/);
+  // And no color set from the script either (the page sets sizes there, never colors).
+  expect([...js.matchAll(/style:\s*\{([^}]*)\}/g)].filter((m) => /color|background/i.test(m[1]))).toEqual([]);
+});
+test("the page starts simple, shows no screen before the script picks one, and sets the theme before it is drawn", () => {
   expect(html).toContain('<div id="app" class="simple">');
   expect(html).not.toMatch(/class="tab[^"]*\bon\b/);
+  const head = html.slice(0, html.indexOf("</head>"));
+  expect(head.indexOf('<script src="/theme.js"></script>')).toBeGreaterThan(-1);
+  expect(head.indexOf('<script src="/theme.js"></script>')).toBeLessThan(head.indexOf('<script src="/app.js" defer></script>'));
+});
+test("theme.js: the kept choice, or Auto by the clock (day from 7 AM to 7 PM)", () => {
+  const run = (kept: string | null, hour: number) => {
+    const attrs: Record<string, string> = {};
+    const doc = { documentElement: { setAttribute: (k: string, v: string) => { attrs[k] = v; } } };
+    const storage = { getItem: (k: string) => (k === "leanfare.theme" ? kept : null) };
+    class At { getHours() { return hour; } }
+    new Function("localStorage", "document", "Date", themeJs)(storage, doc, At);
+    return attrs["data-theme"];
+  };
+  expect(run('"dark"', 12)).toBe("dark");
+  expect(run('"light"', 23)).toBe("light");
+  expect(run('"auto"', 7)).toBe("light");
+  expect(run('"auto"', 18)).toBe("light");
+  expect(run('"auto"', 19)).toBe("dark");
+  expect(run(null, 6)).toBe("dark");
+  expect(run("not json", 12)).toBe("light");
 });
