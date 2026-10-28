@@ -273,7 +273,7 @@ describe("the tools", () => {
       expect(refused.result.content[0].text).toBe(".env was not read: files like it hold secrets (keys, passwords or tokens). Leanfare never hands those to a model.");
       expect(ledger()).toHaveLength(1);
       const noTask = await rpc("tools/call", { name: "delegate", arguments: { files: ["logs/app.log"], folder } });
-      expect(noTask.result).toMatchObject({ isError: true, content: [{ text: "delegate needs a task." }] });
+      expect(noTask.result).toMatchObject({ isError: true, content: [{ text: "delegate needs a task, or the id of one still working." }] });
     } finally { rmSync(folder, { recursive: true, force: true }); }
   });
 
