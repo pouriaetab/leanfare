@@ -6,6 +6,7 @@ import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ALL_TICKED, boot, keys, post, reset, ui } from "./app";
+import { freePort } from "./ports";
 
 let url = "";
 beforeAll(async () => { url = (await boot()).url; });
@@ -112,7 +113,7 @@ describe("the Mac app's needs", () => {
     cpSync(join(root, "ui"), join(res, "ui"), { recursive: true });
     cpSync(join(root, "package.json"), join(res, "package.json"));
     cpSync(join(root, "data/catalog.json"), join(res, "data/catalog.json"));
-    const port = 4900 + Math.floor(Math.random() * 90);
+    const port = await freePort();
     const dataDir = mkdtempSync(join(tmpdir(), "leanfare-appdata-"));
     const child = Bun.spawn([process.execPath, join(res, "src/cli.ts"), "--no-open", "--port", String(port)], { env: { ...process.env, LEANFARE_DATA_DIR: dataDir, LEANFARE_NO_OPEN: "1", LEANFARE_DATA_URL: "http://127.0.0.1:9/none" }, stdout: "pipe", stderr: "pipe" });
     try {
