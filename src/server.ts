@@ -28,6 +28,7 @@ import { setAuto } from "./workers";
 import { setUp, setupView } from "./setup";
 import { OFF_TEST, OFF_TEXT, OFF_TRIAL, setSwitch, switchedOn } from "./switch";
 import { startTest, stopTest, testRunning, testView } from "./localtest";
+import { platformsView, setPlatform } from "./platforms";
 import { retirementNotices } from "./retire";
 import { savings } from "./savings";
 import { checkKey, effortLevels, UserError } from "./upstream";
@@ -437,6 +438,16 @@ async function api(req: Request, url: URL): Promise<Response> {
   // in the background while the page polls its progress.
   if (p === "/api/local" && m === "GET") return json({ ...(await local.overview()), test: testView() });
   if (p === "/api/local/test" && m === "GET") return json(testView());
+  // Where Leanfare may send work for your apps: each platform on or off, and what is left before its nearest limit.
+  if (p === "/api/platforms" && m === "GET") return json(await platformsView());
+  if (p === "/api/platforms" && m === "POST") {
+    const b = await readBody(req);
+    const v = await platformsView();
+    if (typeof b?.id !== "string" || !v.rows.some((r) => r.id === b.id)) return fail(400, "Say which platform: one of " + v.rows.map((r) => r.id).join(", ") + ".");
+    if (typeof b.on !== "boolean") return fail(400, "on must be true or false.");
+    setPlatform(b.id, b.on);
+    return json(await platformsView());
+  }
   if (p === "/api/local/pull" && m === "GET") return json({ pull: local.pullView() });
   if (p === "/api/local/suggest" && m === "GET") return json(local.suggestLocal());
   // The manager's grades (grades.ts): a part's answer graded, the standings, and another chance.
