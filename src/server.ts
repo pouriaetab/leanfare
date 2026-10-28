@@ -25,6 +25,7 @@ import { meterViews, setStatusline } from "./meter";
 import { checkDelegate, runDelegate } from "./delegate";
 import { checkPlan, gradePart, makePlan, runView, startRun, stopAllRuns, stopRun } from "./planner";
 import { setAuto } from "./workers";
+import { setUp, setupView } from "./setup";
 import { OFF_TEXT, OFF_TRIAL, setSwitch, switchedOn } from "./switch";
 import { retirementNotices } from "./retire";
 import { savings } from "./savings";
@@ -33,7 +34,7 @@ import { FILE_LIMITS, checkFile, prepareMessages, takesImages, takesPdfs, type A
 import type { Msg } from "./router";
 import { exportAll, importChats, readArchive, searchChats } from "./archive";
 import { clearCookie, controlOk, engineAllowed, keyOk, locked, newAccessKey, pageAllowed, sessionCookie } from "./lock";
-import { chargeOf, errorResponse, handleAnthropic, handleOpenAI, idle, pauseState, plan, planView, providerReady, runChat, runningList, setPaused, stopRunning, usableModels, usualModel } from "./engine";
+import { chargeOf, errorResponse, handleAnthropic, handleOpenAI, idle, pauseState, plan, planView, providerReady, runChat, runningList, setPaused, stopRunning, tickTop, usableModels, usualModel } from "./engine";
 import { guessTask } from "./router";
 import { parseSpeed } from "./speed";
 import { startTrial, stopTrial, trialRunning, trialView } from "./trial";
@@ -351,14 +352,6 @@ async function readBody(req: Request): Promise<any> {
   try { return JSON.parse(t); } catch { throw new UserError(400, "The request body is not JSON."); }
 }
 
-function tickTop(pid: ProviderId) {
-  const s = settings();
-  const mine = allModels().filter((m) => m.provider === pid);
-  if (mine.some((m) => s.ticked.includes(m.id))) return; // you already chose for this provider
-  const pick = pid === "ollama" ? mine : mine.filter((m) => m.top);
-  if (pick.length) saveSettings({ ticked: [...s.ticked, ...pick.map((m) => m.id)] });
-}
-
 // A key was saved, pasted or by signing in: switch the provider on, load
 // OpenRouter's list and balance, and tick the provider's short list.
 async function keySaved(id: ProviderId, signal?: AbortSignal, liveModels?: string[] | null) {
@@ -379,7 +372,7 @@ async function api(req: Request, url: URL): Promise<Response> {
   const m = req.method;
   if (p === "/api/state" && m === "GET") return json(state());
   if (p === "/api/summary" && m === "GET") return json(summary());
-  // The one switch for Leanfare in your apps (switch.ts).
+  // The one switch for Leanfare in your apps (switch.ts), and the first run's Set up (setup.ts).
   if (p === "/api/switch" && m === "POST") {
     const b = await readBody(req);
     if (typeof b?.on !== "boolean") return fail(400, "on must be true or false");
@@ -389,6 +382,8 @@ async function api(req: Request, url: URL): Promise<Response> {
     if (!b.on) { stopped.plans = stopAllRuns(); stopped.trial = trialRunning(); await stopTrial(); }
     return json({ on: switchedOn(), stopped });
   }
+  if (p === "/api/setup" && m === "GET") return json(setupView());
+  if (p === "/api/setup" && m === "POST") return json(await setUp(req.signal));
   if (p === "/api/chat" && m === "POST") return chatRoute(req, await readBody(req));
   if (p === "/api/settings" && m === "POST") {
     const v = validatePatch(await readBody(req));
@@ -793,7 +788,7 @@ export async function handle(req: Request, server: { timeout(r: Request, s: numb
     if (url.pathname !== "/api/control/stop" && req.headers.get("x-leanfare") !== "1") return fail(403, "Missing the x-leanfare header.");
     if (url.pathname !== "/api/unlock" && !url.pathname.startsWith("/api/control/") && !pageAllowed(req, controlToken)) return json({ error: "Leanfare is locked. Paste its access key to open it.", locked: true }, 401);
     // Requests that can wait a long time on providers or other programs: no idle cut-off.
-    if (["/api/chat", "/api/delegate", "/api/plan", "/api/keys", "/api/refresh", "/api/import", "/api/keys/import", "/api/keys/recognize", "/api/keys/found", "/api/providers/custom", "/api/providers/registry", "/api/apps", "/api/switch", "/api/trial/stop"].includes(url.pathname)) server?.timeout(req, 0);
+    if (["/api/chat", "/api/delegate", "/api/plan", "/api/keys", "/api/refresh", "/api/import", "/api/keys/import", "/api/keys/recognize", "/api/keys/found", "/api/providers/custom", "/api/providers/registry", "/api/apps", "/api/setup", "/api/switch", "/api/trial/stop"].includes(url.pathname)) server?.timeout(req, 0);
     try { return await api(req, url); }
     catch (e: any) { return fail(e instanceof UserError ? e.status : 500, e instanceof UserError ? e.message : `Leanfare hit an unexpected problem: ${String(e?.message ?? e)}`); }
   }
