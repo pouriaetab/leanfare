@@ -8,6 +8,8 @@ import appJs from "../ui/app.js" with { type: "file" };
 // @ts-ignore
 import appCss from "../ui/app.css" with { type: "file" };
 // @ts-ignore
+import themeJs from "../ui/theme.js" with { type: "file" };
+// @ts-ignore
 import iconSvg from "../ui/icon.svg" with { type: "file" };
 // @ts-ignore
 import touchIcon from "../ui/apple-touch-icon.png" with { type: "file" };
@@ -20,6 +22,7 @@ export const UI_FILES: Record<string, string> = {
   "index.html": indexHtml as unknown as string,
   "app.js": appJs as unknown as string,
   "app.css": appCss as unknown as string,
+  "theme.js": themeJs as unknown as string,
   "icon.svg": iconSvg as unknown as string,
   "apple-touch-icon.png": touchIcon as unknown as string,
   "manifest.webmanifest": manifest as unknown as string,

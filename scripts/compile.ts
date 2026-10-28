@@ -84,6 +84,8 @@ if (process.argv.includes("--check")) {
   if (!page.includes("<title>Leanfare")) fail("did not serve its page");
   const js = await fetch(base + "/app.js").then((r) => r.text());
   if (!js.includes("function h(")) fail("did not serve app.js");
+  const theme = await fetch(base + "/theme.js").then((r) => r.text());
+  if (!theme.includes("data-theme")) fail("did not serve theme.js");
   const state = await fetch(base + "/api/state", { headers: { "x-leanfare": "1" } }).then((r) => r.json()).catch(() => null) as any;
   const models = state ? Object.values(state.models ?? {}).flat().length : 0;
   if (models < 50) fail(`listed only ${models} models (the price list inside it did not load)`);

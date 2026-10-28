@@ -58,6 +58,7 @@ const STATIC: Record<string, [string, string]> = {
   "/index.html": ["index.html", "text/html; charset=utf-8"],
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
   "/app.css": ["app.css", "text/css; charset=utf-8"],
+  "/theme.js": ["theme.js", "text/javascript; charset=utf-8"],
   "/icon.svg": ["icon.svg", "image/svg+xml"],
   "/apple-touch-icon.png": ["apple-touch-icon.png", "image/png"],
   "/manifest.webmanifest": ["manifest.webmanifest", "application/manifest+json"],
