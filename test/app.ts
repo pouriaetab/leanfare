@@ -11,6 +11,7 @@ import { forgetHistoryCache, setPaused, stopRunning } from "../src/engine";
 import { forgetSpeeds } from "../src/speed";
 import { forgetGrades } from "../src/grades";
 import { stopTrial } from "../src/trial";
+import { forgetTests } from "../src/localtest";
 import { setNow } from "../src/util";
 import { KEYS, type startFake } from "./fake";
 import * as connect from "../src/connect";
@@ -48,7 +49,8 @@ export async function reset(patch: Partial<Settings> = {}) {
   store.ollama = []; store.ollamaFound = false; store.openrouter = [];
   connect.cancel(); connect.forgetCredit();
   local.stopPull(); local.dismissPull(); fake.ollama.reset();
-  Object.assign(local.probe, { free: () => 200e9, memory: () => 16e9 }); // fixed numbers: tests never depend on this computer's disk or memory
+  Object.assign(local.probe, { free: () => 200e9, memory: () => 16e9, roots: () => [] }); // fixed numbers: tests never depend on this computer's disk, memory or drives
+  forgetTests();
   for (const id of Object.keys(KEYS)) await removeKey(id as any);
   fake.seen.length = 0;
   fake.hooks.answer = null;

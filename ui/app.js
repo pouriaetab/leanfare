@@ -1865,6 +1865,7 @@
       const next = await api("/api/local");
       if (JSON.stringify(next) !== JSON.stringify(S.local)) { S.local = next; renderLocal(); }
       if (next.pull?.active) ensurePoll();
+      if (next.test?.running) watchTest();
     } catch {}
   }
 
@@ -1940,9 +1941,26 @@
     renderShell(); renderSettings(); renderComposerBar(); if (!S.messages.length) renderMessages();
   }
 
+  // A model of yours: what Leanfare knows of its quality, its Arena rating through a cloud twin, or this
+  // computer's test of it (localtest.ts), and the test for one Arena does not rate.
+  const stModel = (id) => { for (const ms of Object.values(S.st?.models ?? {})) { const m = ms.find((x) => x.id === id); if (m) return m; } return null; };
+  function qualityOf(m) {
+    const id = `ollama/${m.name}`;
+    const T = S.local?.test;
+    const now = T?.current?.status === "running" && T.current.model === id ? T.current : null;
+    if (now) return [h("span", { class: "chip", text: `testing ${now.done} of ${now.total}` })];
+    const r = T?.results?.[id];
+    const sm = stModel(id);
+    const out = [];
+    if (r) out.push(h("span", { class: "chip " + (r.passed ? "good" : "warn"), title: `This computer's test, ${new Date(r.at).toLocaleDateString()}${r.skipped ? `; ${r.skipped} question${r.skipped === 1 ? "" : "s"} too long for it, left out` : ""}`, text: r.passed ? `passed the test: ${r.right} of ${r.asked}` : `missed ${r.asked - r.right} of ${r.asked}` }));
+    else if (sm && sm.rating !== null && sm.rating !== undefined) out.push(h("span", { title: sm.ratingFrom ? `Rated like ${sm.ratingFrom}` : "Arena rating", text: `★ ${Math.round(sm.rating)}` }));
+    else out.push(h("span", { text: "not rated" }));
+    if (!T?.running && (!sm || sm.rating === null || sm.rating === undefined)) out.push(h("button", { class: "btn small quiet", type: "button", title: `Test ${m.name} on known answers, on this computer`, text: r ? "Test again" : "Test", onclick: () => startTest(id) }));
+    return out;
+  }
   function localRow(m) {
     const facts = [m.params, m.quant].filter(Boolean).map((x) => h("span", { text: x }));
-    facts.push(h("span", { text: gbs(m.size) }), fitChip(m.fit));
+    facts.push(h("span", { text: gbs(m.size) }), fitChip(m.fit), ...qualityOf(m));
     if (m.loaded) facts.push(h("span", { class: "chip good", title: "Loaded in memory right now, so the next answer starts fast", text: "in memory" }));
     const row = h("div", { class: "lrow" },
       h("span", { class: "nm", title: m.name, text: m.name.replace(/:latest$/, "") }),
@@ -1976,26 +1994,26 @@
     if (!L) { card.append(h("p", { text: "Checking Ollama…" })); return card; }
     if (!L.running) {
       card.append(h("p", {}, "Ollama is not running on this computer. ", h("a", { href: L.installUrl, target: "_blank", rel: "noopener noreferrer", text: "Get Ollama ↗" })));
+      for (const f of L.found ?? []) card.append(foundBlock(f));
       if (L.pull) card.append(pullBlock(L.pull));
       return card;
     }
-    const where = L.remote
-      ? "Ollama runs on another computer, so Leanfare cannot check its disk or memory."
-      : `This computer has ${gbs(L.memory.total)} of memory, about ${gbs(L.memory.usable)} of it usable for a model.${L.disk.known ? ` ${gbs(L.disk.free)} of disk is free; Leanfare keeps ${gbs(L.disk.minFree)} free.` : ""}`;
-    card.append(h("p", { text: where }),
-      h("div", { class: "section-title", text: L.installed.length ? `On this computer · ${L.installed.length} model${L.installed.length === 1 ? "" : "s"} · ${gbs(L.total)}` : "On this computer" }),
+    const mac = L.machine ?? "computer";
+    card.append(h("div", { class: "section-title", text: "Where your models are" }),
+      h("p", { text: whereText(L) }),
+      L.remote ? null : h("p", { class: "note", text: `This ${mac} has ${gbs(L.memory.total)} of memory: a model up to about ${gbs((L.memory.total * 0.5) / 1.2)} runs comfortably, up to about ${gbs((L.memory.total * 0.7) / 1.2)} tightly.` }));
+    for (const f of L.found ?? []) card.append(foundBlock(f));
+    card.append(h("div", { class: "section-title", text: L.installed.length ? `On this computer · ${L.installed.length} model${L.installed.length === 1 ? "" : "s"} · ${gbs(L.total)}` : "On this computer" }),
       L.installed.length ? h("div", { class: "lmodels" }, ...L.installed.map(localRow)) : h("p", { text: "No models yet. Download one below." }));
+    const T = L.test?.current;
+    if (T && T.status === "running") card.append(h("div", { class: "row test-now" },
+      h("span", { class: "grow", text: `Testing ${T.label} on this ${mac}: ${T.done} of ${T.total} questions, ${T.right} right so far.` }),
+      h("button", { class: "btn small stop", type: "button", text: "Stop", onclick: stopTest })));
     const busy = !!L.pull?.active;
-    // The open model Leanfare suggests for this computer (local.ts says how it chooses), downloaded on a press.
-    const sg = L.suggest?.suggestion;
-    if (sg && !busy) {
-      card.append(h("div", { class: "section-title", text: "Suggested for this computer" }),
-        h("div", { class: "srow" },
-          h("span", { class: "nm", title: sg.name, text: sg.name }),
-          h("span", { class: "facts" }, h("span", { text: gbs(sg.size) }), fitChip(sg.fit), h("span", { title: `Rated like ${sg.like}, a little lower for the lighter copy that runs here`, text: `★ ${sg.rating}` }), h("span", { text: sg.license })),
-          h("button", { class: "btn small primary", type: "button", text: "Download", onclick: () => startDownloadOf(sg.name, sg.size) })),
-        h("p", { class: "note", text: L.suggest.why }));
-    } else if (L.suggest?.why && !busy) card.append(h("p", { class: "note", text: `Suggested for this computer: none. ${L.suggest.why}` }));
+    if ((L.kinds ?? []).length) {
+      card.append(h("div", { class: "section-title", text: "Suggested for each kind of work" }), ...L.kinds.map((k) => kindRow(k, busy)),
+        h("p", { class: "fine", text: `Arena rates few small models. One it rates is suggested as rated; one it does not is tested here before Leanfare gives it reading (the test has no drafting questions). Each fits this ${mac}'s memory and the free space where your models are, keeping ${gbs(L.disk.minFree)} free. Apache 2.0 only.` }));
+    }
     const input = h("input", { type: "text", placeholder: "gemma3:12b   or   hf.co/user/repo:Q4_K_M", autocomplete: "off", spellcheck: "false", "data-keep": "local-name", "aria-label": "Model to download", disabled: busy, value: busy ? L.pull.name : null,
       onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); if (!busy) startDownload(input); } } });
     card.append(h("div", { class: "section-title", text: "Download a model" }),
@@ -2003,6 +2021,74 @@
       h("p", {}, "A name from ", h("a", { href: "https://ollama.com/library", target: "_blank", rel: "noopener noreferrer", text: "Ollama's library ↗" }), ", or straight from Hugging Face as hf.co/user/repo:quantization. Q4_K_M is the light version: about a quarter of the full size, with a small loss in quality. Check a model's licence before you use it for work."));
     if (L.pull) card.append(pullBlock(L.pull));
     return card;
+  }
+
+  // Where Ollama keeps its models (local.ts: whereModels): the drive, its free space, and that downloads go there.
+  function whereText(L) {
+    if (L.remote || !L.where) return "Ollama runs on another computer, so Leanfare cannot check its disk or memory.";
+    const w = L.where, n = L.installed.length;
+    if (w.missing) return `Ollama's models folder is a link to ${w.real ?? "a folder"}${w.drive ? `, on the drive ${w.drive}` : ""}, which is not there now. Attach that drive and Ollama finds its models again.`;
+    const place = w.drive ? `on the drive ${w.drive}` : `in ${w.real ?? w.dir}, on this ${L.machine ?? "computer"}'s own disk`;
+    const room = w.free !== null ? `, with ${gbs(w.free)} free` : "";
+    if (!n) return `Ollama has no models yet. Its folder is ${place}${room}, and downloads go there.`;
+    return `Ollama keeps your ${n} model${n === 1 ? "" : "s"} (${gbs(L.total)}) ${place}${room}. New downloads go there too.`;
+  }
+  // Ollama models on a drive that Ollama does not use: Use them links Ollama's models folder there, after a yes.
+  function foundBlock(f) {
+    const ask = S.confirmFolder === f.path;
+    const row = h("div", { class: "srow found" },
+      h("span", { class: "nm", title: f.path, text: `${f.models} model${f.models === 1 ? "" : "s"} on ${f.drive}` }),
+      h("span", { class: "facts" }, h("span", { text: gbs(f.size) }), h("span", { text: "Ollama does not use them" })),
+      h("button", { class: "btn small primary", type: "button", text: "Use them", onclick: () => { S.confirmFolder = ask ? null : f.path; renderLocal(); } }));
+    if (!ask) return h("div", {}, row, h("p", { class: "note", text: `In ${f.path}.` }));
+    return h("div", { class: "lgroup" }, row,
+      h("div", { class: "lconfirm", role: "alertdialog", "aria-label": `Use the models on ${f.drive}?` },
+        h("span", { class: "grow", text: `Ollama's models folder will point to ${f.path}, so Ollama uses these models and new downloads go to ${f.drive} too. What is in the folder now is kept under another name; nothing is deleted.` }),
+        runButton("Use them", async () => { const r = await api("/api/local/use", { body: { path: f.path } }); S.confirmFolder = null; S.local = r.local; S.st = r.state; toast(r.text, "done"); renderLocal(); renderComposerBar(); }, "btn small primary"),
+        h("button", { class: "btn small", type: "button", text: "Not now", onclick: () => { S.confirmFolder = null; renderLocal(); } })));
+  }
+  // One suggestion for a kind of work (local.ts: kindsFor), with what to do about it.
+  function kindRow(k, busy) {
+    const p = k.pick;
+    const act = !p ? null
+      : p.act === "use" ? h("span", { class: "chip good", text: p.test?.passed ? "used first" : "you have it" })
+      : p.act === "test" ? (S.local?.test?.running ? null : h("button", { class: "btn small primary", type: "button", text: `Test it on this ${S.local?.machine ?? "computer"}`, onclick: () => startTest(p.id) }))
+      : busy ? null : h("button", { class: "btn small primary", type: "button", text: "Download", onclick: () => startDownloadOf(p.name, p.size) });
+    return h("div", { class: "krow" },
+      h("span", { class: "k", text: k.title }),
+      h("div", {},
+        p ? h("div", { class: "kpick" }, h("span", { class: "chip model", title: p.name, text: p.name.replace(/:latest$/, "") }), h("span", { text: gbs(p.size) }), p.fit === "tight" ? fitChip("tight") : null, p.rating !== null ? h("span", { title: p.like ? `Rated like ${p.like}` : "", text: `★ ${p.rating}` }) : null) : null,
+        h("div", { class: "note", text: k.why })),
+      act ?? h("span", {}));
+  }
+  // The test of a model on this computer: started here or by an app, followed while it runs.
+  let testPoll = null;
+  async function startTest(id) {
+    try { const t = await api("/api/local/test", { body: { model: id } }); if (S.local) S.local.test = t; renderLocal(); watchTest(); }
+    catch (e) { failed(e); }
+  }
+  async function stopTest() {
+    try { const t = await api("/api/local/test/stop", { body: {} }); if (S.local) S.local.test = t; renderLocal(); } catch (e) { failed(e); }
+  }
+  function watchTest() {
+    if (testPoll) return;
+    testPoll = setInterval(async () => {
+      try {
+        const t = await api("/api/local/test");
+        const was = S.local?.test?.current;
+        if (S.local) S.local.test = t;
+        if (t.running) { renderLocal(); return; }
+        clearInterval(testPoll); testPoll = null;
+        const c = t.current;
+        if (c && was?.status === "running") {
+          const r = t.results?.[c.model];
+          toast(c.status === "done" ? `${c.label}: ${c.right} of ${c.total} right. ${r?.passed ? "It passed: plans and the delegate send reading to it first." : "It did not pass, so it gets no reading work."}` : c.status === "failed" ? `The test of ${c.label} failed: ${c.error}` : `The test of ${c.label} was stopped.`, c.status === "failed" ? "error" : "done");
+        }
+        S.st = await api("/api/state");
+        await loadLocal();
+        renderLocal(); renderComposerBar();
+      } catch { clearInterval(testPoll); testPoll = null; }
+    }, 1500);
   }
 
   async function tick(ids, on) {

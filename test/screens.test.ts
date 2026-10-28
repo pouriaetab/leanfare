@@ -4,6 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:te
 import { ALL_TICKED, boot, fake, keys, ledger, reset, ui } from "./app";
 import { refreshOllama } from "../src/data";
 import { appJs, choose, closeApp, key, openApp as open, type, waitIdle, win } from "./dom";
+const MACHINE = process.platform === "darwin" ? "Mac" : "computer"; // what the texts call this computer
 
 let url = "";
 beforeAll(async () => { url = (await boot()).url; });
@@ -364,8 +365,9 @@ describe("Local models", () => {
     const text = card(doc).textContent;
     expect(rows(doc)).toEqual(["gemma3:12b", "llama3.2"]);
     expect(text).toContain("On this computer · 2 models · 10 GB");
-    expect(text).toContain("This computer has 16 GB of memory, about 11 GB of it usable for a model.");
-    expect(text).toContain("200 GB of disk is free; Leanfare keeps 10 GB free.");
+    expect(text).toContain(`This ${MACHINE} has 16 GB of memory: a model up to about 6.7 GB runs comfortably, up to about 9.3 GB tightly.`);
+    expect(text).toMatch(new RegExp(`Ollama keeps your 2 models \\(10 GB\\) in .+, on this ${MACHINE}'s own disk, with 200 GB free\\. New downloads go there too\\.`));
+    expect(text).toContain("keeping 10 GB free");
     const g = card(doc).querySelectorAll(".lrow")[0].textContent;
     expect(g).toContain("12.2B"); expect(g).toContain("Q4_K_M"); expect(g).toContain("8.1 GB"); expect(g).toContain("tight"); expect(g).toContain("in memory");
     const l = card(doc).querySelectorAll(".lrow")[1].textContent;

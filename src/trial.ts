@@ -284,7 +284,7 @@ const RATE = /\b429\b|rate.?limit|quota|too many requests|resource.?exhausted/i;
 export const timing = { pause: 2000, rateWait: 65_000 }; // between answers (free plans count tokens a minute); after a rate limit
 
 export function truths(f = trialFiles()) { return QUESTIONS.map((q) => q.truth(f)); }
-const inputOf = (q: Question, effort: Effort, check: "never" | "auto", f: Record<string, string>): DelegateInput =>
+export const inputOf = (q: Question, effort: Effort, check: "never" | "auto", f: Record<string, string>): DelegateInput =>
   ({ task: q.task, files: q.files.map((name) => ({ name, text: f[name] })), kind: q.kind, effort, check, maxOut: MAX_OUT, trial: true });
 const tokensOf = (chars: number) => Math.ceil(chars / 4);
 

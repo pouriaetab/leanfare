@@ -29,6 +29,7 @@ import { LOCAL_CONTEXT, allModels, fitsText, localNeed, type Model } from "./dat
 import { chargeOf, plan as route, runChat, usableModels } from "./engine";
 import { addGrade, movedDown, standing, standingText, type GradedKind, type Verdict } from "./grades";
 import { gb, suggestLocal } from "./local";
+import { passedLocal } from "./localpass";
 import { planView, windowsNow } from "./plans";
 import { DELEGATE_LIMITS, readForDelegate, sizesForPlan, PLAN_FILES } from "./readfiles";
 import { guessTask, pickModel, type Msg } from "./router";
@@ -297,13 +298,22 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
   if (part.kind === "search" && !usableModels((m) => m.provider === "perplexity").length) return stay(`it searches the web, which ${manager === "you" ? "your app" : manager} can do; no model you ticked in Leanfare does (tick Perplexity Sonar to send searches out)`);
   const messages: Msg[] = [{ role: "user", content: part.task }];
   const kind = DELEGATE_KIND[part.kind] ?? null;
+  const some = r.taken < r.named ? `; Leanfare hands over ${r.taken} of its ${r.named} files (one hand off takes at most ${DELEGATE_LIMITS.count} files, ${DELEGATE_LIMITS.total / 1048576} MB)`
+    : part.kind === "read" && !r.named ? "; no files named, so it works from what the model knows: name the files or folder it reads" : "";
+  // Reading at low or medium effort goes first to a model on this computer that passed its test here (localpass.ts):
+  // it is free. One that cannot take the part leaves it to Auto.
+  const local = part.kind === "read" && part.effort !== "high" && settings().speed === "cheapest" ? passedLocal(only) : null;
+  if (local) {
+    try {
+      const p = await route({ source: "chat", asked: local.id, messages, tokens: r.tokens, maxOut: null, signal, dry: true, effort: part.effort, guess: taskFor(kind, messages), ledgerSource: "delegate" });
+      return { ...part, where: "local", model: { id: local.id, label: local.label }, use: null, seconds: p.seconds, tokens: r.tokens + OUT_LEANFARE, cost: 0, why: `reading goes first to ${local.label}, which passed this computer's reading test: on this computer, $0${some}` };
+    } catch (e: any) { if (e?.status === 499) throw e; }
+  }
   try {
     const p = await route({ source: "chat", asked: `auto-${TIER[part.effort]}`, messages, tokens: r.tokens, maxOut: null, signal, dry: true, effort: part.effort,
       guess: part.kind === "search" ? { task: "overall", why: "a web search", alt: null } : taskFor(kind, messages), only, onlyWhy: `none of the models you ticked can take this much text (about ${tokText(need)} tokens with the answer)`, ledgerSource: "delegate" });
     const where = whereOf(p.model, p.estimate);
     if (where === "paid" && viaCodex) return onCodex(part, r, `your ChatGPT plan through Codex, not pay per use${near && big ? ` (your plan is near its limit: ${near})` : ""}; Codex reads ${r.named ? "the files itself" : "what the task says"}, read only`);
-    const some = r.taken < r.named ? `; Leanfare hands over ${r.taken} of its ${r.named} files (one hand off takes at most ${DELEGATE_LIMITS.count} files, ${DELEGATE_LIMITS.total / 1048576} MB)`
-      : part.kind === "read" && !r.named ? "; no files named, so it works from what the model knows: name the files or folder it reads" : "";
     const why = (near && big ? `your plan is near its limit (${near}), so this goes out too` : where === "local" ? "reading and drafting go out: on this computer, $0"
       : where === "free" ? "reading and drafting go out: a free model" : `the cheapest model rated well enough at ${part.effort} effort`) + some;
     return { ...part, where, model: { id: p.model.id, label: p.model.label }, use: null, seconds: p.seconds, tokens: r.tokens + OUT_LEANFARE, cost: p.estimate, why };

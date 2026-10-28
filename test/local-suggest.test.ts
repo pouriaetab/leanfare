@@ -7,6 +7,7 @@ import { store, twinOf, type Model } from "../src/data";
 import { probe, SUGGESTED } from "../src/local";
 import { forgetPlans } from "../src/planner";
 import { ALL_TICKED, boot, fake, keys, reset, ui } from "./app";
+const MACHINE = process.platform === "darwin" ? "Mac" : "computer"; // what the texts call this computer
 
 const GB = 1e9;
 const twin = (provider: string, name: string, label: string, overall: number): Model => ({
@@ -169,9 +170,12 @@ describe("local_model, in an app", () => {
     computer(64 * GB);
     await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "claude-code", version: "2.1" } });
     const r = await tool({});
-    expect(r.content[0].text).toContain("gemma4:31b-it-qat (19 GB) runs comfortably");
-    expect(r.content[0].text).toContain("To download it: local_model with action download (the user is asked first).");
+    const t = r.content[0].text;
+    expect(t).toMatch(new RegExp(`^Ollama keeps your 1 model \\(2\\.0 GB\\) in .+, on this ${MACHINE}'s own disk, with 200 GB free\\. New downloads go there too\\.\\n`));
+    for (const title of ["Reading and pulling out facts", "Drafting text", "Working things out"]) expect(t).toContain(`${title}: gemma4:31b-it-qat (19 GB), a download. Rated like Gemma 4 31B for this (1437), it runs comfortably in this ${MACHINE}'s 64 GB of memory.`);
+    expect(t).toContain("To download it: local_model with action download and model gemma4:31b-it-qat (the user is asked first).");
     expect(r.structuredContent.suggestion.name).toBe("gemma4:31b-it-qat");
+    expect(r.structuredContent.kinds.map((k: any) => k.pick.act)).toEqual(["download", "download", "download"]);
   });
   test("an app that cannot ask: download without the yes only says to ask; with yes it starts", async () => {
     computer(64 * GB);
