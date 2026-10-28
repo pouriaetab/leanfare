@@ -16,6 +16,8 @@ process.env.LEANFARE_SHELL_ENV = "off"; // tests never read your login shell's v
 process.env.LEANFARE_LOCAL_PORTS = "none"; // nor look for model apps on this computer's ports (providers.test.ts points at fakes)
 process.env.LEANFARE_UPDATE_CHECK = "off"; // nor ask GitHub for new versions (update.test.ts uses a stand in)
 process.env.LEANFARE_NOW = "2026-10-21T12:00:00Z";
+// Claude Code's own claude command is never run by a test: a test that needs one sets the stand in (fakeclaude.ts).
+process.env.LEANFARE_CLAUDE_BIN = join(process.env.LEANFARE_DATA_DIR, "no-claude-command");
 // Every provider's key variable, so no key of yours is ever used or read by a test.
 for (const k of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "XAI_API_KEY", "MISTRAL_API_KEY",
   "PERPLEXITY_API_KEY", "PPLX_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY", "TOGETHER_API_KEY", "FIREWORKS_API_KEY"]) delete process.env[k];

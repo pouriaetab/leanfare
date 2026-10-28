@@ -44,6 +44,7 @@ export interface Settings {
   brief: boolean; // the chat screen's answers: short (the answer first, a table or a short list), more only when asked
   planAuto: number; // a plan's paid parts run without asking while their estimate is at most this many US dollars (0: always ask)
   codexPlan: boolean; // a plan's reading, drafting and working out parts may run on your ChatGPT plan through Codex (codex.ts); off until you turn it on
+  setupDone: boolean; // the first run's Set up was done (setup.ts); until then the app opens on it
 }
 
 export const DEFAULTS: Settings = {
@@ -68,6 +69,7 @@ export const DEFAULTS: Settings = {
   brief: true,
   planAuto: 0,
   codexPlan: false,
+  setupDone: false,
 };
 
 // What a short answer is, given to the chat screen's models before the chat's own instructions
@@ -138,7 +140,7 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
   if ("atLimit" in p) { if (p.atLimit !== "cheapest" && p.atLimit !== "stop") return { error: "atLimit must be cheapest or stop" }; out.atLimit = p.atLimit; }
   if ("history" in p) out.history = !!p.history;
   if ("updateCheck" in p) out.updateCheck = !!p.updateCheck;
-  for (const k of ["showValue", "brief", "codexPlan"] as const) {
+  for (const k of ["showValue", "brief", "codexPlan", "setupDone"] as const) {
     if (!(k in p)) continue;
     if (typeof p[k] !== "boolean") return { error: `${k} must be true or false` };
     out[k] = p[k];

@@ -12,7 +12,8 @@ let home = "";
 const realHome = process.env.HOME;
 const realCodex = process.env.CODEX_HOME; // the tests' own Codex folder (setup.ts), put back after
 beforeAll(async () => { url = (await boot()).url; });
-afterAll(() => { process.env.HOME = realHome; process.env.CODEX_HOME = realCodex; delete process.env.LEANFARE_CLAUDE_BIN; });
+const realClaudeBin = process.env.LEANFARE_CLAUDE_BIN; // nothing (setup.ts), so no test runs the real claude
+afterAll(() => { process.env.HOME = realHome; process.env.CODEX_HOME = realCodex; process.env.LEANFARE_CLAUDE_BIN = realClaudeBin; });
 beforeEach(async () => {
   await reset(); // a clean server (no lock or settings left by another test file)
   home = mkdtempSync(join(tmpdir(), "leanfare-apps-"));
