@@ -469,6 +469,9 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
 .trial details ul { margin: 6px 0 0 18px; padding: 0; }
 .trial-share { gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 @media (max-width: 720px) { .trial-table { display: block; overflow-x: auto; } }
+.card.work .cards6 { margin: 2px 0 4px; }
+.work-table td .chip { margin: 0 4px 2px 0; }
+.work-table td .none { color: var(--faint); }
 
 /* The plan */
 .tab.plan { flex-direction: column; padding: 18px 22px; overflow-y: auto; }
@@ -501,6 +504,16 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
   .plan-table td::before { content: attr(data-label); color: var(--muted); font-size: 11.5px; min-width: 64px; flex: none; }
   .plan-table td.part { display: block; }
   .plan-table td.part::before, .plan-table td:first-child { display: none; }
+  /* Savings: each of the last few is a small card too, what it was first. */
+  .work-table { overflow-x: visible; }
+  .work-table thead { display: none; }
+  .work-table, .work-table tbody, .work-table td { display: block; width: 100%; }
+  .work-table tr { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; margin-bottom: 8px; }
+  .work-table td { border: none; padding: 2px 0; display: flex; gap: 4px 8px; }
+  .work-table td[data-label="Quality"] { flex-wrap: wrap; }
+  .work-table td::before { content: attr(data-label); color: var(--muted); font-size: 11.5px; min-width: 64px; flex: none; }
+  .work-table td.what { order: -1; font-weight: 600; }
+  .work-table td.what::before { display: none; }
 }
 
 /* ---- the first run's Set up, and the switch at the top ------------------------------------------ */
