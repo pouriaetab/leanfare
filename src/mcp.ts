@@ -121,11 +121,12 @@ const TOOLS = [
   {
     name: "delegate",
     title: "Hand a task to a cheaper model",
-    description: "Hand a piece of work to a cheaper model through Leanfare, to save your own context and usage. Best for work that reads a lot and answers briefly: search or summarize big files, logs or many documents, review a file, draft a section. Name the files in files: Leanfare reads them itself, so their text never enters your context. Leanfare picks the cheapest model the user ticked that rates well enough for the kind and effort, and returns a short answer with a receipt (the model, the cost, the tokens kept out of your context). Every high effort answer, and a sample of the others, is checked by a stronger model; a failed check is asked again one tier up. Costs count toward the user's Leanfare budget.",
+    description: "Hand a piece of work to a cheaper model through Leanfare, to save your own context and usage. Best for work that reads a lot and answers briefly: search or summarize big files, logs or many documents, review a file, draft a section. Name the files in files: Leanfare reads them itself, so their text never enters your context. Leanfare picks the cheapest model the user ticked that rates well enough for the kind and effort, and returns a short answer with a receipt (the model, the cost, the tokens kept out of your context). Every high effort answer, and a sample of the others, is checked by a stronger model; a failed check is asked again one tier up. One that takes more than about 40 seconds answers with an id instead and keeps working: call delegate again with only that id to get the answer. Costs count toward the user's Leanfare budget.",
     inputSchema: {
       type: "object",
       properties: {
         task: { type: "string", description: "What to do, written for a model that has not seen this conversation: the goal, what to look for, and the form of answer you want (for example: a list of file:line, one line each)." },
+        id: { type: "string", description: "The id an earlier delegate answered with while it was still working: give only this to get that answer." },
         files: { type: "array", items: { type: "string" }, maxItems: 50, description: "Text files for Leanfare to read and hand over with the task: full paths, ~/ paths, or paths relative to folder. At most 50 files, 2 MB each, 4 MB in all. Files that hold secrets (.env files, private keys, credentials) are refused." },
         folder: { type: "string", description: "The folder relative paths start from. By default, the folder the MCP client started Leanfare in (in Claude Code, the project)." },
         kind: { type: "string", enum: ["read", "write", "reason"], description: "read: find, pull out or summarize from the files. write: draft text or code. reason: work something out (a bug's cause, a plan, a proof). Leave it out to let Leanfare guess." },
@@ -134,7 +135,6 @@ const TOOLS = [
         speed: { type: "string", description: "At the same quality: \"cheapest\" (however long it takes), \"fastest\" (whatever it costs), or a number of seconds to answer within, like \"30\". Default: the user's choice in Leanfare." },
         max_tokens: { type: "integer", minimum: 1, maximum: 64000, description: "The longest answer to allow, in tokens (default 8,192)." },
       },
-      required: ["task"],
       additionalProperties: false,
     },
     annotations: { title: "Hand a task to a cheaper model", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -399,12 +399,21 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
     return text(`${answer}\n\n(Leanfare: ${model}, ${usd(cost)}. ${reason})`, { answer, model, cost_usd: cost, task: headers.get("x-leanfare-task"), reason });
   }
   if (name === "delegate") {
-    if (typeof args?.task !== "string" || !args.task.trim()) return failure("delegate needs a task.");
-    const files = readForDelegate(args.files, args.folder);
-    if (typeof files === "string") return failure(files);
-    const body = { task: args.task, files, kind: args.kind ?? null, effort: args.effort ?? "medium", check: args.check ?? "auto", ...(args.max_tokens !== undefined ? { max_tokens: args.max_tokens } : {}), ...(args.speed !== undefined ? { speed: args.speed } : {}) };
-    const { j } = await call("/api/delegate", { method: "POST", json: body }, signal);
-    const gradeIt = ["read", "write", "reason"].includes(args.kind) ? `\n\n(Once you have used it: grade, with model ${j.model.id} and kind ${args.kind}.)` : "";
+    // Under the minute an app waits for a tool (Cowork's link to the computer: 60 seconds); LEANFARE_DELEGATE_WAIT for tests.
+    const wait = Number(process.env.LEANFARE_DELEGATE_WAIT) > 0 ? Number(process.env.LEANFARE_DELEGATE_WAIT) : 40;
+    let j: any;
+    if (typeof args?.id === "string" && args.id) {
+      if (!PLAN_ID.test(args.id)) return failure("That is not the id of a hand off.");
+      ({ j } = await call(`/api/delegate?id=${encodeURIComponent(args.id)}&wait=${wait}`, {}, signal));
+    } else {
+      if (typeof args?.task !== "string" || !args.task.trim()) return failure("delegate needs a task, or the id of one still working.");
+      const files = readForDelegate(args.files, args.folder);
+      if (typeof files === "string") return failure(files);
+      const body = { task: args.task, files, kind: args.kind ?? null, effort: args.effort ?? "medium", check: args.check ?? "auto", wait, ...(args.max_tokens !== undefined ? { max_tokens: args.max_tokens } : {}), ...(args.speed !== undefined ? { speed: args.speed } : {}) };
+      ({ j } = await call("/api/delegate", { method: "POST", json: body }, signal));
+    }
+    if (j.running) return text(`Still working in Leanfare (${j.seconds} seconds so far). Call delegate again with id "${j.id}" and nothing else to get the answer.`, { running: true, id: j.id, seconds: j.seconds });
+    const gradeIt = ["read", "write", "reason"].includes(j.kind) ? `\n\n(Once you have used it: grade, with model ${j.model.id} and kind ${j.kind}.)` : "";
     return text(`${j.answer}\n\n(${j.receipt})${gradeIt}`, {
       answer: j.answer, model: j.model.id, cost_usd: j.cost, total_usd: j.total, task: j.task, effort: j.effort,
       check: j.check.picked ? { verdict: j.check.verdict, by: j.check.checker?.id ?? null, why: j.check.why || null, cost_usd: j.check.cost } : null,
