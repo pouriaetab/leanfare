@@ -58,6 +58,7 @@ export const PLAN_APP_HTML = `<!doctype html>
   };
   const usd = (v) => (v === null || v === undefined ? "not known" : v === 0 ? "$0" : v < 0.01 ? "under $0.01" : "$" + v.toFixed(2));
   const tok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(Math.round(n)));
+  const share = (t) => (t.kept > 0 ? " (" + (t.used ? Math.max(1, Math.min(99, Math.round((t.kept / (t.kept + t.used)) * 100))) + "%" : "all") + " of this task)" : "");
   const secs = (s) => (s === null || s === undefined ? "" : s < 90 ? "~" + Math.max(1, Math.round(s)) + " s" : "~" + Math.round(s / 60) + " min");
   const RUNS = { you: "you", local: "Leanfare, this computer", free: "Leanfare, free", paid: "Leanfare, pay per use", codex: "Leanfare, through Codex" };
   const NOW = { waiting: "waiting", running: "running…", done: "done", failed: "failed", stopped: "stopped", yours: "yours", after_yours: "after yours", blocked: "waits", asks: "waits for a yes" };
@@ -99,7 +100,7 @@ export const PLAN_APP_HTML = `<!doctype html>
     const kids = [
       el("h1", {}, "Leanfare's plan", el("small", { text: mine + " of " + plan.parts.length + " parts to Leanfare" })),
       el("table", {}, el("thead", {}, el("tr", {}, ...["#", "Part", "Runs on", "Model", "Time", "Tokens", "Cost", ...(run ? ["Now"] : [])].map((x) => el("th", { text: x })))), el("tbody", {}, ...rows)),
-      el("p", { class: "sum", text: "About " + tok(t.kept) + " tokens kept out of your plan" + (t.used ? ", about " + tok(t.used) + " stay in it" : "") + ". Pay per use: " + usd(t.cost) + "." + (mine ? "" : " " + nothingOut(plan.parts)) }),
+      el("p", { class: "sum", text: "About " + tok(t.kept) + " tokens kept out of your plan" + share(t) + (t.used ? ", about " + tok(t.used) + " stay in it" : "") + ". Pay per use: " + usd(t.cost) + "." + (mine ? "" : " " + nothingOut(plan.parts)) }),
       plan.local ? el("p", { class: "muted", text: "A local model fits this computer: " + plan.local.name + " (" + (plan.local.size / 1e9).toFixed(plan.local.size < 10e9 ? 1 : 0) + " GB), rated like " + plan.local.like + ", free to run. Ask for it to be downloaded (Leanfare's local_model asks you first)." }) : null,
       el("div", { class: "row" },
         now && (left || going) ? el("button", { class: "go", id: "run", disabled: going ? "" : null, onclick: start, text: going ? "Running…" : (run ? "Run the rest" : "Run Leanfare's parts") + (paidParts.length ? (unknown ? " (paid parts, cost not known)" : " (about " + usd(paid) + " paid)") : "") }) : null,

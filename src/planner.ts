@@ -24,7 +24,7 @@
 import { homedir } from "node:os";
 import { dirname, relative, sep } from "node:path";
 import { CODEX_ID, CODEX_LABEL, codexFor, runCodex } from "./codex";
-import { DEFAULT_MAX_OUT, TIER, runDelegate, taskFor, type Effort, type Kind } from "./delegate";
+import { DEFAULT_MAX_OUT, TIER, gradeRow, notePart, runDelegate, taskFor, type Effort, type Kind } from "./delegate";
 import { LOCAL_CONTEXT, allModels, fitsText, localNeed, type Model } from "./data";
 import { chargeOf, plan as route, runChat, usableModels } from "./engine";
 import { addGrade, movedDown, standing, standingText, type GradedKind, type Verdict } from "./grades";
@@ -348,6 +348,10 @@ export const chainSeconds = (parts: Part[]) => chains(parts).now;
 // ---- the table -----------------------------------------------------------------------------------
 
 export const tokText = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(Math.round(n)));
+// The share of the task's tokens that Leanfare's parts keep out of the plan, as " (97% of this task)": never
+// 100% while some stay in, never 0% when some go out.
+export const keptShare = (t: { kept: number; used: number }) =>
+  t.kept > 0 ? ` (${t.used ? `${Math.max(1, Math.min(99, Math.round((t.kept / (t.kept + t.used)) * 100)))}%` : "all"} of this task)` : "";
 const usd = (v: number | null) => (v === null ? "not known" : v === 0 ? "$0" : v < 0.01 ? "under $0.01" : `$${v.toFixed(2)}`);
 const RUNS: Record<Where, string> = { you: "you", local: "Leanfare, on this computer", free: "Leanfare, free model", paid: "Leanfare, pay per use", codex: "Leanfare, through Codex" };
 const cell = (s: string) => s.replace(/\|/g, "/").replace(/\n/g, " ");
@@ -372,7 +376,7 @@ export function tableOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
     "|---|---|---|---|---|---|---|---|---|",
     ...rows.map((x) => `| ${x} |`),
     "",
-    `${t.out} of ${t.parts} parts go to Leanfare, keeping about ${tokText(t.kept)} tokens out of your plan${t.used ? `; about ${tokText(t.used)} stay in it` : ""}. ${timeLine(t)}Pay per use: ${usd(t.cost)}.${t.out ? "" : ` ${nothingOut(r.parts)}`}${r.codex ? ` Codex took no part: ${r.codex}.` : ""}${r.local ? ` ${localLine(r.local)}` : ""}`,
+    `${t.out} of ${t.parts} parts go to Leanfare, keeping about ${tokText(t.kept)} tokens out of your plan${keptShare(t)}${t.used ? `; about ${tokText(t.used)} stay in it` : ""}. ${timeLine(t)}Pay per use: ${usd(t.cost)}.${t.out ? "" : ` ${nothingOut(r.parts)}`}${r.codex ? ` Codex took no part: ${r.codex}.` : ""}${r.local ? ` ${localLine(r.local)}` : ""}`,
   ].join("\n");
 }
 
@@ -662,11 +666,14 @@ async function runPart(p: Part, plan: PlanResult, at: (n: number) => RunPart, si
     const paths = p.files.map((n) => known.get(n)?.path).filter((x): x is string => !!x);
     const folder = commonFolder(paths);
     const r = await runCodex({ n: p.n, title: p.title, task, folder, files: folder ? paths.map((x) => relative(folder, x)) : paths, effort: p.effort }, signal);
+    const bytes = p.files.reduce((n, f) => n + (known.get(f)?.size ?? 0), 0);
+    notePart({ kind: p.kind, effort: p.effort, model: CODEX_ID, cost: 0, files: paths.length, fileTokens: Math.ceil(bytes / 4), task, answer: r.answer, plan: `${plan.id}:${p.n}` });
     return { status: "done", answer: r.answer, receipt: `${CODEX_LABEL}, read only, ${secondsText(r.seconds)}. It counts in your ChatGPT plan's Codex use; nothing to pay here.`, model: CODEX_LABEL, modelId: CODEX_ID, cost: 0, seconds: r.seconds };
   }
   if (p.kind === "search" && p.model) {
     const r = await runChat([{ role: "user", content: task }], p.model.id, signal, () => {}, `Plan part ${p.n}`, { source: "plan", maxOut: 4096 });
     if (r.status !== "ok") return { status: r.status === "stopped" ? "stopped" : "failed", error: String(r.meta?.error ?? "It failed."), cost: r.meta?.spent ?? r.meta?.cost ?? null, model: r.meta?.model?.label ?? null };
+    notePart({ kind: "search", effort: p.effort, model: r.meta.model.id, cost: r.meta.spent ?? r.meta.cost ?? null, files: 0, fileTokens: 0, task, answer: r.text, plan: `${plan.id}:${p.n}` });
     return { status: "done", answer: r.text, receipt: `${r.meta.model.label}, ${usd(r.meta.cost ?? null)}.`, model: r.meta.model.label, modelId: r.meta.model.id, cost: r.meta.spent ?? r.meta.cost ?? null, seconds: (r.meta.ms ?? 0) / 1000 };
   }
   // Its files, as many as one hand off takes, in the plan's order; one that cannot be read is left out and named.
@@ -681,7 +688,7 @@ async function runPart(p: Part, plan: PlanResult, at: (n: number) => RunPart, si
   if (mine.length && !files.length) throw Object.assign(new UserError(400, `None of its files could be handed over${skipped.length ? `: ${skipped.slice(0, 3).join("; ")}` : ""}.`, "plan_files"), { spent: 0 });
   // A free part stays on free models, its check too; a paid part within the cap goes unchecked (the estimate holds no check).
   const free = p.where === "local" || p.where === "free";
-  const d = await runDelegate({ task, files, kind: DELEGATE_KIND[p.kind] ?? null, effort: p.effort, check: free || yes ? "auto" : "never", maxOut: DEFAULT_MAX_OUT, ...(free ? { only: isFree } : {}), ...(p.model ? { model: p.model.id } : {}) }, signal);
+  const d = await runDelegate({ task, files, kind: DELEGATE_KIND[p.kind] ?? null, effort: p.effort, check: free || yes ? "auto" : "never", maxOut: DEFAULT_MAX_OUT, ...(free ? { only: isFree } : {}), ...(p.model ? { model: p.model.id } : {}), plan: `${plan.id}:${p.n}` }, signal);
   const notes = [
     mine.length > files.length + skipped.length ? `Handed over ${files.length} of its ${mine.length} files (the most one hand off takes is ${DELEGATE_LIMITS.count} files, ${DELEGATE_LIMITS.total / 1048576} MB).` : "",
     skipped.length ? `Left out: ${skipped.slice(0, 3).join("; ")}${skipped.length > 3 ? `, and ${skipped.length - 3} more` : ""}.` : "",
@@ -705,6 +712,7 @@ export function gradePart(id: string, n: number, verdict: Verdict, source: strin
   held!.grades.set(n, addGrade({ model: run.modelId, kind: part.kind as GradedKind, effort: part.effort, verdict, source }, held!.grades.get(n) ?? null));
   run.verdict = verdict;
   run.gradedBy = source === "you" ? "you" : "manager";
+  gradeRow(verdict, { plan: `${id}:${n}` }); // kept with the part's row too: Savings counts the grades of the month
   const st = standing(run.modelId, part.kind as GradedKind);
   return { text: standingText(st), standing: st };
 }
