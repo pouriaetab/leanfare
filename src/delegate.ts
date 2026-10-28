@@ -35,6 +35,7 @@ export interface DelegateInput {
   task: string; files: DelegateFile[]; kind: Kind | null; effort: Effort; check: CheckPolicy; maxOut: number; speed?: SpeedChoice;
   trial?: boolean; // the trial's questions (trial.ts): ledger rows say "trial", and none count in the delegate's own pass rates
   only?: (m: Model) => boolean; // a limit on every model of the task (the answer, the check, a second try): a plan's free part stays on free models
+  model?: string; // a plan's part: the model its table named, asked first (planner.ts runPart)
 }
 
 export const KINDS: Kind[] = ["read", "write", "reason"];
@@ -180,6 +181,7 @@ export interface DelegateResult {
   cost: number | null; // the answer's cost (the second answer's, after a failed check)
   first: { model: Who; cost: number | null } | null; // the first answer, when a failed check replaced it
   rerunError: string | null; // asking again after a failed check did not work
+  swap: string | null; // a plan's part: why another model answered than the one its table named
   total: number | null; // everything this task cost: the answers and the check
   task: string;
   taskLabel: string;
@@ -214,6 +216,7 @@ export function receiptOf(r: Omit<DelegateResult, "receipt">, maxOut: number): s
   if (r.first && c.checker) parts.push(`Leanfare delegate: ${r.first.model.label} answered first (${usd(r.first.cost)}), ${c.checker.label} failed it (${c.why || "no reason given"}; ${usd(c.cost)}), so ${r.model.label} answered again (${usd(r.cost)}). This is the second answer, not checked again.`);
   else {
     parts.push(`Leanfare delegate: ${r.model.label}, ${usd(r.cost)}.`);
+    if (r.swap) parts.push(r.swap);
     if (c.verdict === "pass") parts.push(`Checked by ${c.checker!.label}: passed (${usd(c.cost)}).`);
     else if (c.verdict === "unclear") parts.push(`Checked by ${c.checker!.label}: no clear verdict (${usd(c.cost)}).`);
     else if (c.verdict === "fail") parts.push(`${c.checker!.label} failed it (${c.why || "no reason given"}; ${usd(c.cost)}), and asking again did not work (${r.rerunError ?? "unknown"}). Check this answer yourself.`);
@@ -283,7 +286,23 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     const graded = (m: Model) => base(m) && !movedDown(m.id, input.kind);
     return usableModels(graded).length ? graded : base;
   };
-  const first = await run(messages, `auto-${TIER[input.effort]}`, "Delegate", { system, source, guess, only: within(doFit.ok), onlyWhy: tooMuch(doFit.need), effort: input.effort, maxOut: input.maxOut, speed: input.speed });
+  // A plan's part runs on the model its table named, so the table is what runs. When that model can no
+  // longer take it here, or cannot answer now (busy, rate limited, down), Auto picks another within the same
+  // limits (a free part stays free), and the receipt says which and why.
+  const asked = `auto-${TIER[input.effort]}`;
+  const opts: ChatOptions = { system, source, guess, only: within(doFit.ok), onlyWhy: tooMuch(doFit.need), effort: input.effort, maxOut: input.maxOut, speed: input.speed };
+  const named = input.model ? getModel(input.model) ?? null : null;
+  const namedOk = !!named && usableModels(within(doFit.ok)).some((m) => m.id === named.id);
+  let swap: string | null = input.model && !namedOk ? `The plan named ${named?.label ?? input.model}, which cannot take it here now, so Auto picked another.` : null;
+  let first = await run(messages, namedOk ? named!.id : asked, "Delegate", opts);
+  const tried: (number | null)[] = [];
+  if (namedOk && first.status !== "ok" && first.status !== "stopped" && !gone()) {
+    tried.push(first.cost);
+    const why = (first.error?.message ?? "it failed").replace(/\.$/, "");
+    const other = await run(messages, asked, "Delegate", { ...opts, only: within((m) => doFit.ok(m) && m.id !== named!.id) });
+    if (other.status === "ok") { swap = `The plan named ${named!.label}, which could not answer (${why}), so ${other.meta.model.label} answered.`; first = other; }
+    else if (other.status === "stopped") first = other;
+  }
   if (first.status !== "ok") {
     write({ ...row, ...none, model: first.meta?.model?.id ?? null, cost: first.cost, answerTokens: 0, status: first.status, chance: 0 });
     // spent: what the call was charged, so whoever runs it can count it (a plan's run does).
@@ -294,7 +313,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   const chance = input.check === "always" ? 1 : input.check === "never" ? 0 : CHANCE[input.effort];
   const picked = chance >= 1 || (chance > 0 && draw.next() < chance);
   const check: DelegateCheck = { chance, picked, verdict: null, why: "", checker: null, cost: null };
-  const spent: (number | null)[] = [first.cost]; // every call made for this task
+  const spent: (number | null)[] = [...tried, first.cost]; // every call made for this task
   let final = first;
   let firstUsed: DelegateResult["first"] = null;
   let rerunError: string | null = null;
@@ -356,6 +375,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     cost: final.cost,
     first: firstUsed,
     rerunError,
+    swap,
     total: add(...spent),
     task: guess.task,
     taskLabel: taskLabel(guess.task),
