@@ -48,6 +48,9 @@ const OUT_YOU = 2_000; // what a part the app does itself writes, about
 const OUT_LEANFARE = 1_000; // what a part Leanfare runs answers, about
 export const MAX_PARTS = 8;
 export const MAX_TASK = 20_000; // characters
+// An app waits about a minute for a tool's answer (Cowork's link to this computer: 60 seconds), so a model
+// that has not split the task by then is let go, and the rules split it. LEANFARE_SPLIT_SECONDS for tests.
+export const splitSeconds = () => { const n = Number(process.env.LEANFARE_SPLIT_SECONDS); return n > 0 ? n : 40; };
 const LISTED = 200; // files named one by one to the split model; past it, the folders they are in
 const CONTEXT = "The whole task, for context:";
 
@@ -459,10 +462,18 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
   if (input.split !== "rules") {
     const fileList = shown.length ? `\n\nFiles (${input.files.length.toLocaleString("en-US")}${shown.length < input.files.length ? `, shown by folder` : ""}):\n${shown.map((f) => `- ${f.name} (${tokText(Math.ceil(f.size / 4))} tokens)`).join("\n")}` : "";
     const ask: Msg[] = [{ role: "user", content: `The task: ${input.task}${fileList}\n\nThe person works in ${manager === "you" ? "their own AI app" : manager}.` }];
-    const r = await runChat(ask, "auto-balanced", input.signal, () => {}, "Plan", { system: SPLIT_SYSTEM, source: "plan", guess: { task: "hard_prompts", why: "splitting a task into parts", alt: "overall" }, maxOut: 3000, effort: "low" });
-    if (r.status === "stopped") throw new UserError(499, "Stopped.", "stopped");
+    const wait = splitSeconds();
+    const box = new AbortController(); // the caller's Stop, or the time running out
+    const stop = () => box.abort();
+    input.signal?.addEventListener("abort", stop, { once: true });
+    const timer = setTimeout(stop, wait * 1000);
+    let r: Awaited<ReturnType<typeof runChat>>;
+    try { r = await runChat(ask, "auto-balanced", box.signal, () => {}, "Plan", { system: SPLIT_SYSTEM, source: "plan", guess: { task: "hard_prompts", why: "splitting a task into parts", alt: "overall" }, maxOut: 3000, effort: "low" }); }
+    finally { clearTimeout(timer); input.signal?.removeEventListener("abort", stop); }
+    if (r.status === "stopped" && input.signal?.aborted) throw new UserError(499, "Stopped.", "stopped");
     split.cost = r.meta?.spent ?? r.meta?.cost ?? null;
-    if (r.status === "ok") {
+    if (r.status === "stopped") split.note = `The model took more than ${wait} second${wait === 1 ? "" : "s"} to split it, so Leanfare split it by rules.`;
+    else if (r.status === "ok") {
       split.model = r.meta?.model ? { id: r.meta.model.id, label: r.meta.model.label } : null;
       parts = readSplit(r.text, shown);
       if (parts) split.by = "model";
