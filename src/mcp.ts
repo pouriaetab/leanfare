@@ -9,6 +9,7 @@
 // open with initialize (2025-11-25 and before). No SDK: JSON-RPC over stdin and
 // stdout, one message per line; anything for a person goes to stderr.
 import { VERSION } from "./config";
+import { OFF_TEXT, switchedOn } from "./switch";
 import { call } from "./client";
 import { secondsText } from "./util";
 import { reportText } from "./trialtext";
@@ -292,7 +293,11 @@ function pullLine(p: any): string {
   return p.active ? `${p.name}: ${String(p.step).toLowerCase()}${at}.` : p.message ?? `${p.name}: ${p.status}.`;
 }
 
+// The tools that hand work over. While Leanfare is switched off (switch.ts) each says so, and the app does it itself.
+const HANDS_OVER = new Set(["plan", "plan_run", "ask", "delegate"]);
+
 async function runTool(name: string, args: any, signal: AbortSignal): Promise<any> {
+  if ((HANDS_OVER.has(name) || (name === "trial" && args?.action === "start")) && !switchedOn()) return text(OFF_TEXT, { off: true });
   if (name === "grade") {
     if (!["good", "partly", "wrong"].includes(args?.verdict)) return failure("grade needs a verdict: good, partly or wrong.");
     const body = typeof args.id === "string" && Number.isInteger(args.part) ? { id: args.id, part: args.part, verdict: args.verdict }
@@ -335,9 +340,13 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
         requestedSchema: { type: "object", properties: { run: { type: "boolean", title: "Run the paid parts", description: `About ${usd(v.asks.estimate)}, within your monthly budget in Leanfare.`, default: false } }, required: ["run"] },
       }, {
         // A yes after the tool stopped waiting: the person said yes to these parts, so they run (once: a run that has them going is left as it is).
-        late: (r) => { if (yesTo(r)) call("/api/plan/run", { method: "POST", json: { id: args.id, paid: true } }, new AbortController().signal).catch(() => {}); },
+        // Not once Leanfare is switched off: the yes was for a Leanfare that was on.
+        late: (r) => { if (yesTo(r) && switchedOn()) call("/api/plan/run", { method: "POST", json: { id: args.id, paid: true } }, new AbortController().signal).catch(() => {}); },
       });
-      if (yesTo(a)) ({ j: v } = await call("/api/plan/run", { method: "POST", json: { id: args.id, paid: true } }, signal));
+      if (yesTo(a)) {
+        if (!switchedOn()) return text(OFF_TEXT, { off: true }); // switched off while the question was open
+        ({ j: v } = await call("/api/plan/run", { method: "POST", json: { id: args.id, paid: true } }, signal));
+      }
     }
     return text(statusText(v, null), { id: v.id, running: v.running, parts: v.parts.map((r: any) => ({ n: r.n, status: r.status })), asks: v.asks });
   }
