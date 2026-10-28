@@ -30,6 +30,7 @@ import { chargeOf, plan as route, runChat, usableModels } from "./engine";
 import { addGrade, movedDown, standing, standingText, type GradedKind, type Verdict } from "./grades";
 import { gb, suggestLocal } from "./local";
 import { passedLocal } from "./localpass";
+import { modelOn, platformOn } from "./platforms";
 import { planView, windowsNow } from "./plans";
 import { DELEGATE_LIMITS, readForDelegate, sizesForPlan, PLAN_FILES } from "./readfiles";
 import { guessTask, pickModel, type Msg } from "./router";
@@ -283,7 +284,7 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
   const stay = (why: string): Part => ({ ...part, where: "you", model: null, use: modelInYourApp(part, manager), seconds: null, tokens: r.tokens + OUT_YOU, cost: null, why });
   // Reading, drafting and working out can run on your ChatGPT plan through Codex, before anything paid.
   // Codex moved down by the manager's grades for this kind takes only a part no model can take.
-  const codexCan = codex && !!DELEGATE_KIND[part.kind];
+  const codexCan = codex && platformOn("chatgpt") && !!DELEGATE_KIND[part.kind];
   const viaCodex = codexCan && !movedDown(CODEX_ID, part.kind);
   if (part.kind === "code") return stay(`it changes the project, which only ${manager} can do`);
   if (part.kind === "act") return stay(`it needs ${manager}'s own tools`);
@@ -291,10 +292,13 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
   if (big && !near) return stay(`high effort judgement: your strongest model, in your plan`);
   const need = Math.ceil((r.tokens * 4) / 3) + DEFAULT_MAX_OUT; // as delegate counts it: three characters a token, and the answer
   const fits = (m: Model) => fitsText(m, r.tokens * 4, DEFAULT_MAX_OUT);
-  const kindOk = part.kind === "search" ? (m: Model) => m.provider === "perplexity" && fits(m) : fits; // a search goes to a model that searches the web
+  const kindOk = part.kind === "search" ? (m: Model) => m.provider === "perplexity" && fits(m) && modelOn(m) : (m: Model) => fits(m) && modelOn(m); // a search goes to a model that searches the web; a platform turned off takes nothing
+  const offWhy = usableModels(part.kind === "search" ? (m) => m.provider === "perplexity" && fits(m) : fits).length && !usableModels(kindOk).length
+    ? "the platforms that could take it are turned off for plans and the delegate (Settings, Where Leanfare may send work)" : null;
   // A model the manager's grades moved down for this kind is skipped, while another can take the part.
   const graded = (m: Model) => kindOk(m) && !movedDown(m.id, part.kind);
   const only = usableModels(graded).length ? graded : kindOk;
+  if (part.kind === "search" && offWhy) return stay(`it searches the web, and ${offWhy}`);
   if (part.kind === "search" && !usableModels((m) => m.provider === "perplexity").length) return stay(`it searches the web, which ${manager === "you" ? "your app" : manager} can do; no model you ticked in Leanfare does (tick Perplexity Sonar to send searches out)`);
   const messages: Msg[] = [{ role: "user", content: part.task }];
   const kind = DELEGATE_KIND[part.kind] ?? null;
@@ -311,7 +315,7 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
   }
   try {
     const p = await route({ source: "chat", asked: `auto-${TIER[part.effort]}`, messages, tokens: r.tokens, maxOut: null, signal, dry: true, effort: part.effort,
-      guess: part.kind === "search" ? { task: "overall", why: "a web search", alt: null } : taskFor(kind, messages), only, onlyWhy: `none of the models you ticked can take this much text (about ${tokText(need)} tokens with the answer)`, ledgerSource: "delegate" });
+      guess: part.kind === "search" ? { task: "overall", why: "a web search", alt: null } : taskFor(kind, messages), only, onlyWhy: offWhy ?? `none of the models you ticked can take this much text (about ${tokText(need)} tokens with the answer)`, ledgerSource: "delegate" });
     const where = whereOf(p.model, p.estimate);
     if (where === "paid" && viaCodex) return onCodex(part, r, `your ChatGPT plan through Codex, not pay per use${near && big ? ` (your plan is near its limit: ${near})` : ""}; Codex reads ${r.named ? "the files itself" : "what the task says"}, read only`);
     const why = (near && big ? `your plan is near its limit (${near}), so this goes out too` : where === "local" ? "reading and drafting go out: on this computer, $0"
@@ -482,7 +486,7 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
     input.signal?.addEventListener("abort", stop, { once: true });
     const timer = setTimeout(stop, wait * 1000);
     let r: Awaited<ReturnType<typeof runChat>>;
-    try { r = await runChat(ask, "auto-balanced", box.signal, () => {}, "Plan", { system: SPLIT_SYSTEM, source: "plan", guess: { task: "hard_prompts", why: "splitting a task into parts", alt: "overall" }, maxOut: 3000, effort: "low" }); }
+    try { r = await runChat(ask, "auto-balanced", box.signal, () => {}, "Plan", { system: SPLIT_SYSTEM, source: "plan", guess: { task: "hard_prompts", why: "splitting a task into parts", alt: "overall" }, maxOut: 3000, effort: "low", only: modelOn }); }
     finally { clearTimeout(timer); input.signal?.removeEventListener("abort", stop); }
     if (r.status === "stopped" && input.signal?.aborted) throw new UserError(499, "Stopped.", "stopped");
     split.cost = r.meta?.spent ?? r.meta?.cost ?? null;
@@ -668,6 +672,7 @@ async function runPart(p: Part, plan: PlanResult, at: (n: number) => RunPart, si
   const context = p.task.includes(CONTEXT) ? "" : `\n\n${CONTEXT} ${plan.task.slice(0, 4000)}`; // a part split by rules carries it already
   const task = `${p.task}${before.length ? `\n\nWhat the earlier parts found:\n\n${before.join("\n\n")}` : ""}${context}`;
   if (p.where === "codex") {
+    if (!platformOn("chatgpt")) throw Object.assign(new UserError(409, "This part was to run on Codex, but ChatGPT is turned off for plans now (Settings, Where Leanfare may send work). Make the plan again to place it elsewhere.", "codex_off"), { spent: 0 });
     // The switch in Settings and the ChatGPT plan's limits hold when the part runs, not only when the plan was made.
     const ok = await codexFor(plan.manager);
     if (!ok.ok) throw Object.assign(new UserError(409, `This part was to run on Codex, but ${ok.why ?? "Codex is off in Settings now"}. Make the plan again to place it elsewhere.`, "codex_off"), { spent: 0 });

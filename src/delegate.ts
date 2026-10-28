@@ -21,6 +21,7 @@ import { parseSpeed, secondsText, type SpeedChoice } from "./speed";
 import { TASKS, fitsText, getModel, isRetired, type Model } from "./data";
 import { db } from "./db";
 import { passedLocal } from "./localpass";
+import { modelOn } from "./platforms";
 import { movedDown } from "./grades";
 import { plan, runChat, usableModels, type ChatOptions } from "./engine";
 import { DELEGATE_LIMITS, type DelegateFile } from "./readfiles";
@@ -307,7 +308,10 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
 
   const doFit = fit(prompt.length + system.length, input.maxOut);
   const limit = input.only;
-  const kept = (ok: (m: Model) => boolean) => (limit ? (m: Model) => ok(m) && limit(m) : ok);
+  // The platforms turned off for plans and the delegate are left out (platforms.ts); not for the test of one
+  // named model on this computer, which you asked for by name.
+  const on = input.trial && input.model ? () => true : modelOn;
+  const kept = (ok: (m: Model) => boolean) => (m: Model) => ok(m) && on(m) && (!limit || limit(m));
   // A model the manager's grades moved down for this kind is skipped, while another can take it (grades.ts).
   const within = (ok: (m: Model) => boolean) => {
     const base = kept(ok);
@@ -319,6 +323,9 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   // longer take it here, or cannot answer now (busy, rate limited, down), Auto picks another within the same
   // limits (a free part stays free), and the receipt says which and why.
   const asked = `auto-${TIER[input.effort]}`;
+  // Every model that could take it is on a platform turned off: said so, not as too much text.
+  if (!usableModels(within(doFit.ok)).length && usableModels((m) => doFit.ok(m) && (!limit || limit(m))).length)
+    throw Object.assign(new UserError(409, "The models that could take it are on platforms turned off for plans and the delegate (Settings, Where Leanfare may send work). Turn one on there, or do it yourself.", "platform_off"), { spent: 0 });
   const opts: ChatOptions = { system, source, guess, only: within(doFit.ok), onlyWhy: tooMuch(doFit.need), effort: input.effort, maxOut: input.maxOut, speed: input.speed };
   // Reading at low or medium effort goes first to a model on this computer that passed its test here
   // (localpass.ts), when nothing is named and Auto is to be the cheapest: it is free.
