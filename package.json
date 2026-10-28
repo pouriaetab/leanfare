@@ -1,6 +1,6 @@
 {
   "name": "leanfare",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Makes the AI apps you already use cost less: it works inside them and hands simple work, like reading files and drafting, to cheaper or free models.",
   "license": "MIT",
   "type": "module",

@@ -7,7 +7,7 @@ import { mkdirSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { CATALOG_FILE } from "./assets";
 
-export const VERSION = "0.7.0";
+export const VERSION = "0.8.0";
 export const BUN_TESTED = "1.4"; // the Bun minor version this release is tested on
 export const HOST = "127.0.0.1";
 export const PORT = Number(process.env.LEANFARE_PORT ?? 4747);
