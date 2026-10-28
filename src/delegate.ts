@@ -20,11 +20,12 @@
 import { parseSpeed, secondsText, type SpeedChoice } from "./speed";
 import { TASKS, fitsText, getModel, isRetired, type Model } from "./data";
 import { db } from "./db";
+import { passedLocal } from "./localpass";
 import { movedDown } from "./grades";
 import { plan, runChat, usableModels, type ChatOptions } from "./engine";
 import { DELEGATE_LIMITS, type DelegateFile } from "./readfiles";
 import { guessTask, rating, type Guess, type Msg } from "./router";
-import type { Mode } from "./settings";
+import { settings, type Mode } from "./settings";
 import { UserError } from "./upstream";
 import { localDay, localMonth, now, randomId } from "./util";
 
@@ -319,7 +320,10 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   // limits (a free part stays free), and the receipt says which and why.
   const asked = `auto-${TIER[input.effort]}`;
   const opts: ChatOptions = { system, source, guess, only: within(doFit.ok), onlyWhy: tooMuch(doFit.need), effort: input.effort, maxOut: input.maxOut, speed: input.speed };
-  const named = input.model ? getModel(input.model) ?? null : null;
+  // Reading at low or medium effort goes first to a model on this computer that passed its test here
+  // (localpass.ts), when nothing is named and Auto is to be the cheapest: it is free.
+  const local = !input.model && !input.trial && input.kind === "read" && input.effort !== "high" && (input.speed ?? settings().speed) === "cheapest" ? passedLocal(within(doFit.ok)) : null;
+  const named = input.model ? getModel(input.model) ?? null : local;
   const namedOk = !!named && usableModels(within(doFit.ok)).some((m) => m.id === named.id);
   let swap: string | null = input.model && !namedOk ? `The plan named ${named?.label ?? input.model}, which cannot take it here now, so Auto picked another.` : null;
   let first = await run(messages, namedOk ? named!.id : asked, "Delegate", opts);
@@ -328,7 +332,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     tried.push(first.cost);
     const why = (first.error?.message ?? "it failed").replace(/\.$/, "");
     const other = await run(messages, asked, "Delegate", { ...opts, only: within((m) => doFit.ok(m) && m.id !== named!.id) });
-    if (other.status === "ok") { swap = `The plan named ${named!.label}, which could not answer (${why}), so ${other.meta.model.label} answered.`; first = other; }
+    if (other.status === "ok") { swap = local ? `${named!.label}, on this computer, could not answer (${why}), so ${other.meta.model.label} answered.` : `The plan named ${named!.label}, which could not answer (${why}), so ${other.meta.model.label} answered.`; first = other; }
     else if (other.status === "stopped") first = other;
   }
   if (first.status !== "ok") {
