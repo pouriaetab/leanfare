@@ -2397,7 +2397,7 @@
     const lock = st.lock ?? { on: false, key: null };
     const curl = `curl ${addr}/v1/chat/completions -H "content-type: application/json"${lock.on ? ` -H "authorization: Bearer ${lock.key}"` : ""} -d '{"model":"auto","messages":[{"role":"user","content":"Hello"}]}'`;
     const d = st.data;
-    const theme = store.get("theme", "auto");
+    const theme = themeNow();
     const right = h("div", { class: "colR" },
       h("div", { class: "section-title", text: "In your apps" }),
       appsSettingEl(),
@@ -2452,8 +2452,9 @@
         h("p", { text: `${d.modelCount} models from llmledger's data, built ${dayLabel(d.built)} (${d.from === "built-in" ? "the copy inside this release" : "downloaded"}); ratings from ${d.ratingsDate ?? "—"}. ${d.status.state === "ok" ? `Last checked ${ago(d.status.at)}.` : d.status.state === "failed" ? `The last update failed: tried ${d.status.tried}: ${d.status.error}.` : "Checked once a day."}` }),
         h("div", { class: "row" }, runButton("Update now", (signal) => refreshList("data", signal)))),
       h("div", { class: "setting" }, h("h3", { text: "Look" }),
-        h("div", { class: "seg", role: "group", "aria-label": "Theme" }, ...[["auto", "Match my computer"], ["light", "Light"], ["dark", "Dark"]].map(([k, label]) =>
-          h("button", { type: "button", "aria-pressed": String(theme === k), text: label, onclick: () => { store.set("theme", k); applyTheme(); renderSettings(); } })))),
+        h("div", { class: "seg", role: "group", "aria-label": "Theme" }, ...[["light", "Day"], ["auto", "Auto"], ["dark", "Night"]].map(([k, label]) =>
+          h("button", { type: "button", "aria-pressed": String(theme === k), text: label, onclick: () => pickTheme(k) }))),
+        h("p", { class: "fine", text: "Auto is day from 7 AM to 7 PM by this computer's clock." })),
       h("p", { class: "fine" }, `Leanfare ${st.version} · Bun ${st.bun}${st.bun.startsWith(st.bunTested + ".") ? "" : ` (tested on ${st.bunTested}.x)`} · keys in ${st.keyStore}. Prices: LiteLLM's price list (MIT) via llmledger (MIT)${st.settings.providers.openrouter?.on ? " and OpenRouter's model list" : ""}. Ratings: Arena leaderboard (CC BY 4.0), condensed to each model's best rating per task. Not affiliated with any AI provider.`));
     keepInputs(el, () => el.replaceChildren(left, right)); // what is typed in key boxes survives the redraw
     el.querySelector(".colL").scrollTop = scrollL;
@@ -2581,14 +2582,27 @@
   }
   for (const ev of ["wheel", "touchstart", "keydown", "mousedown"]) $("#tab-settings")?.addEventListener(ev, () => { S.focus = null; }, { passive: true });
 
+  // Day, Auto or Night (theme.js sets it before the page is drawn). Auto is day from 7 AM to 7 PM by
+  // this computer's clock, looked at again every 5 minutes and when the page comes back.
+  const THEMES = ["light", "auto", "dark"]; // the header's order: sun, clock, moon
+  const themeNow = () => { const t = store.get("theme", "auto"); return THEMES.includes(t) ? t : "auto"; };
   function applyTheme() {
-    const t = store.get("theme", "auto");
-    if (t === "auto") document.documentElement.removeAttribute("data-theme");
-    else document.documentElement.setAttribute("data-theme", t);
+    const t = themeNow();
+    const hour = new Date().getHours();
+    const shown = t === "auto" ? (hour >= 7 && hour < 19 ? "light" : "dark") : t;
+    document.documentElement.setAttribute("data-theme", shown);
+    document.querySelectorAll('meta[name="theme-color"]').forEach((m) => m.setAttribute("content", shown === "dark" ? "#16191a" : "#ffffff"));
+    document.querySelectorAll("#themeSwitch button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === t)));
   }
+  function pickTheme(t) { store.set("theme", t); applyTheme(); if (S.tab === "settings") renderSettings(); }
 
   // ---- start ----------------------------------------------------------------------------------
   applyTheme();
+  // Three buttons; on a phone only the current one shows, and a tap moves it on.
+  document.querySelectorAll("#themeSwitch button").forEach((b) => b.addEventListener("click", () =>
+    pickTheme(isPhone() ? THEMES[(THEMES.indexOf(themeNow()) + 1) % THEMES.length] : b.dataset.mode)));
+  setInterval(applyTheme, 5 * 60_000);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") applyTheme(); });
   document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => setTab(b.dataset.tab)));
   $("#spendPill").addEventListener("click", () => setTab("savings"));
   $("#pauseBtn").addEventListener("click", togglePause);

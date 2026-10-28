@@ -19,6 +19,8 @@
   --bad: #b91c1c;
   --bad-soft: #fbe9e9;
   --stop: #dc2626;
+  --on-color: #ffffff; /* text on a red or green part, in both themes */
+  --knob: #ffffff; /* the switch's knob, in both themes */
   --code-bg: #f3f3ef;
   --radius: 14px;
   --radius-sm: 9px;
@@ -32,14 +34,14 @@
     --bg: #0e1011; --panel: #16191a; --panel-2: #1d2122; --line: #272b2d; --line-strong: #343a3c;
     --text: #e8eaeb; --muted: #a1a7ab; --faint: #737a7e; --accent: #2dd4bf; --accent-ink: #062a26; --accent-soft: #123331;
     --good: #4ade80; --good-soft: #12301d; --warn: #fbbf24; --warn-soft: #33270b; --bad: #f87171; --bad-soft: #3a1515;
-    --stop: #ef4444; --code-bg: #111415; --shadow: 0 1px 2px rgba(0, 0, 0, 0.3); color-scheme: dark;
+    --stop: #ef4444; --on-color: #ffffff; --knob: #ffffff; --code-bg: #111415; --shadow: 0 1px 2px rgba(0, 0, 0, 0.3); color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #0e1011; --panel: #16191a; --panel-2: #1d2122; --line: #272b2d; --line-strong: #343a3c;
   --text: #e8eaeb; --muted: #a1a7ab; --faint: #737a7e; --accent: #2dd4bf; --accent-ink: #062a26; --accent-soft: #123331;
   --good: #4ade80; --good-soft: #12301d; --warn: #fbbf24; --warn-soft: #33270b; --bad: #f87171; --bad-soft: #3a1515;
-  --stop: #ef4444; --code-bg: #111415; --shadow: 0 1px 2px rgba(0, 0, 0, 0.3); color-scheme: dark;
+  --stop: #ef4444; --on-color: #ffffff; --knob: #ffffff; --code-bg: #111415; --shadow: 0 1px 2px rgba(0, 0, 0, 0.3); color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -72,14 +74,14 @@ a:hover { text-decoration: underline; }
 .pill.warn .bar i { background: var(--warn); }
 .pill.bad .bar i { background: var(--bad); }
 .pill.running { color: var(--text); cursor: default; }
-.pill.running button { border: 0; background: var(--stop); color: #fff; border-radius: 999px; padding: 1px 9px; cursor: pointer; font-size: 12px; }
+.pill.running button { border: 0; background: var(--stop); color: var(--on-color); border-radius: 999px; padding: 1px 9px; cursor: pointer; font-size: 12px; }
 
 /* ---- buttons and inputs ---------------------------------------------------------- */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--line-strong); background: var(--panel); border-radius: 10px; padding: 6px 13px; cursor: pointer; font-weight: 550; min-height: 34px; white-space: nowrap; }
 .btn:hover { border-color: var(--faint); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .btn.primary:hover { filter: brightness(1.06); }
-.btn.stop, .btn.primary.stop { background: var(--stop); border-color: var(--stop); color: #fff; }
+.btn.stop, .btn.primary.stop { background: var(--stop); border-color: var(--stop); color: var(--on-color); }
 .btn.amber { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
 .btn.quiet { border-color: transparent; background: none; color: var(--muted); }
 .btn.quiet:hover { color: var(--text); background: var(--panel-2); }
@@ -390,6 +392,9 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
   .tabs { order: 3; flex: 1 0 100%; }
   .tabs button { flex: 1; padding: 6px 4px; min-height: 40px; }
   .top-right { margin-left: auto; }
+  .theme-switch { background: none; padding: 0; }
+  .theme-switch button:not([aria-pressed="true"]) { display: none; }
+  .theme-switch button[aria-pressed="true"] { width: 44px; height: 44px; background: none; box-shadow: none; }
   .btn { min-height: 40px; }
   .btn.small { min-height: 36px; }
   input[type="text"], input[type="password"], input[type="number"], select, textarea { font-size: 16px; min-height: 42px; }
@@ -499,12 +504,18 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
 /* ---- the first run's Set up, and the switch at the top ------------------------------------------ */
 #app.simple .tabs, #app.simple .top-right { display: none; }
 #app.simple .top { border-bottom-color: transparent; }
+.theme-switch { flex: none; display: inline-flex; gap: 2px; padding: 2px; border-radius: 11px; background: var(--panel-2); }
+#app.simple .theme-switch { margin-left: auto; }
+.theme-switch button { width: 32px; height: 32px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 9px; background: none; color: var(--muted); cursor: pointer; }
+.theme-switch button:hover { color: var(--text); }
+.theme-switch button[aria-pressed="true"] { background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
+.theme-switch svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 /* Leanfare on or off in your apps: a labelled switch in the top bar */
 .hswitch { flex: none; display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 5px 0 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--muted); font-size: 13px; font-weight: 550; cursor: pointer; white-space: nowrap; }
 .hswitch:hover { border-color: var(--line-strong); }
 .hswitch[aria-checked="true"] { color: var(--text); }
 .hswitch .track { position: relative; display: block; width: 34px; height: 20px; border-radius: 10px; background: var(--line-strong); transition: background 0.15s; }
-.hswitch .knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 8px; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); transition: left 0.15s; }
+.hswitch .knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 8px; background: var(--knob); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); transition: left 0.15s; }
 .hswitch[aria-checked="true"] .track { background: var(--good); }
 .hswitch[aria-checked="true"] .knob { left: 16px; }
 .notice.next { align-items: flex-start; background: var(--accent-soft); color: var(--text); }

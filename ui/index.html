@@ -14,6 +14,7 @@
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="stylesheet" href="/app.css">
+<script src="/theme.js"></script>
 <script src="/app.js" defer></script>
 </head>
 <body>
@@ -34,6 +35,11 @@
       <button id="spendPill" class="pill" title="What you spent this month. Opens Savings."></button>
       <button id="appsSwitch" class="hswitch" type="button" role="switch" aria-checked="true"><span class="hs-label">In your apps</span><span class="track" aria-hidden="true"><span class="knob"></span></span></button>
       <button id="pauseBtn" class="btn" title="Pause: new requests wait until you press Start again. Answers already running finish."></button>
+    </div>
+    <div id="themeSwitch" class="theme-switch" role="group" aria-label="Theme">
+      <button type="button" data-mode="light" aria-pressed="false" aria-label="Day" title="Day"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.4"/><path d="M10 2.2v1.9M10 15.9v1.9M2.2 10h1.9M15.9 10h1.9M4.5 4.5l1.3 1.3M14.2 14.2l1.3 1.3M4.5 15.5l1.3-1.3M14.2 5.8l1.3-1.3"/></svg></button>
+      <button type="button" data-mode="auto" aria-pressed="false" aria-label="Auto: day from 7 AM to 7 PM" title="Auto: day from 7 AM to 7 PM"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M10 5.6V10l3 1.9"/></svg></button>
+      <button type="button" data-mode="dark" aria-pressed="false" aria-label="Night" title="Night"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.6 12.6A6.6 6.6 0 0 1 7.4 4.4a6.6 6.6 0 1 0 8.2 8.2z"/></svg></button>
     </div>
   </header>
   <div id="notices" aria-live="polite"></div>
