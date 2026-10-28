@@ -2,6 +2,7 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { ALL_TICKED, boot, fake, keys, reset } from "./app";
 import { forgetPlans } from "../src/planner";
+import { setSwitch } from "../src/switch";
 
 let url = "";
 let child: ReturnType<typeof Bun.spawn> | null = null;
@@ -55,4 +56,25 @@ test("a yes after the door stopped waiting still runs the paid parts", async () 
   for (let i = 0; i < 60 && st?.parts[0].status !== "done"; i++) { await Bun.sleep(50); st = (await rpc("tools/call", { name: "plan_status", arguments: { id } })).result.structuredContent; }
   expect(st.parts[0].status).toBe("done");
   expect(lines.slice(before).some((m) => m.id === question.id)).toBe(false); // the yes, a response, is never answered
+});
+
+test("a yes that comes after Leanfare was switched off runs nothing", async () => {
+  await keys("openai", "google", "deepseek");
+  fake.hooks.answer = (p) => (p.includes("The person works in") ? JSON.stringify({ parts: [{ title: "Read the logs", kind: "read", effort: "low", needs: [], size: "small", task: "Find the errors in the logs." }] }) : null);
+  await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: { elicitation: {} }, clientInfo: { name: "claude-code", version: "2.1" } });
+  const plan = await rpc("tools/call", { name: "plan", arguments: { task: "The nightly job fails: find out why" } });
+  const id = plan.result.structuredContent.id;
+  const asked = lines.length;
+  const run = await rpc("tools/call", { name: "plan_run", arguments: { id } }); // nobody answers the question in time
+  expect(run.result.structuredContent.parts[0].status).toBe("asks");
+  const question = lines.slice(asked).find((m) => m.method === "elicitation/create");
+  setSwitch(false); // then the person switches Leanfare off in the app
+  try {
+    const seen = fake.seen.length;
+    write({ jsonrpc: "2.0", id: question.id, result: { action: "accept", content: { run: true } } }); // and later says yes
+    await Bun.sleep(600);
+    const st = (await rpc("tools/call", { name: "plan_status", arguments: { id } })).result.structuredContent;
+    expect(st.parts[0].status).toBe("asks");
+    expect(fake.seen.length).toBe(seen);
+  } finally { setSwitch(true); }
 });

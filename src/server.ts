@@ -23,8 +23,9 @@ import { GRADED_KINDS, VERDICTS, addGrade, giveAnotherChance, standing, standing
 import { plansBrief, plansView } from "./plans";
 import { meterViews, setStatusline } from "./meter";
 import { checkDelegate, runDelegate } from "./delegate";
-import { checkPlan, gradePart, makePlan, runView, startRun, stopRun } from "./planner";
+import { checkPlan, gradePart, makePlan, runView, startRun, stopAllRuns, stopRun } from "./planner";
 import { setAuto } from "./workers";
+import { OFF_TEXT, OFF_TRIAL, setSwitch, switchedOn } from "./switch";
 import { retirementNotices } from "./retire";
 import { savings } from "./savings";
 import { checkKey, effortLevels, UserError } from "./upstream";
@@ -35,7 +36,7 @@ import { clearCookie, controlOk, engineAllowed, keyOk, locked, newAccessKey, pag
 import { chargeOf, errorResponse, handleAnthropic, handleOpenAI, idle, pauseState, plan, planView, providerReady, runChat, runningList, setPaused, stopRunning, usableModels, usualModel } from "./engine";
 import { guessTask } from "./router";
 import { parseSpeed } from "./speed";
-import { startTrial, stopTrial, trialView } from "./trial";
+import { startTrial, stopTrial, trialRunning, trialView } from "./trial";
 import { updateNotice } from "./update";
 import { dollars, localDay, now, randomId, redact } from "./util";
 
@@ -43,6 +44,12 @@ const EFFORTS = ["auto", "low", "medium", "high"];
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...headers } });
 const fail = (status: number, message: string) => json({ error: message }, status);
+
+// While Leanfare is switched off (switch.ts), work handed over by another process is refused here too:
+// an app's door (an older copy's door does not know the switch), a yes that came after the switch went
+// off, and leanfare trial. They all hold the control token; the page's own buttons and your scripts do
+// not, so they still work.
+const offForApps = (req: Request) => !switchedOn() && controlOk(req, controlToken);
 
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 const STATIC: Record<string, [string, string]> = {
@@ -124,6 +131,7 @@ export function state() {
     usual: usual ? { id: usual.id, label: usual.label } : null,
     readyCount: ready.length,
     usableCount: usableModels().length,
+    switchOn: switchedOn(), // Leanfare in your apps, on or off (switch.ts)
     budget: b,
     month: (() => { const v = savings(); return { spent: v.spent, today: v.today, answers: v.answers }; })(),
     notices,
@@ -371,6 +379,16 @@ async function api(req: Request, url: URL): Promise<Response> {
   const m = req.method;
   if (p === "/api/state" && m === "GET") return json(state());
   if (p === "/api/summary" && m === "GET") return json(summary());
+  // The one switch for Leanfare in your apps (switch.ts).
+  if (p === "/api/switch" && m === "POST") {
+    const b = await readBody(req);
+    if (typeof b?.on !== "boolean") return fail(400, "on must be true or false");
+    setSwitch(b.on);
+    // Off stops what is already going too: the parts of running plans, and the trial.
+    const stopped = { plans: 0, trial: false };
+    if (!b.on) { stopped.plans = stopAllRuns(); stopped.trial = trialRunning(); await stopTrial(); }
+    return json({ on: switchedOn(), stopped });
+  }
   if (p === "/api/chat" && m === "POST") return chatRoute(req, await readBody(req));
   if (p === "/api/settings" && m === "POST") {
     const v = validatePatch(await readBody(req));
@@ -559,23 +577,25 @@ async function api(req: Request, url: URL): Promise<Response> {
   }
   // Claude's delegate (see delegate.ts): a task and its files, handed over by the MCP door.
   if (p === "/api/delegate" && m === "POST") {
+    if (offForApps(req)) return fail(409, OFF_TEXT);
     const v = checkDelegate(await readBody(req));
     if (typeof v === "string") return fail(400, v);
     return json(await runDelegate(v, req.signal));
   }
   // The plan (planner.ts): a task split into parts, each with where it runs and on which model.
   if (p === "/api/plan" && m === "POST") {
+    if (offForApps(req)) return fail(409, OFF_TEXT);
     // The MCP door holds the control token: it measured the files itself and says where each is.
     const v = checkPlan(await readBody(req), controlOk(req, controlToken));
     if (typeof v === "string") return fail(400, v);
     return json(await makePlan({ ...v, signal: req.signal }));
   }
-  if (p === "/api/plan/run" && m === "POST") { const b = await readBody(req); return json(startRun(String(b?.id ?? ""), { paid: b?.paid === true || b?.paid === "yes" })); }
+  if (p === "/api/plan/run" && m === "POST") { if (offForApps(req)) return fail(409, OFF_TEXT); const b = await readBody(req); return json(startRun(String(b?.id ?? ""), { paid: b?.paid === true || b?.paid === "yes" })); }
   if (p === "/api/plan/run" && m === "GET") { const v = runView(url.searchParams.get("id") ?? ""); return v ? json(v) : fail(404, "No run of that plan."); }
   if (p === "/api/plan/stop" && m === "POST") { const b = await readBody(req); const v = stopRun(String(b?.id ?? "")); return v ? json(v) : fail(404, "No run of that plan."); }
   // The delegate trial (trial.ts): its estimate and last report, start, stop.
   if (p === "/api/trial" && m === "GET") return json(await trialView(req.signal));
-  if (p === "/api/trial/start" && m === "POST") { startTrial(); return json(await trialView(req.signal, false)); }
+  if (p === "/api/trial/start" && m === "POST") { if (offForApps(req)) return fail(409, OFF_TRIAL); startTrial(); return json(await trialView(req.signal, false)); }
   if (p === "/api/trial/stop" && m === "POST") { await stopTrial(); return json(await trialView(req.signal)); }
   if (p === "/api/estimate" && m === "POST") {
     const b = await readBody(req);
@@ -752,6 +772,11 @@ export async function handle(req: Request, server: { timeout(r: Request, s: numb
     }
     server?.timeout(req, 0); // answers can take minutes; no idle cut-off
     let res: Response;
+    if ((url.pathname === "/v1/chat/completions" || url.pathname === "/v1/messages") && req.method === "POST" && offForApps(req)) {
+      res = url.pathname === "/v1/messages" ? json({ type: "error", error: { type: "leanfare_off", message: OFF_TEXT } }, 409) : json({ error: { message: OFF_TEXT, type: "leanfare_off" } }, 409);
+      for (const [k, v] of Object.entries(cors)) res.headers.set(k, v);
+      return res;
+    }
     try {
       if (url.pathname === "/v1/models" && req.method === "GET") res = json(v1Models());
       else if (url.pathname === "/v1/chat/completions" && req.method === "POST") res = await handleOpenAI(req, await readBody(req));
@@ -768,7 +793,7 @@ export async function handle(req: Request, server: { timeout(r: Request, s: numb
     if (url.pathname !== "/api/control/stop" && req.headers.get("x-leanfare") !== "1") return fail(403, "Missing the x-leanfare header.");
     if (url.pathname !== "/api/unlock" && !url.pathname.startsWith("/api/control/") && !pageAllowed(req, controlToken)) return json({ error: "Leanfare is locked. Paste its access key to open it.", locked: true }, 401);
     // Requests that can wait a long time on providers or other programs: no idle cut-off.
-    if (["/api/chat", "/api/delegate", "/api/plan", "/api/keys", "/api/refresh", "/api/import", "/api/keys/import", "/api/keys/recognize", "/api/keys/found", "/api/providers/custom", "/api/providers/registry", "/api/apps", "/api/trial/stop"].includes(url.pathname)) server?.timeout(req, 0);
+    if (["/api/chat", "/api/delegate", "/api/plan", "/api/keys", "/api/refresh", "/api/import", "/api/keys/import", "/api/keys/recognize", "/api/keys/found", "/api/providers/custom", "/api/providers/registry", "/api/apps", "/api/switch", "/api/trial/stop"].includes(url.pathname)) server?.timeout(req, 0);
     try { return await api(req, url); }
     catch (e: any) { return fail(e instanceof UserError ? e.status : 500, e instanceof UserError ? e.message : `Leanfare hit an unexpected problem: ${String(e?.message ?? e)}`); }
   }

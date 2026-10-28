@@ -623,6 +623,13 @@ export function startRun(id: string, opts: { paid?: boolean } = {}): RunView {
   return view;
 }
 
+// Leanfare switched off (switch.ts): every running plan stops, as plan_stop stops one. Returns how many.
+export function stopAllRuns(): number {
+  let n = 0;
+  for (const [id, r] of runs) if (r.view.running && !r.ac.signal.aborted) { stopRun(id); n++; }
+  return n;
+}
+
 export function stopRun(id: string): RunView | null {
   const r = runs.get(id);
   if (!r) return null;

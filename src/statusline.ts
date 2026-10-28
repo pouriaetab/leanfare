@@ -12,6 +12,7 @@ import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "./config";
+import { switchedOn } from "./switch";
 
 export interface Win { used: number; resets: number | null } // percent used, 0 to 100; when it resets, epoch ms
 export interface Snap { at: number; five: Win | null; week: Win | null }
@@ -169,6 +170,7 @@ export function runTheirs(cmd: string, input: string, ms = 2000): Promise<string
 // Claude Code's prompt hook (workers.ts adds it): what Claude is told as each prompt goes, as a fact,
 // numbers only (the prompt is never read), from the status line's last reading.
 export function hookLine(at = clock()): string {
+  if (!switchedOn()) return ""; // switched off: Claude is told nothing about Leanfare
   const s = lastSnap();
   const live = (w: { used: number; resets: number | null } | null | undefined) => (w && (w.resets === null || w.resets > at) ? Math.round(w.used) : null);
   const five = live(s?.five), week = live(s?.week);

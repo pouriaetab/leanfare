@@ -61,7 +61,7 @@ export const PLAN_APP_HTML = `<!doctype html>
   const secs = (s) => (s === null || s === undefined ? "" : s < 90 ? "~" + Math.max(1, Math.round(s)) + " s" : "~" + Math.round(s / 60) + " min");
   const RUNS = { you: "you", local: "Leanfare, this computer", free: "Leanfare, free", paid: "Leanfare, pay per use", codex: "Leanfare, through Codex" };
   const NOW = { waiting: "waiting", running: "running…", done: "done", failed: "failed", stopped: "stopped", yours: "yours", after_yours: "after yours", blocked: "waits", asks: "waits for a yes" };
-  let plan = null, run = null, timer = null;
+  let plan = null, run = null, timer = null, off = null; // off: what Leanfare said when it was switched off
   // When every part stays with you: what would send some out (as the planner says it).
   const nothingOut = (parts) => {
     const hints = [parts.some((p) => p.kind === "search" && p.runs_on === "you") ? "tick Perplexity Sonar in Leanfare and the searches go out" : "",
@@ -104,7 +104,8 @@ export const PLAN_APP_HTML = `<!doctype html>
         going ? el("button", { id: "stop", onclick: stop, text: "Stop" }) : null,
         run && !going && run.parts.some((p) => p.answer) ? el("button", { id: "back", onclick: handBack, text: "Hand the answers to Claude" }) : null,
         el("span", { class: "muted", text: going ? "Leanfare runs its parts on your computer; this updates as they finish." : "" })),
-    ];
+      off ? el("p", { class: "bad", text: off }) : null,
+    ].filter(Boolean); // replaceChildren would print a left out part as the word null
     if (run) for (const p of run.parts.filter((x) => x.answer || x.error)) kids.push(el("details", {}, el("summary", { text: "Part " + p.n + " · " + p.title + " · " + (NOW[p.status] || p.status) + (p.model ? " · " + p.model : "") }), p.answer ? el("pre", { text: p.answer }) : null, p.error ? el("p", { class: "bad", text: p.error }) : null));
     if (later.length) kids.push(el("p", { class: "muted", text: (later.length === 1 ? "Part " + later[0] + " waits" : "Parts " + later.join(", ") + " wait") + " for yours: once yours are done, Claude hands " + (later.length === 1 ? "it" : "them") + " to Leanfare." }));
     if (run && run.asks) kids.push(el("p", { class: "bad", text: "Parts " + run.asks.parts.join(", ") + " are paid and wait for a yes: press Run to say yes." }));
@@ -114,7 +115,11 @@ export const PLAN_APP_HTML = `<!doctype html>
   async function start() {
     try {
       const r = await request("tools/call", { name: "plan_run", arguments: { id: plan.id, paid: "yes" } }); // pressing Run is the yes for the paid parts shown on it
-      run = r && r.structuredContent ? { ...r.structuredContent, parts: r.structuredContent.parts } : run;
+      const sc = r && r.structuredContent;
+      // Switched off in the Leanfare app: nothing ran. Say so, and keep the plan as it was.
+      if (sc && sc.off) { off = (r.content && r.content[0] && r.content[0].text) || "Leanfare is switched off, so nothing ran."; draw(); return; }
+      off = null;
+      run = sc && Array.isArray(sc.parts) ? { ...sc, parts: sc.parts } : run;
       draw(); follow();
     } catch (e) { shout(e); }
   }

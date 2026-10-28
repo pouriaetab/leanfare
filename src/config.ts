@@ -33,6 +33,7 @@ export const paths = {
   openrouter: join(DATA_DIR, "openrouter-models.json"),
   pid: join(DATA_DIR, "leanfare.pid"),
   token: join(DATA_DIR, "control.token"),
+  off: join(DATA_DIR, "off"), // there while Leanfare is switched off (switch.ts): its tools in your apps hand nothing over
 };
 
 // Built-in providers, the model apps Leanfare finds running on this computer, and providers

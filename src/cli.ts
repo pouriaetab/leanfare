@@ -288,7 +288,7 @@ else if (command === "mcp") { const { runMcp } = await import("./mcp"); await ru
 else if (command === "statusline") { const { runStatusline } = await import("./statusline"); await runStatusline(args); }
 // Claude Code's prompt hook (Settings, In your apps, Plan by itself): one line of numbers for Claude, never
 // the prompt. It must never get in the way: anything that goes wrong prints nothing.
-else if (command === "hook") { try { const { hookLine } = await import("./statusline"); if (args.includes("prompt")) console.log(hookLine()); } catch {} process.exit(0); }
+else if (command === "hook") { try { const { hookLine } = await import("./statusline"); if (args.includes("prompt")) { const line = hookLine(); if (line) console.log(line); } } catch {} process.exit(0); }
 else if (command === "apps") await apps();
 else if (command === "trial") await trial();
 else { console.error(`Unknown command "${command}".\n\n${HELP}`); process.exit(2); }

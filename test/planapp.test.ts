@@ -4,6 +4,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { APP_PROTOCOL, PLAN_APP_HTML } from "../src/planapp";
+import { OFF_TEXT } from "../src/switch";
 
 let win: any = null;
 afterEach(async () => { try { await win?.happyDOM?.abort(); win?.close(); } catch {} win = null; });
@@ -102,6 +103,24 @@ describe("the plan inside the chat (an MCP App)", () => {
     push("ui/notifications/tool-result", { content: [{ type: "text", text: "plan needs a task." }], isError: true });
     await until(() => doc.body.textContent.includes("plan needs a task."));
     expect(doc.body.textContent).toContain("plan needs a task.");
+  });
+
+  test("Run while Leanfare is switched off: the page says so, keeps the plan, and asks for nothing more", async () => {
+    const { doc, sent, push } = open((m) => {
+      if (m.method === "ui/initialize") return { hostContext: {} };
+      // What the door answers to plan_run while Leanfare is off (mcp.ts runTool).
+      if (m.method === "tools/call" && m.params.name === "plan_run") return { content: [{ type: "text", text: OFF_TEXT }], structuredContent: { off: true } };
+    });
+    await until(() => sent.some((m) => m.method === "ui/notifications/initialized"));
+    push("ui/notifications/tool-result", { structuredContent: PLAN });
+    await until(() => !!doc.querySelector("#run"));
+    expect(doc.body.textContent).not.toContain("null"); // no local model suggestion: nothing in its place
+    doc.querySelector("#run").click();
+    await until(() => doc.body.textContent.includes("switched off"));
+    expect(doc.body.textContent).toContain(OFF_TEXT);
+    expect(doc.body.textContent).not.toContain("Cannot read");
+    expect(doc.querySelector("#run")).not.toBeNull(); // Run is still there for when it is on again
+    expect(sent.some((m) => m.params?.name === "plan_status")).toBe(false);
   });
 
   test("the page loads nothing from outside: no script, style or font addresses", () => {
