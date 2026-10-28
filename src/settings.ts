@@ -45,6 +45,7 @@ export interface Settings {
   planAuto: number; // a plan's paid parts run without asking while their estimate is at most this many US dollars (0: always ask)
   codexPlan: boolean; // a plan's reading, drafting and working out parts may run on your ChatGPT plan through Codex (codex.ts); off until you turn it on
   setupDone: boolean; // the first run's Set up was done (setup.ts); until then the app opens on it
+  appsOff: string[]; // platforms plans and the delegate leave out (platforms.ts): provider ids, "chatgpt" (OpenAI and Codex), "local"
 }
 
 export const DEFAULTS: Settings = {
@@ -70,6 +71,7 @@ export const DEFAULTS: Settings = {
   planAuto: 0,
   codexPlan: false,
   setupDone: false,
+  appsOff: [],
 };
 
 // What a short answer is, given to the chat screen's models before the chat's own instructions

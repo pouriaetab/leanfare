@@ -367,7 +367,7 @@
       const screen = $("#tab-" + S.tab);
       if (busyIn(screen) && S.tab !== "chat") { S.redrawLater = true; return; }
       S.redrawLater = false;
-      if (S.tab === "settings") renderSettings();
+      if (S.tab === "settings") { renderSettings(); loadPlatforms(); } // a key or a provider changed: so may where work can go
       if (S.tab === "chat") { renderComposerBar(); if (!S.messages.length && !busyIn($("#messages"))) renderMessages(); }
     } catch (e) {
       if (!e?.locked) renderOffline(e);
@@ -452,7 +452,7 @@
     if (t === "setup") { S.setup = null; S.setupError = null; renderSetup(); }
     if (t === "chat") renderChat();
     if (t === "savings") loadSavings();
-    if (t === "settings") { renderSettings(); loadLocal(); }
+    if (t === "settings") { renderSettings(); loadLocal(); loadPlatforms(); } // a plan's limits change while you are away
     if (t === "plan") renderPlan();
   }
 
@@ -2107,6 +2107,7 @@
       S.st = await api("/api/settings", { body: patch });
       if ("plans" in patch) S.plans = null; // the Savings card is read again with the new plan
       if ("showValue" in patch && S.savings) { S.plans = null; renderSavings(); loadPlans(false).catch(() => {}); }
+      if ("codexPlan" in patch) loadPlatforms();
       followDefault(before);
       renderShell(); renderSettings(); renderComposerBar();
       if (done) toast(done, "done");
@@ -2368,6 +2369,37 @@
       h("p", { text: `When Claude Code or another app runs Leanfare's parts of a plan (plan_run), parts on local and free models run at once. Paid parts run without asking while they come to at most ${money(s.planAuto || 0)} a plan; above that, Leanfare asks you first (in Claude Code, a question in Claude Code). Your monthly budget holds either way.` }));
   }
 
+  // ---- Where Leanfare may send work (Settings) --------------------------------------------------------
+  // Each platform on or off for plans and the delegate, and what is left before its nearest limit (platforms.ts).
+  async function loadPlatforms() { try { S.platforms = await api("/api/platforms"); } catch { S.platforms = { rows: [] }; } renderSettings(); }
+  function resetsText(iso) {
+    const d = new Date(iso), t = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    return d.toDateString() === new Date().toDateString() ? t : `${d.toLocaleDateString(undefined, { weekday: "short" })} ${t}`;
+  }
+  const windowText = (w) => `${w.kind}: ${w.left}% left${w.tokensLeft ? ` (about ${tokShort(w.tokensLeft)} tokens)` : ""}${w.resets ? `, resets ${resetsText(w.resets)}` : ""}`;
+  function platformsSettingEl() {
+    if (S.platforms === undefined) { S.platforms = null; loadPlatforms(); }
+    const P = S.platforms;
+    const card = h("div", { class: "setting", id: "platformsSetting" }, h("h3", { text: "Where Leanfare may send work" }));
+    if (!P) { card.append(h("p", { class: "note", text: "Reading your plans' limits…" })); return card; }
+    for (const r of P.rows) {
+      const sw = r.ready ? h("button", { class: "hswitch", type: "button", role: "switch", "aria-checked": String(r.on), "aria-label": `${r.label} for plans and the delegate`, onclick: () => setPlatform(r.id, !r.on) },
+        h("span", { class: "hs-label", text: r.on ? "Use" : "Off" }), h("span", { class: "track", "aria-hidden": "true" }, h("span", { class: "knob" }))) : null;
+      const lims = r.windows.length ? `${r.windows.map(windowText).join(" · ")}${r.source ? ` (${r.source})` : ""}` : null;
+      card.append(h("div", { class: "prow" + (r.ready ? "" : " off") },
+        h("div", { class: "pinfo" }, h("div", { class: "pname", text: r.label }),
+          lims ? h("div", { class: "note lim", text: lims }) : null,
+          r.limit ? h("div", { class: "note", text: r.limit }) : null,
+          r.needs ? h("div", { class: "note", text: r.needs }) : null),
+        sw ?? h("span", {})));
+    }
+    card.append(h("p", { class: "fine", text: "The nearest limit shows first: the 5 hours before the week. A plan's numbers come only from its own app (Claude Code's status line, Codex's log files). Off: plans and the delegate leave that one out; the chat uses the models you ticked." }));
+    return card;
+  }
+  async function setPlatform(id, on) {
+    try { S.platforms = await api("/api/platforms", { body: { id, on } }); renderSettings(); toast(on ? "Plans and the delegate can use it again." : "Plans and the delegate leave it out now.", "done"); } catch (e) { failed(e); }
+  }
+
   // ---- Your ChatGPT plan, through Codex (Settings) ------------------------------------------------
   // A plan's reading, drafting and working out parts on Codex (codex.ts), once you turn it on here.
   async function loadCodex(fresh) {
@@ -2531,7 +2563,7 @@
         h("div", { class: "seg", role: "group", "aria-label": "Thinking effort" }, ...[["auto", "Model's default"], ["low", "Low"], ["medium", "Medium"], ["high", "High"]].map(([k, label]) =>
           h("button", { type: "button", "aria-pressed": String((s.effort ?? "auto") === k), text: label, onclick: () => patchSettings({ effort: k }, k === "auto" ? "Thinking models think as they do by default." : `Thinking effort: ${label.toLowerCase()}.`) }))),
         h("p", { text: "For models that think before they answer, at the levels each one takes. Thinking is billed as output, so a higher effort costs more and takes longer; the estimate learns from your answers at each level." })),
-      planCapSettingEl(s), codexSettingEl(s), gradesSettingEl(),
+      planCapSettingEl(s), platformsSettingEl(), codexSettingEl(s), gradesSettingEl(),
       h("div", { class: "setting" }, h("h3", { text: "Your usual model" }), usualSel,
         h("p", { text: "The model you would use without Leanfare. Savings are measured against it." })),
       h("div", { class: "setting", id: "budgetSetting" }, h("h3", { text: "Monthly budget" }),
