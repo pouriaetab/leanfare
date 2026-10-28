@@ -21,7 +21,7 @@ import { parseSpeed, secondsText, type SpeedChoice } from "./speed";
 import { TASKS, fitsText, getModel, isRetired, type Model } from "./data";
 import { db } from "./db";
 import { passedLocal } from "./localpass";
-import { modelOn } from "./platforms";
+import { mayTake, modelOn, readRisk } from "./platforms";
 import { movedDown } from "./grades";
 import { plan, runChat, usableModels, type ChatOptions } from "./engine";
 import { DELEGATE_LIMITS, type DelegateFile } from "./readfiles";
@@ -39,6 +39,7 @@ export interface DelegateInput {
   only?: (m: Model) => boolean; // a limit on every model of the task (the answer, the check, a second try): a plan's free part stays on free models
   model?: string; // a plan's part: the model its table named, asked first (planner.ts runPart)
   plan?: string; // a plan's part: the plan's id and the part's number (id:n), kept with its row
+  private?: boolean; // stays on this computer: only models in Ollama and the other model apps here (platforms.ts: mayTake)
 }
 
 export const KINDS: Kind[] = ["read", "write", "reason"];
@@ -93,7 +94,8 @@ export function checkDelegate(b: any): DelegateInput | string {
     if (v === null) return "speed must be cheapest, fastest, or a number of seconds from 1 to 3600.";
     speed = v;
   }
-  return { task: b.task.trim(), files, kind, effort, check, maxOut, ...(speed !== undefined ? { speed } : {}) };
+  if (b.private !== undefined && typeof b.private !== "boolean") return "private must be true or false.";
+  return { task: b.task.trim(), files, kind, effort, check, maxOut, ...(speed !== undefined ? { speed } : {}), ...(b.private ? { private: true } : {}) };
 }
 
 // The rating a task is judged by: the kind says it, or Auto's usual guess decides.
@@ -254,6 +256,10 @@ export function receiptOf(r: Omit<DelegateResult, "receipt">, maxOut: number): s
     else if (c.chance > 0) parts.push(`Not checked this time (Leanfare checks 1 in ${Math.round(1 / c.chance)} ${r.effort} effort answers).`);
   }
   if (r.tokens.files > 0) parts.push(`About ${num(r.tokens.files)} tokens of files stayed out of your context; this answer is about ${num(r.tokens.answer)}.`);
+  // A free tier whose terms let its company read or train on what was sent says so (platforms.ts: readRisk).
+  const m = getModel(r.model.id);
+  const risk = m ? readRisk(m) : null;
+  if (risk) parts.push(`${r.model.label} is on a free tier: ${risk}. For anything private, ask Leanfare to keep it on this computer.`);
   parts.push(`It took ${secondsText(r.seconds)}.`);
   if (r.cut) parts.push(`It stopped at its limit of ${num(maxOut)} tokens, so it may be cut short.`);
   return parts.join(" ");
@@ -311,7 +317,10 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   // The platforms turned off for plans and the delegate are left out (platforms.ts); not for the test of one
   // named model on this computer, which you asked for by name.
   const on = input.trial && input.model ? () => true : modelOn;
-  const kept = (ok: (m: Model) => boolean) => (m: Model) => ok(m) && on(m) && (!limit || limit(m));
+  // A private task stays on this computer; files from your projects go where Settings says (platforms.ts).
+  const work = { private: !!input.private, files: input.files.length > 0 };
+  const allowed = (m: Model) => mayTake(m, work);
+  const kept = (ok: (m: Model) => boolean) => (m: Model) => ok(m) && on(m) && allowed(m) && (!limit || limit(m));
   // A model the manager's grades moved down for this kind is skipped, while another can take it (grades.ts).
   const within = (ok: (m: Model) => boolean) => {
     const base = kept(ok);
@@ -323,9 +332,15 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   // longer take it here, or cannot answer now (busy, rate limited, down), Auto picks another within the same
   // limits (a free part stays free), and the receipt says which and why.
   const asked = `auto-${TIER[input.effort]}`;
-  // Every model that could take it is on a platform turned off: said so, not as too much text.
-  if (!usableModels(within(doFit.ok)).length && usableModels((m) => doFit.ok(m) && (!limit || limit(m))).length)
-    throw Object.assign(new UserError(409, "The models that could take it are on platforms turned off for plans and the delegate (Settings, Where Leanfare may send work). Turn one on there, or do it yourself.", "platform_off"), { spent: 0 });
+  // Nothing may take it: a private task with no model here that can, files with nowhere Settings lets them go, or
+  // platforms turned off. Said so, not as too much text.
+  if (!usableModels(within(doFit.ok)).length) {
+    if (input.private && !usableModels((m) => !!m.local && doFit.ok(m)).length) throw Object.assign(new UserError(409, "This task is to stay on this computer, and none of your models here can take it. Do it yourself, or start Ollama with a model that fits (Settings, Local models).", "private_none"), { spent: 0 });
+    if (!input.private && work.files && usableModels((m) => doFit.ok(m) && on(m) && (!limit || limit(m))).length && !usableModels((m) => doFit.ok(m) && on(m) && allowed(m) && (!limit || limit(m))).length)
+      throw Object.assign(new UserError(409, `Your projects' files go ${settings().filesTo === "local" ? "only to this computer" : "to no free tier that may be read"} (Settings, Where Leanfare may send work), and no model there can take this. Do it yourself, or change that setting.`, "files_where"), { spent: 0 });
+    if (usableModels((m) => doFit.ok(m) && (!limit || limit(m))).length)
+      throw Object.assign(new UserError(409, "The models that could take it are on platforms turned off for plans and the delegate (Settings, Where Leanfare may send work). Turn one on there, or do it yourself.", "platform_off"), { spent: 0 });
+  }
   const opts: ChatOptions = { system, source, guess, only: within(doFit.ok), onlyWhy: tooMuch(doFit.need), effort: input.effort, maxOut: input.maxOut, speed: input.speed };
   // Reading at low or medium effort goes first to a model on this computer that passed its test here
   // (localpass.ts), when nothing is named and Auto is to be the cheapest: it is free.
