@@ -106,6 +106,9 @@ const ADDED: [table: string, column: string, type: string][] = [
   ["chats", "system", "TEXT"], // the chat's own instructions
   ["chats", "source", "TEXT"], // where an imported chat came from (so importing twice adds nothing)
   ["ledger", "effort", "TEXT"], // the thinking effort sent with the request, if any
+  ["delegations", "plan", "TEXT"], // a plan's part: the plan's id and the part's number, as id:n
+  ["delegations", "grade", "TEXT"], // how the app that asked graded the answer: good, partly or wrong
+  ["delegations", "task_tokens", "INTEGER NOT NULL DEFAULT 0"], // a plan part's own text, which the app that asked never read
 ];
 
 function addColumns(d: Database) {

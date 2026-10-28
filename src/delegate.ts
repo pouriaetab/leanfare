@@ -36,6 +36,7 @@ export interface DelegateInput {
   trial?: boolean; // the trial's questions (trial.ts): ledger rows say "trial", and none count in the delegate's own pass rates
   only?: (m: Model) => boolean; // a limit on every model of the task (the answer, the check, a second try): a plan's free part stays on free models
   model?: string; // a plan's part: the model its table named, asked first (planner.ts runPart)
+  plan?: string; // a plan's part: the plan's id and the part's number (id:n), kept with its row
 }
 
 export const KINDS: Kind[] = ["read", "write", "reason"];
@@ -182,6 +183,7 @@ export interface DelegateResult {
   first: { model: Who; cost: number | null } | null; // the first answer, when a failed check replaced it
   rerunError: string | null; // asking again after a failed check did not work
   swap: string | null; // a plan's part: why another model answered than the one its table named
+  row: number | null; // its row in the delegations table, which its grade goes to
   total: number | null; // everything this task cost: the answers and the check
   task: string;
   taskLabel: string;
@@ -200,14 +202,40 @@ const add = (...v: (number | null | undefined)[]) => (v.some((x) => x === null) 
 // Tokens as Leanfare estimates them everywhere (about four characters each).
 const tokensOf = (chars: number) => Math.ceil(chars / 4);
 
-const INSERT = `INSERT INTO delegations(ts, month, day, task, kind, effort, model, cost, files, file_tokens, answer_tokens, status, chance, checker, verdict, check_cost, rerun, rerun_cost)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const INSERT = `INSERT INTO delegations(ts, month, day, task, kind, effort, model, cost, files, file_tokens, answer_tokens, status, chance, checker, verdict, check_cost, rerun, rerun_cost, plan, task_tokens)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
-function writeRow(row: { task: string; kind: Kind | null; effort: Effort; model: string | null; cost: number | null; files: number; fileTokens: number; answerTokens: number; status: string; chance: number; checker: string | null; verdict: string | null; checkCost: number | null; rerun: string | null; rerunCost: number | null }) {
+// taskTokens: a plan part's own text, which Leanfare wrote from the plan (the part, what the earlier parts
+// found, the task it belongs to): the app that asked never read it. A hand off's task the app wrote itself: 0.
+function writeRow(row: { task: string; kind: string | null; effort: Effort; model: string | null; cost: number | null; files: number; fileTokens: number; answerTokens: number; status: string; chance: number; checker: string | null; verdict: string | null; checkCost: number | null; rerun: string | null; rerunCost: number | null; plan?: string | null; taskTokens?: number }): number | null {
   const d = now();
   try {
-    db.query(INSERT).run(d.toISOString(), localMonth(d), localDay(d), row.task, row.kind, row.effort, row.model, row.cost, row.files, row.fileTokens, row.answerTokens, row.status, row.chance, row.checker, row.verdict, row.checkCost, row.rerun, row.rerunCost);
-  } catch (e) { console.error("leanfare: could not write the delegate's row:", String(e)); } // the answer matters more than the row
+    const r = db.query(INSERT).run(d.toISOString(), localMonth(d), localDay(d), row.task, row.kind, row.effort, row.model, row.cost, row.files, row.fileTokens, row.answerTokens, row.status, row.chance, row.checker, row.verdict, row.checkCost, row.rerun, row.rerunCost, row.plan ?? null, row.taskTokens ?? 0);
+    return Number(r.lastInsertRowid);
+  } catch (e) { console.error("leanfare: could not write the delegate's row:", String(e)); return null; } // the answer matters more than the row
+}
+
+// A plan part that ran without the delegate (a web search, or Codex on the user's ChatGPT plan), kept with the
+// hand offs so Savings shows all of Leanfare's work for an app. No words: its kind, model, sizes and cost.
+const KIND_TASK: Record<string, string> = { read: "longer_query", write: "instruction_following", reason: "hard_prompts" };
+export function notePart(p: { kind: string; effort: Effort; model: string; cost: number | null; files: number; fileTokens: number; task: string; answer: string; plan: string }): number | null {
+  return writeRow({ task: KIND_TASK[p.kind] ?? "overall", kind: p.kind, effort: p.effort, model: p.model, cost: p.cost, files: p.files, fileTokens: p.fileTokens, answerTokens: tokensOf(p.answer.length),
+    status: "ok", chance: 0, checker: null, verdict: null, checkCost: null, rerun: null, rerunCost: null, plan: p.plan, taskTokens: tokensOf(p.task.length) });
+}
+
+// How the app that asked graded a hand off's answer, kept with its row: the hand off's row when the app
+// names it, else that plan part's row, else the last answer of that model for that kind in the last 6 hours
+// that has no grade yet.
+export function gradeRow(verdict: string, by: { row?: number; plan?: string; model?: string; kind?: string }): boolean {
+  try {
+    if (by.row !== undefined) return db.query("UPDATE delegations SET grade = ? WHERE id = ? AND status = 'ok'").run(verdict, by.row).changes > 0;
+    if (by.plan) return db.query("UPDATE delegations SET grade = ? WHERE id = (SELECT id FROM delegations WHERE plan = ? AND status = 'ok' ORDER BY id DESC LIMIT 1)").run(verdict, by.plan).changes > 0;
+    if (by.model && by.kind) {
+      const since = new Date(now().getTime() - 6 * 3600_000).toISOString();
+      return db.query("UPDATE delegations SET grade = ? WHERE id = (SELECT id FROM delegations WHERE (model = ?2 OR rerun = ?2) AND kind = ?3 AND status = 'ok' AND grade IS NULL AND ts >= ?4 ORDER BY id DESC LIMIT 1)").run(verdict, by.model, by.kind, since).changes > 0;
+    }
+  } catch (e) { console.error("leanfare: could not keep the grade with its hand off:", String(e)); }
+  return false;
 }
 
 export function receiptOf(r: Omit<DelegateResult, "receipt">, maxOut: number): string {
@@ -271,9 +299,9 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     return { ...r, cost: charged(r), error };
   };
   const gone = () => signal.aborted; // the caller went away: there is nobody to answer
-  const row = { task: guess.task, kind: input.kind, effort: input.effort, files: input.files.length, fileTokens };
+  const row = { task: guess.task, kind: input.kind, effort: input.effort, files: input.files.length, fileTokens, plan: input.plan ?? null, taskTokens: input.plan ? tokensOf(input.task.length) : 0 };
   const source = input.trial ? "trial" : "delegate";
-  const write = (r: Parameters<typeof writeRow>[0]) => { if (!input.trial) writeRow(r); };
+  const write = (r: Parameters<typeof writeRow>[0]) => (input.trial ? null : writeRow(r));
   const none = { checker: null, verdict: null, checkCost: null, rerun: null, rerunCost: null };
 
   const doFit = fit(prompt.length + system.length, input.maxOut);
@@ -376,6 +404,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     first: firstUsed,
     rerunError,
     swap,
+    row: null,
     total: add(...spent),
     task: guess.task,
     taskLabel: taskLabel(guess.task),
@@ -387,7 +416,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     cut: final.meta.finish === "length",
     seconds: (performance.now() - started) / 1000,
   };
-  write({ ...row, model: first.meta.model.id, cost: first.cost, answerTokens, status: "ok", chance, checker: check.checker?.id ?? null, verdict: picked ? check.verdict : null, checkCost: check.cost, rerun: firstUsed ? model.id : null, rerunCost });
+  result.row = write({ ...row, model: first.meta.model.id, cost: first.cost, answerTokens, status: "ok", chance, checker: check.checker?.id ?? null, verdict: picked ? check.verdict : null, checkCost: check.cost, rerun: firstUsed ? model.id : null, rerunCost });
   return { ...result, receipt: receiptOf(result, input.maxOut) };
 }
 

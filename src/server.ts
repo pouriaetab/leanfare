@@ -22,7 +22,7 @@ import { CODEX_ID, codexState } from "./codex";
 import { GRADED_KINDS, VERDICTS, addGrade, giveAnotherChance, standing, standingText, standings } from "./grades";
 import { plansBrief, plansView } from "./plans";
 import { meterViews, setStatusline } from "./meter";
-import { checkDelegate, runDelegate, startDelegate, stopDelegates, waitDelegate } from "./delegate";
+import { checkDelegate, gradeRow, runDelegate, startDelegate, stopDelegates, waitDelegate } from "./delegate";
 import { checkPlan, gradePart, makePlan, runView, startRun, stopAllRuns, stopRun } from "./planner";
 import { setAuto } from "./workers";
 import { setUp, setupView } from "./setup";
@@ -446,6 +446,8 @@ async function api(req: Request, url: URL): Promise<Response> {
     if (typeof b.model === "string" && GRADED_KINDS.includes(b.kind)) {
       if (b.model !== CODEX_ID && !getModel(b.model)) return fail(404, `Leanfare does not know the model ${String(b.model).slice(0, 80)}.`);
       addGrade({ model: b.model, kind: b.kind, effort: typeof b.effort === "string" ? b.effort.slice(0, 10) : null, verdict: b.verdict, source });
+      // Kept with the hand off's row too (the one the app names, else its last of that model and kind).
+      gradeRow(b.verdict, Number.isInteger(b.handoff) ? { row: b.handoff } : { model: b.model, kind: b.kind });
       const st = standing(b.model, b.kind);
       return json({ text: standingText(st), standing: st });
     }
