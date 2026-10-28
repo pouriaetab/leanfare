@@ -179,17 +179,18 @@ const TOOLS = [
   },
   {
     name: "local_model",
-    title: "A local model for this computer",
-    description: "The open model Leanfare suggests for this computer: the best rated one that runs comfortably in its memory, fits on its disk and beats what is installed (free to run, and Leanfare's Auto and plans then use it for reading and drafting). suggest (the default) says which and why; download asks the user, then has Ollama download it; status says how the download goes. Nothing is downloaded without the user's yes.",
+    title: "Local models on this computer",
+    description: "The models on this computer (Ollama): where Ollama keeps them (the drive and its free space; downloads go there too), one suggested for each kind of work (reading, drafting, working things out) with its size in GB, and a test of a model the user has. Arena rates few small models, so the test asks one of them 8 questions with known answers about made up files, on this computer (free, a few minutes, nothing leaves it); one that passes then takes reading work first in plans and the delegate. suggest (the default) says all this; test, with model, starts the test; status says how a test or a download goes; download asks the user, then has Ollama download a suggested model (model names which; the default is the best rated one). Nothing is downloaded without the user's yes.",
     inputSchema: {
       type: "object",
       properties: {
-        action: { type: "string", enum: ["suggest", "download", "status"], description: "suggest (the default), download or status." },
+        action: { type: "string", enum: ["suggest", "test", "status", "download"], description: "suggest (the default), test, status or download." },
+        model: { type: "string", description: "For test: a model the user has, like qwen3:8b. For download: one of the suggested models." },
         yes: { type: "string", enum: ["yes", "no"], description: "For download, only where your app cannot show Leanfare's question: yes once the user agreed to the download in the chat. An app that can show it gets the question from Leanfare itself." },
       },
       additionalProperties: false,
     },
-    annotations: { title: "A local model for this computer", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    annotations: { title: "Local models on this computer", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   },
 ];
 
@@ -299,6 +300,32 @@ function askUser(params: unknown, opts: { ms?: number; late?: (result: any) => v
 }
 
 const gbText = (b: number) => `${(b / 1e9).toFixed(b < 10e9 ? 1 : 0)} GB`;
+// Where Ollama keeps its models, as Settings says it (local.ts: whereModels).
+export function whereLine(o: any): string {
+  const w = o?.where;
+  if (!o?.running) return "Ollama is not running on this computer.";
+  if (!w) return "Ollama runs on another computer, so Leanfare cannot see its disk.";
+  const n = o.installed?.length ?? 0;
+  if (w.missing) return `Ollama's models folder is a link to ${w.real ?? "a folder"}${w.drive ? `, on the drive ${w.drive}` : ""}, which is not there now: attach that drive and Ollama finds its models again.`;
+  const place = w.drive ? `on the drive ${w.drive}` : `in ${w.real ?? w.dir}, on this ${o.machine ?? "computer"}'s own disk`;
+  const room = w.free !== null ? `, with ${gbText(w.free)} free` : "";
+  if (!n) return `Ollama has no models yet. Its folder is ${place}${room}, and downloads go there.`;
+  return `Ollama keeps your ${n} model${n === 1 ? "" : "s"} (${gbText(o.total)}) ${place}${room}. New downloads go there too.`;
+}
+function kindLine(k: any): string {
+  const p = k.pick;
+  if (!p) return `${k.title}: none. ${k.why}`;
+  const state = p.act === "use" ? (p.test?.passed ? `you have it, passed the test (${p.test.right} of ${p.test.asked})` : "you have it") : p.act === "test" ? "you have it, not tested yet" : "a download";
+  const next = p.act === "test" ? ` To test it: local_model with action test and model ${p.name}.` : p.act === "download" || p.act === "download-test" ? ` To download it: local_model with action download and model ${p.name} (the user is asked first).` : "";
+  return `${k.title}: ${p.name} (${gbText(p.size)}), ${state}. ${k.why}${next}`;
+}
+function testLine(t: any): string {
+  const c = t?.current;
+  if (!c) return "No model was tested here yet.";
+  if (c.status === "running") return `Testing ${c.label} on this computer: ${c.done} of ${c.total} questions so far, ${c.right} right.`;
+  if (c.status === "done") { const r = t.results?.[c.model]; return `${c.label}: ${c.right} of ${c.total} right${c.skipped ? ` (${c.skipped} too long for it, left out)` : ""}, in ${c.seconds} seconds. ${r?.passed ? "It passed: plans and the delegate send reading to it first." : "It did not pass (at most one wrong), so it gets no reading work."}`; }
+  return c.status === "stopped" ? `The test of ${c.label} was stopped.` : `The test of ${c.label} failed: ${c.error}`;
+}
 function pullLine(p: any): string {
   if (!p) return "No download is running.";
   const at = p.percent !== null && p.percent !== undefined ? `, ${p.percent}%` : "";
@@ -320,12 +347,31 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
   }
   if (name === "local_model") {
     const action = args?.action ?? "suggest";
-    if (action === "status") { const { j } = await call("/api/local/pull", {}, signal); return text(pullLine(j.pull), { pull: j.pull }); }
-    if (action !== "suggest" && action !== "download") return failure("local_model takes action suggest, download or status.");
+    if (action === "status") {
+      const { j } = await call("/api/local/pull", {}, signal);
+      const { j: t } = await call("/api/local/test", {}, signal);
+      return text(`${testLine(t)}\n${pullLine(j.pull)}`, { pull: j.pull, test: t.current });
+    }
+    if (action === "test") {
+      if (typeof args?.model !== "string" || !args.model.trim()) return failure("test needs model: a model on this computer, like qwen3:8b.");
+      const { j: t } = await call("/api/local/test", { method: "POST", json: { model: args.model.trim() } }, signal);
+      if (t.error) return failure(t.error);
+      return text(`Testing ${t.current.label} on this computer: ${t.current.total} questions with known answers about made up files, free, a few minutes. Nothing leaves this computer. Follow it with local_model action status.`, { test: t.current });
+    }
+    if (action !== "suggest" && action !== "download") return failure("local_model takes action suggest, test, status or download.");
+    const { j: o } = await call("/api/local", {}, signal);
     const { j: s } = await call("/api/local/suggest", {}, signal);
-    if (action === "suggest") return text(s.suggestion ? `${s.why}\n\nTo download it: local_model with action download (the user is asked first).` : s.why, s);
-    if (!s.suggestion) return failure(s.why);
-    const sg = s.suggestion;
+    if (action === "suggest") {
+      const lines = [whereLine(o), ...(o.kinds ?? []).map(kindLine)];
+      for (const f of o.found ?? []) lines.push(`Found ${f.models} Ollama model${f.models === 1 ? "" : "s"} (${gbText(f.size)}) in ${f.path}, on the drive ${f.drive}, that Ollama does not use: Settings, Local models, Use them.`);
+      return text(lines.join("\n"), { where: o.where, kinds: o.kinds, found: o.found, suggestion: s.suggestion });
+    }
+    // download: a model named among the suggestions, or the best rated one.
+    const named = typeof args?.model === "string" && args.model.trim() ? args.model.trim() : null;
+    const pick = named ? (o.kinds ?? []).map((k: any) => k.pick).find((p: any) => p && !p.have && p.name === named) : null;
+    if (named && !pick && s.suggestion?.name !== named) return failure(`${named} is not one of the models Leanfare suggests here. local_model with action suggest lists them.`);
+    const sg = pick ? { name: pick.name, size: pick.size, license: "Apache 2.0" } : s.suggestion;
+    if (!sg) return failure(s.why);
     // An app that can show Leanfare's question always gets it (a yes from the model is not the user's);
     // one that cannot says yes only once the user agreed in the chat.
     let yes = !canAsk && args?.yes === "yes";
