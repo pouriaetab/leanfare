@@ -26,7 +26,8 @@ import { checkDelegate, gradeRow, runDelegate, startDelegate, stopDelegates, wai
 import { checkPlan, gradePart, makePlan, runView, startRun, stopAllRuns, stopRun } from "./planner";
 import { setAuto } from "./workers";
 import { setUp, setupView } from "./setup";
-import { OFF_TEXT, OFF_TRIAL, setSwitch, switchedOn } from "./switch";
+import { OFF_TEST, OFF_TEXT, OFF_TRIAL, setSwitch, switchedOn } from "./switch";
+import { startTest, stopTest, testRunning, testView } from "./localtest";
 import { retirementNotices } from "./retire";
 import { savings } from "./savings";
 import { checkKey, effortLevels, UserError } from "./upstream";
@@ -388,9 +389,10 @@ async function api(req: Request, url: URL): Promise<Response> {
     const b = await readBody(req);
     if (typeof b?.on !== "boolean") return fail(400, "on must be true or false");
     setSwitch(b.on);
-    // Off stops what is already going too: the parts of running plans, hand offs still working, and the trial.
+    // Off stops what is already going too: the parts of running plans, hand offs still working, and the trial
+    // (and a local model's test, which is one).
     const stopped = { plans: 0, delegates: 0, trial: false };
-    if (!b.on) { stopped.plans = stopAllRuns(); stopped.delegates = stopDelegates(); stopped.trial = trialRunning(); await stopTrial(); }
+    if (!b.on) { stopped.plans = stopAllRuns(); stopped.delegates = stopDelegates(); stopped.trial = trialRunning() || testRunning(); await stopTrial(); stopTest(); }
     return json({ on: switchedOn(), stopped });
   }
   if (p === "/api/setup" && m === "GET") return json(setupView());
@@ -433,7 +435,8 @@ async function api(req: Request, url: URL): Promise<Response> {
   if (p === "/api/connect/openrouter/cancel" && m === "POST") { connect.cancel(); return json({ ok: true }); }
   // Local models (see local.ts): what Ollama has, removing one, and a download that goes on
   // in the background while the page polls its progress.
-  if (p === "/api/local" && m === "GET") return json(await local.overview());
+  if (p === "/api/local" && m === "GET") return json({ ...(await local.overview()), test: testView() });
+  if (p === "/api/local/test" && m === "GET") return json(testView());
   if (p === "/api/local/pull" && m === "GET") return json({ pull: local.pullView() });
   if (p === "/api/local/suggest" && m === "GET") return json(local.suggestLocal());
   // The manager's grades (grades.ts): a part's answer graded, the standings, and another chance.
@@ -463,6 +466,11 @@ async function api(req: Request, url: URL): Promise<Response> {
   if (p === "/api/local/pull" && m === "POST") { const b = await readBody(req); return json({ pull: await local.startPull(b.name, b.sizeBytes) }); }
   if (p === "/api/local/pull/stop" && m === "POST") { local.stopPull(); return json({ pull: local.pullView() }); }
   if (p === "/api/local/pull/dismiss" && m === "POST") { local.dismissPull(); return json({ pull: null }); }
+  // A model on this computer tested on known answers (localtest.ts); one that passes takes reading first.
+  if (p === "/api/local/test" && m === "POST") { if (offForApps(req)) return fail(409, OFF_TEST); const b = await readBody(req); return json(startTest(b.model)); }
+  if (p === "/api/local/test/stop" && m === "POST") { stopTest(); return json(testView()); }
+  // Ollama's models folder linked to one found on a drive (local.ts: useFolder).
+  if (p === "/api/local/use" && m === "POST") { const b = await readBody(req); const r = await local.useFolder(b.path); return json({ ...r, local: { ...(await local.overview()), test: testView() }, state: state() }); }
   if (p === "/api/local/delete" && m === "POST") {
     const b = await readBody(req);
     const r = await local.remove(typeof b.name === "string" ? b.name : "");
@@ -609,7 +617,11 @@ async function api(req: Request, url: URL): Promise<Response> {
   if (p === "/api/plan/stop" && m === "POST") { const b = await readBody(req); const v = stopRun(String(b?.id ?? "")); return v ? json(v) : fail(404, "No run of that plan."); }
   // The delegate trial (trial.ts): its estimate and last report, start, stop.
   if (p === "/api/trial" && m === "GET") return json(await trialView(req.signal));
-  if (p === "/api/trial/start" && m === "POST") { if (offForApps(req)) return fail(409, OFF_TRIAL); startTrial(); return json(await trialView(req.signal, false)); }
+  if (p === "/api/trial/start" && m === "POST") {
+    if (offForApps(req)) return fail(409, OFF_TRIAL);
+    if (testRunning()) return fail(409, "A model on this computer is being tested. Wait until it is done, or stop it in Settings, Local models.");
+    startTrial(); return json(await trialView(req.signal, false));
+  }
   if (p === "/api/trial/stop" && m === "POST") { await stopTrial(); return json(await trialView(req.signal)); }
   if (p === "/api/estimate" && m === "POST") {
     const b = await readBody(req);

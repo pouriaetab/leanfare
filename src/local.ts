@@ -6,11 +6,14 @@
 // memory here (so it goes on if the page is closed and the page can pick it up
 // again), and it stops when you press Stop. Ollama keeps what it already
 // downloaded, so pressing Download again continues where it stopped.
-import { existsSync, statfsSync } from "node:fs";
-import { homedir, totalmem } from "node:os";
-import { dirname, join } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, realpathSync, renameSync, statSync, statfsSync, symlinkSync } from "node:fs";
+import { homedir, totalmem, userInfo } from "node:os";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { baseOf } from "./config";
-import { LOCAL_PENALTY, allModels, refreshOllama, store, twinOf } from "./data";
+import { LOCAL_PENALTY, allModels, refreshOllama, store, twinOf, type Model } from "./data";
+import { chargeOf, usableModels } from "./engine";
+import { passed, testResults, type TestResult } from "./localpass";
+import { rating } from "./router";
 import { saveSettings, settings } from "./settings";
 import { UserError } from "./upstream";
 import { providerMessage } from "./util";
@@ -31,12 +34,23 @@ export const realProbe = {
     } catch { return null; }
   },
   memory: (): number => totalmem(),
+  // Where attached drives are: each folder inside one of these is a drive (on Windows, drive letters).
+  roots(): string[] {
+    if (process.platform === "darwin") return ["/Volumes"];
+    if (process.platform !== "linux") return [];
+    let u = "";
+    try { u = userInfo().username; } catch {}
+    return [...(u ? [`/media/${u}`, `/run/media/${u}`] : []), "/mnt"];
+  },
 };
 export const probe = { ...realProbe };
 
 const host = () => baseOf("ollama").replace(/\/v1$/, "");
 // Where Ollama keeps its files. Only meaningful when Ollama runs on this computer.
-export const modelsDir = () => process.env.OLLAMA_MODELS || join(homedir(), ".ollama", "models");
+// HOME first, as Ollama itself and your shell use it (Bun's homedir() does not follow a HOME set later, so a
+// test's own home would not be used).
+const home = () => (process.platform === "win32" ? homedir() : process.env.HOME || homedir());
+export const modelsDir = () => process.env.OLLAMA_MODELS || join(home(), ".ollama", "models");
 const onThisComputer = () => /^https?:\/\/(127\.\d+\.\d+\.\d+|localhost|\[::1\])(:|\/|$)/.test(host());
 
 export const gb = (bytes: number) => `${(bytes / 1e9).toFixed(bytes < 10e9 ? 1 : 0)} GB`;
@@ -104,11 +118,186 @@ export function suggestLocal(): { suggestion: Suggestion | null; why: string } {
   };
 }
 
+// ---- where the models are ----------------------------------------------------------------------------
+// Ollama's models folder, followed through a link (a models folder moved to another drive is linked from
+// ~/.ollama/models), the drive it is on, and that drive's free space. Ollama downloads into this folder, so
+// a new model lands on that drive too, and the free space checked before a download is that drive's.
+export interface Where { dir: string; real: string | null; drive: string | null; free: number | null; linked: boolean; missing: boolean }
+// The drive a path is on: a folder in one of the drive roots (not this computer's own disk), or a drive letter.
+export function driveOf(path: string): string | null {
+  const win = /^([A-Za-z]):[\\/]/.exec(path);
+  if (win) return win[1].toUpperCase() === (process.env.SystemDrive ?? "C:").charAt(0).toUpperCase() ? null : `${win[1].toUpperCase()}:`;
+  for (const root of probe.roots()) {
+    if (!path.startsWith(root + sep)) continue;
+    const name = path.slice(root.length + 1).split(sep)[0];
+    try { if (realpathSync(join(root, name)) === sep) return null; } catch {} // the Mac's own disk shows up in /Volumes too
+    return name || null;
+  }
+  return null;
+}
+export function whereModels(): Where {
+  const dir = modelsDir();
+  let linked = false, real: string | null = null, missing = false;
+  try { linked = lstatSync(dir).isSymbolicLink(); } catch {}
+  try { real = realpathSync(dir); } catch {
+    if (linked) { missing = true; try { real = resolve(dirname(dir), readlinkSync(dir)); } catch {} }
+  }
+  return { dir, real, drive: driveOf(real ?? dir), free: missing ? null : probe.free(real ?? dir), linked, missing };
+}
+
+// ---- models on a drive that Ollama does not use ---------------------------------------------------
+// Ollama keeps a model as a manifest (manifests/<registry>/<namespace>/<model>/<tag>) and its pieces (blobs/).
+// Leanfare looks for such folders on the attached drives, at most three folders deep, so models copied to a
+// drive can be used where they are. Only when Ollama runs on this computer.
+export interface Found { path: string; drive: string; models: number; size: number }
+const SKIP = /^(\.(?!ollama$).*|\$RECYCLE\.BIN|System Volume Information|Backups\.backupdb|node_modules|Library|System|Applications|private|usr|bin|sbin|cores|dev)$/;
+const isModelsFolder = (d: string) => { try { return statSync(join(d, "manifests")).isDirectory() && statSync(join(d, "blobs")).isDirectory(); } catch { return false; } };
+function countManifests(d: string, depth = 0): number {
+  if (depth > 5) return 0;
+  let n = 0;
+  try { for (const e of readdirSync(d, { withFileTypes: true })) n += e.isDirectory() ? countManifests(join(d, e.name), depth + 1) : e.isFile() && depth >= 3 ? 1 : 0; } catch {}
+  return n;
+}
+function blobsSize(d: string): number {
+  let n = 0;
+  try { for (const e of readdirSync(join(d, "blobs"), { withFileTypes: true })) if (e.isFile()) { try { n += statSync(join(d, "blobs", e.name)).size; } catch {} } } catch {}
+  return n;
+}
+export function foundElsewhere(): Found[] {
+  if (!onThisComputer()) return [];
+  const w = whereModels();
+  const out: Found[] = [];
+  let seen = 0;
+  const walk = (d: string, depth: number, drive: string) => {
+    if (seen++ > 3000) return; // a drive full of folders: stop looking, it is only a convenience
+    if (isModelsFolder(d)) {
+      let real = d;
+      try { real = realpathSync(d); } catch {}
+      if (real !== w.real && !out.some((f) => f.path === real)) { const models = countManifests(join(d, "manifests")); if (models) out.push({ path: real, drive, models, size: blobsSize(d) }); }
+      return;
+    }
+    if (depth >= 3) return;
+    let kids: string[] = [];
+    try { kids = readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory() && !SKIP.test(e.name)).map((e) => e.name); } catch { return; }
+    for (const k of kids) walk(join(d, k), depth + 1, drive);
+  };
+  for (const root of probe.roots()) {
+    let drives: string[] = [];
+    try { drives = readdirSync(root); } catch { continue; }
+    for (const name of drives) {
+      const top = join(root, name);
+      try { if (realpathSync(top) === sep || !statSync(top).isDirectory()) continue; } catch { continue; }
+      walk(top, 0, name);
+    }
+  }
+  return out.sort((a, b) => b.models - a.models || a.path.localeCompare(b.path));
+}
+
+// Ollama's models folder becomes a link to one found on a drive, the way a folder moved to another drive is
+// linked. What was there is kept under another name; Leanfare never deletes it. Not when Ollama has models
+// of its own there (they would be hidden), and not on Windows, where a link needs more rights: there, setting
+// OLLAMA_MODELS for Ollama does the same.
+export async function useFolder(path: unknown): Promise<{ text: string; models: number }> {
+  if (!onThisComputer()) throw new UserError(400, "Ollama runs on another computer, so Leanfare cannot change where it keeps its models.");
+  if (typeof path !== "string" || !path) throw new UserError(400, "Say which folder to use.");
+  const f = foundElsewhere().find((x) => x.path === path);
+  if (!f) throw new UserError(404, "Leanfare does not find Ollama models in that folder (any more). Is the drive attached?");
+  if (process.platform === "win32") throw new UserError(400, `On Windows, set OLLAMA_MODELS to ${f.path} in your environment variables, then quit Ollama and open it again.`);
+  if (process.env.OLLAMA_MODELS) throw new UserError(409, `OLLAMA_MODELS says where Ollama keeps its models (${process.env.OLLAMA_MODELS}). Set it to ${f.path} instead, then quit Ollama and open it again.`);
+  const w = whereModels();
+  const own = w.missing ? 0 : countManifests(join(w.real ?? w.dir, "manifests"));
+  if (own) throw new UserError(409, `Ollama has ${own} model${own === 1 ? "" : "s"} of its own in ${w.real ?? w.dir}. Leanfare leaves them as they are: move them to ${f.path} yourself (or remove the ones you do not need), then press Use them again.`);
+  let kept: string | null = null;
+  if (w.linked || existsSync(w.dir)) {
+    kept = `${w.dir}-before-leanfare`;
+    for (let i = 2; existsSync(kept) || (() => { try { lstatSync(kept!); return true; } catch { return false; } })(); i++) kept = `${w.dir}-before-leanfare-${i}`;
+    renameSync(w.dir, kept);
+  }
+  mkdirSync(dirname(w.dir), { recursive: true });
+  symlinkSync(f.path, w.dir, "dir");
+  await refreshOllama();
+  const n = store.ollama.length;
+  const keptText = kept ? ` What was in ${basename(w.dir)} before is kept as ${basename(kept)}.` : "";
+  return n
+    ? { text: `Ollama now uses the ${n} model${n === 1 ? "" : "s"} on ${f.drive}, and new downloads go there too.${keptText}`, models: n }
+    : { text: `Ollama's models folder now points to ${f.path}.${keptText} Quit Ollama and open it again (or start ollama serve again), then press Look again.`, models: 0 };
+}
+
+// ---- one suggested for each kind of work -------------------------------------------------------------
+// Reading, drafting and working things out, each rated by its own Arena task. A model Arena rates (through
+// its cloud twin) is suggested as rated: the one you have, or a download that is rated higher and fits.
+// Arena rates few small models, so for reading a model you have can be tested here instead (localtest.ts):
+// one that passed is used first; one not tested yet is offered for the test. Drafting and working out have
+// no test questions, so they take rated models only; with none that fits, the kind says who does it.
+export type WorkKind = "read" | "write" | "reason";
+export const KIND_TASK: Record<WorkKind, string> = { read: "longer_query", write: "instruction_following", reason: "hard_prompts" };
+export const KIND_TITLE: Record<WorkKind, string> = { read: "Reading and pulling out facts", write: "Drafting text", reason: "Working things out" };
+export interface KindPick {
+  kind: WorkKind; title: string;
+  pick: { name: string; id: string | null; size: number; have: boolean; fit: Fit; rating: number | null; like: string | null; test: (TestResult & { passed: boolean }) | null; act: "use" | "download" | "test" | "download-test" } | null;
+  why: string;
+}
+function otherFor(task: string): string {
+  const free = usableModels((m) => !m.local && rating(m, task) !== null && chargeOf(m, 1).cost === 0).sort((a, b) => rating(b, task)! - rating(a, task)!)[0];
+  return free ? `${free.label} (free) does it.` : "Your other models do it.";
+}
+export function kindsFor(installed: Installed[], mem: number, free: number | null, found: Found[] = []): KindPick[] {
+  const catalogue = allModels().filter((m) => !m.local);
+  const tests = testResults();
+  const byName = new Map(store.ollama.map((m) => [m.apiId, m] as [string, Model]));
+  const runs = (size: number) => fit(size, mem) !== "too big";
+  const room = (size: number) => free === null || free - size >= MIN_FREE;
+  const machine = process.platform === "darwin" ? "Mac" : "computer";
+  return (["read", "write", "reason"] as WorkKind[]).map((kind): KindPick => {
+    const task = KIND_TASK[kind];
+    const title = KIND_TITLE[kind];
+    // What you have: rated ones, and for reading the ones that passed the test or were not tested yet.
+    const have = installed.filter((i) => runs(i.size)).map((i) => {
+      const m = byName.get(i.name) ?? null;
+      const t = m ? tests[m.id] ?? null : null;
+      return { i, m, rating: m ? rating(m, task) : null, like: m?.ratingFrom?.split(",")[0] ?? null, test: t ? { ...t, passed: passed(t) } : null };
+    });
+    const ratedHave = have.filter((x) => x.rating !== null).sort((a, b) => b.rating! - a.rating!)[0] ?? null;
+    const ratedGet = SUGGESTED.map((c) => ({ c, twin: twinOf(c.name, catalogue) }))
+      .filter((x) => x.twin && rating(x.twin, task) !== null && runs(x.c.size) && room(x.c.size) && !installed.some((i) => i.name === x.c.name))
+      .map((x) => ({ ...x, rating: rating(x.twin!, task)! - LOCAL_PENALTY })).sort((a, b) => b.rating - a.rating || a.c.size - b.c.size)[0] ?? null;
+    const how = (f: Fit) => (f === "fits" ? `runs comfortably in this ${machine}'s ${gb(mem)} of memory` : `runs in this ${machine}'s ${gb(mem)} of memory, but tightly: other apps may slow down while it answers`);
+    if (kind === "read") {
+      const good = have.filter((x) => x.test?.passed).sort((a, b) => b.test!.right / b.test!.asked - a.test!.right / a.test!.asked || b.i.size - a.i.size)[0];
+      if (good) return { kind, title, pick: { name: good.i.name, id: good.m?.id ?? null, size: good.i.size, have: true, fit: good.i.fit, rating: good.rating, like: good.like, test: good.test, act: "use" },
+        why: `It passed this ${machine}'s test, ${good.test!.right} of ${good.test!.asked} right, so plans and the delegate send reading here first: it is free. A stronger model of yours still checks a sample of its answers.` };
+    }
+    if (ratedGet && (!ratedHave || ratedGet.rating > ratedHave.rating!)) {
+      const f = fit(ratedGet.c.size, mem);
+      return { kind, title, pick: { name: ratedGet.c.name, id: null, size: ratedGet.c.size, have: false, fit: f, rating: Math.round(ratedGet.rating), like: ratedGet.twin!.label, test: null, act: "download" },
+        why: `Rated like ${ratedGet.twin!.label} for this (${Math.round(ratedGet.rating)}), it ${how(f)}${ratedHave ? `, and is rated above ${ratedHave.i.name}, which you have` : ""}. Apache 2.0: free to use for work.` };
+    }
+    if (ratedHave) return { kind, title, pick: { name: ratedHave.i.name, id: ratedHave.m?.id ?? null, size: ratedHave.i.size, have: true, fit: ratedHave.i.fit, rating: Math.round(ratedHave.rating!), like: ratedHave.like, test: ratedHave.test, act: "use" },
+      why: `You have it, rated like ${ratedHave.like ?? "its twin"} for this (${Math.round(ratedHave.rating!)}): Auto and plans can use it.` };
+    if (kind === "read") {
+      // Models on a drive that Ollama does not use come first: no download while they are there.
+      if (!installed.length && found.length) return { kind, title, pick: null, why: `Ollama has no models of its own here. Use the ${found[0].models} model${found[0].models === 1 ? "" : "s"} on ${found[0].drive} first (above): then Leanfare can test one.` };
+      // Not tested yet, the biggest that runs comfortably first; then one that missed, to say so.
+      const fresh = have.filter((x) => x.m && !x.test).sort((a, b) => (a.i.fit === "fits" ? 0 : 1) - (b.i.fit === "fits" ? 0 : 1) || b.i.size - a.i.size)[0];
+      if (fresh) return { kind, title, pick: { name: fresh.i.name, id: fresh.m!.id, size: fresh.i.size, have: true, fit: fresh.i.fit, rating: null, like: null, test: null, act: "test" },
+        why: `You have it. Arena does not rate it, so Leanfare tests it here first: ${TEST_SIZE} questions with known answers about made up files, free, a few minutes, and nothing leaves this ${machine}.` };
+      const missed = have.filter((x) => x.test && !x.test.passed).sort((a, b) => b.test!.right / b.test!.asked - a.test!.right / a.test!.asked)[0];
+      const small = SUGGESTED.filter((c) => !twinOf(c.name, catalogue) && fit(c.size, mem) === "fits" && room(c.size) && !installed.some((i) => i.name === c.name)).sort((a, b) => b.size - a.size)[0];
+      if (small) return { kind, title, pick: { name: small.name, id: null, size: small.size, have: false, fit: "fits", rating: null, like: null, test: null, act: "download-test" },
+        why: `${missed ? `${missed.i.name} missed ${missed.test!.asked - missed.test!.right} of ${missed.test!.asked} on this ${machine}'s test. ` : ""}Arena does not rate ${small.name}${missed ? " either" : ""}: after the download, Leanfare tests it here. Apache 2.0: free to use for work.` };
+      if (missed) return { kind, title, pick: null, why: `${missed.i.name} missed ${missed.test!.asked - missed.test!.right} of ${missed.test!.asked} on this ${machine}'s test, so Leanfare gives it no reading. ${otherFor(task)}` };
+    }
+    return { kind, title, pick: null, why: `No rated open model fits this ${machine}'s ${gb(mem)} of memory. ${otherFor(task)}` };
+  });
+}
+export const TEST_SIZE = 8; // the test's questions that fit 16,000 tokens of context (localtest.ts)
+
 export async function overview() {
   const memory = probe.memory();
   const here = onThisComputer();
-  const free = here ? probe.free(modelsDir()) : null;
-  const base = { tried: `${host()}/api/tags`, installUrl: INSTALL_URL, memory: { total: memory, usable: Math.round(memory * 0.7) }, disk: { free, minFree: MIN_FREE, known: free !== null }, remote: !here, pull: pullView(), suggest: suggestLocal() };
+  const where = here ? whereModels() : null;
+  const free = where ? where.free : null;
+  const base = { tried: `${host()}/api/tags`, installUrl: INSTALL_URL, memory: { total: memory, usable: Math.round(memory * 0.7) }, disk: { free, minFree: MIN_FREE, known: free !== null }, remote: !here, pull: pullView(), suggest: suggestLocal(), where, found: here ? foundElsewhere() : [], machine: process.platform === "darwin" ? "Mac" : "computer" };
   try {
     const tags = await (await ask("/api/tags")).json() as any;
     let ps: any = { models: [] };
@@ -121,9 +310,9 @@ export async function overview() {
         return { name: t.name, size, params: t.details?.parameter_size ?? null, quant: t.details?.quantization_level ?? null, family: t.details?.family ?? null, modified: typeof t.modified_at === "string" ? t.modified_at : null, loaded: loaded.has(t.name), fit: fit(size, memory) };
       })
       .sort((a: Installed, b: Installed) => a.name.localeCompare(b.name));
-    return { ...base, running: true, installed, total: installed.reduce((n, m) => n + m.size, 0) };
+    return { ...base, running: true, installed, total: installed.reduce((n, m) => n + m.size, 0), kinds: here ? kindsFor(installed, memory, free, base.found) : [] };
   } catch {
-    return { ...base, running: false, installed: [] as Installed[], total: 0 };
+    return { ...base, running: false, installed: [] as Installed[], total: 0, kinds: [] as KindPick[] };
   }
 }
 
@@ -295,7 +484,7 @@ async function run(j: Job) {
     if (!s.ticked.includes(made.id)) saveSettings({ ticked: [...s.ticked, made.id] }); // you asked for it, so it is ready to pick
     j.status = "done"; j.step = "Done"; j.ended = Date.now();
     const rated = made.ratings.overall !== undefined;
-    j.message = `Downloaded ${made.label}${j.size ? ` (${gb(j.size)})` : ""}. It is ticked${rated ? `, and rated like ${made.ratingFrom?.split(",")[0] ?? "its twin"}, so Auto and plans can use it` : ". Leanfare has no rating for this name, so Auto does not pick it: choose it by name in the chat"}.`;
+    j.message = `Downloaded ${made.label}${j.size ? ` (${gb(j.size)})` : ""}. It is ticked${rated ? `, and rated like ${made.ratingFrom?.split(",")[0] ?? "its twin"}, so Auto and plans can use it` : ". Arena does not rate it, so Auto does not pick it: test it here (Settings, Local models), and if it passes it takes reading in plans and the delegate"}.`;
   } catch (e: any) {
     if (e?.name === "AbortError" || !active(j)) return;
     fail(j, "Leanfare lost touch with Ollama. Open the Ollama app, then press Download to continue where it stopped.");

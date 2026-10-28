@@ -20,3 +20,4 @@ export function setSwitch(on: boolean): boolean {
 
 export const OFF_TEXT = "Leanfare is switched off (the switch at the top of the Leanfare app), so nothing was handed over. Do this yourself, as usual.";
 export const OFF_TRIAL = "Leanfare is switched off (the switch at the top of the Leanfare app). Turn it on to run the trial.";
+export const OFF_TEST = "Leanfare is switched off (the switch at the top of the Leanfare app). Turn it on to test a model.";
