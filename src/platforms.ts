@@ -17,6 +17,27 @@ export const platformOf = (m: Pick<Model, "provider" | "local">): string => (m.l
 export const platformOn = (p: string): boolean => !(settings().appsOff ?? []).includes(p);
 export const modelOn = (m: Pick<Model, "provider" | "local">): boolean => platformOn(platformOf(m));
 
+// What a model's own terms let its company do with what is sent to it. Google's free key: people may read it, and
+// Google asks that nothing sensitive or personal goes there (Gemini API Additional Terms, Unpaid Services, March
+// 2026). OpenRouter's free models: their providers may keep it or train on it, as your OpenRouter settings allow.
+export function readRisk(m: Pick<Model, "provider" | "free">): string | null {
+  if (m.provider === "google" && settings().providers.google?.free) return "people may read it";
+  if (m.free) return "its provider may train on it";
+  return null;
+}
+export const RISK_WHY: Record<string, string> = {
+  "people may read it": "Google's terms for a free Gemini key: people may read what is sent, and it is used to improve Google's products; Google asks that nothing sensitive or personal goes there. A paid key is not read or used that way.",
+  "its provider may train on it": "A free model on OpenRouter: its provider may keep what is sent or train on it, as your OpenRouter privacy settings allow.",
+};
+// Whether a model may take a piece of work: a private one stays on this computer; one with files from your
+// projects goes where Settings says (any platform that is on, not to a free tier that may be read, or this computer).
+export function mayTake(m: Pick<Model, "provider" | "free" | "local">, work: { private?: boolean; files?: boolean }): boolean {
+  if (work.private) return !!m.local;
+  if (!work.files) return true;
+  const to = settings().filesTo ?? "any";
+  return to === "local" ? !!m.local : to === "notFree" ? !readRisk(m) : true;
+}
+
 export function setPlatform(id: string, on: boolean) {
   const off = new Set(settings().appsOff ?? []);
   if (on) off.delete(id); else off.add(id);
@@ -30,6 +51,8 @@ export interface PlatformRow {
   windows: LimitWindow[]; // a plan's windows, the nearest first (the 5 hours before the week)
   limit: string | null; // the rest, in words: a free key's count today, a budget, no limit
   source: string | null; // where the numbers come from
+  risk: string | null; // a free tier whose terms let its company read or train on what is sent, and why (riskWhy)
+  riskWhy: string | null;
 }
 
 const tok = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(Math.round(n)));
@@ -60,7 +83,7 @@ export function windowsText(ws: LimitWindow[], at = now().getTime()): string {
 export async function platformsView(): Promise<{ rows: PlatformRow[]; lines: string[] }> {
   const s = settings();
   const rows: PlatformRow[] = [];
-  const row = (r: Omit<PlatformRow, "on">) => rows.push({ ...r, on: platformOn(r.id) });
+  const row = (r: Omit<PlatformRow, "on" | "risk" | "riskWhy"> & { risk?: string | null }) => rows.push({ ...r, on: platformOn(r.id), risk: r.risk ?? null, riskWhy: r.risk ? RISK_WHY[r.risk] ?? null : null });
   // Claude: work goes to Claude's models with an Anthropic key; the plan's limits come from Claude Code's status line.
   const claude = await planWindows("claude");
   const anthropic = providerReady("anthropic");
@@ -79,7 +102,7 @@ export async function platformsView(): Promise<{ rows: PlatformRow[]; lines: str
   const google = providerReady("google");
   const free = !!s.providers.google?.free;
   const n = requestsToday("google");
-  row({ id: "google", label: "Gemini", ready: google, windows: [], source: null,
+  row({ id: "google", label: "Gemini", ready: google, windows: [], source: null, risk: google && free ? "people may read it" : null,
     needs: google ? null : "Add a Gemini key to use it (Google gives a free one).",
     limit: !google ? null : free ? `Free key: ${n.toLocaleString("en-US")} request${n === 1 ? "" : "s"} through Leanfare today (Google sets its free limits and does not say them ahead).` : budgetLine() });
   // Grok.
@@ -91,7 +114,8 @@ export async function platformsView(): Promise<{ rows: PlatformRow[]; lines: str
   // The other companies you have a key for.
   for (const p of PROVIDERS) {
     if (["openai", "anthropic", "google", "xai", "ollama"].includes(p.id) || p.local || !providerReady(p.id)) continue;
-    row({ id: p.id, label: provider(p.id)?.name ?? p.id, ready: true, windows: [], source: null, needs: null, limit: budgetLine() });
+    const freeOnes = p.id === "openrouter" && settings().ticked.some((id) => id.startsWith("openrouter/") && id.endsWith(":free"));
+    row({ id: p.id, label: provider(p.id)?.name ?? p.id, ready: true, windows: [], source: null, needs: null, limit: budgetLine(), risk: freeOnes ? "its provider may train on it" : null });
   }
   return { rows, lines: platformLines(rows) };
 }
