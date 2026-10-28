@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.0
+
+- What Leanfare did for your apps: Savings opens with the share of the work for your apps (plans and the delegate) that stayed out of your plans, in tokens too, what it cost and where it ran, how good the answers were (your apps' grades and the checks), and the last few tasks, a plan's parts on one line. A plan says the share of the task it keeps out, and the `spend` tool says all of it.
+- Your own models, tested here: Settings, Local models says where Ollama keeps your models (an external drive too, with its free space; downloads go there), suggests one for each kind of work (reading, drafting, working things out) with its size, and tests a model you have on 8 questions with known answers, on your computer. One that passes takes reading work first in plans and the delegate, for free. Ollama models on an attached drive that Ollama does not use can be used where they are.
+- Where Leanfare may send work: Settings lists Claude, ChatGPT, Gemini, Grok, your own models and the others you have a key for, each with a switch (off: plans and the delegate leave it out) and what is left before its nearest limit: a plan's 5 hours before its week, a free key's requests today, or your budget.
+- Free tiers marked: a free Gemini key ("people may read it", by Google's terms) and OpenRouter's free models are marked in Settings, in plans and in receipts. Settings chooses where your projects' files may go, and an app can keep one task or plan on your computer (private).
+
+Fixed from 0.7.0:
+
+- A plan's split by a model answers within 40 seconds; a model that takes longer is let go and the rules split the task (Cowork waits 60 seconds for a tool).
+- A plan's parts run on the model its table names. When that one cannot answer, another takes it within the same limits, and the receipt says which and why.
+- A hand off answers within about 40 seconds: the answer, or an id while it keeps working, and delegate with only that id gives the answer.
+- The plan's card in Claude Desktop and Cowork follows a run Claude started, so the chat shows one next step, not two.
+- Savings cards keep their height in a short window; the trial card could shrink to its title.
+- Tests take a port nothing listens on.
+
 ## 0.7.0
 
 - Simple to start. The first time, Leanfare opens on Set up: the AI apps on this computer and the models it can hand work to, and one press, **Turn on Leanfare**, adds it to each app. Then it opens on Chat, with the one step each app needs at the top. When no model you ticked can be used yet, Set up ticks the first models of each provider you have, and with none it offers the quickest way to get one: Connect OpenRouter, add a key, or a free model for Ollama. Settings, In your apps, **Set up all at once** runs it again.
