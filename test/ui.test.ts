@@ -9,6 +9,9 @@ test("every button that starts work is a run button, so it turns into its own St
   expect(plain.map((m) => m[1])).toEqual([]);
   for (const label of ["Test and save", "Update now", "Update list", "Look again", "Refresh"]) expect(js).toContain(`runButton("${label}"`);
 });
+test("Turn on Leanfare is a run button too, so it is its own Stop", () => {
+  expect(js).toContain('runButton(allIn ? "Turn on Leanfare again" : "Turn on Leanfare", (signal) => turnOnLeanfare(signal), "btn primary big-btn")');
+});
 test("Send becomes Stop while an answer is written, and Esc stops it", () => {
   expect(js).toContain('send.textContent = S.live ? "Stop" : "Send"');
   expect(js).toContain('e.key === "Escape" && S.live');
@@ -32,4 +35,9 @@ test("drafts are kept in localStorage", () => {
 test("the page loads nothing from the internet", () => {
   expect(html).not.toMatch(/(src|href)="https?:/);
   expect(js).not.toMatch(/fetch\(\s*["'`]https?:/);
+});
+
+test("the page starts simple, and shows no screen before the script picks one", () => {
+  expect(html).toContain('<div id="app" class="simple">');
+  expect(html).not.toMatch(/class="tab[^"]*\bon\b/);
 });
