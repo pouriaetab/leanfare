@@ -82,6 +82,30 @@ describe("the plan inside the chat (an MCP App)", () => {
     expect(sent.some((m) => m.method === "ui/notifications/size-changed")).toBe(true); // it tells the app its height
   });
 
+  test("a run Claude started itself: the page follows it, with no second Run and no hand back", async () => {
+    let looks = 0;
+    const { doc, sent, push } = open((m) => {
+      if (m.method === "ui/initialize") return { hostContext: {} };
+      if (m.method === "tools/call" && m.params.name === "plan_status") {
+        looks++;
+        if (looks === 1) return { isError: true, content: [{ type: "text", text: "No run of that plan." }] }; // Claude has not started it yet
+        if (looks <= 3) return { structuredContent: { id: "p1", running: true, asks: null, parts: [{ n: 1, title: "Read the logs", status: "running", model: null, answer: null, error: null }, { n: 2, title: "Fix the cause", status: "yours", model: null, answer: null, error: null }] } };
+        return { structuredContent: { id: "p1", running: false, asks: null, parts: [{ n: 1, title: "Read the logs", status: "done", model: "GPT-5 mini", answer: "Three timeouts at 10:02.", error: null }, { n: 2, title: "Fix the cause", status: "yours", model: null, answer: null, error: null }] } };
+      }
+    });
+    await until(() => sent.some((m) => m.method === "ui/notifications/initialized"));
+    push("ui/notifications/tool-result", { structuredContent: PLAN });
+    await until(() => !!doc.querySelector("#run"));
+    expect(doc.querySelector("#run").textContent).toBe("Run Leanfare's parts (about $0.01 paid)");
+    await until(() => doc.body.textContent.includes("Claude started this run."), 9000);
+    expect(doc.querySelector("#run").textContent).toBe("Running…");
+    expect(doc.querySelector("#run").disabled).toBe(true);
+    await until(() => doc.body.textContent.includes("Three timeouts"), 6000);
+    expect(doc.body.textContent).toContain("Claude started this run and reads the answers itself.");
+    expect(doc.querySelector("#back")).toBeNull();
+    expect(sent.some((m) => m.params?.name === "plan_run")).toBe(false);
+  }, 20000);
+
   test("a part after one of yours: the page says it waits for yours, and offers no Run when nothing else can start", async () => {
     const { doc, sent, push } = open((m) => (m.method === "ui/initialize" ? { hostContext: {} } : undefined));
     await until(() => sent.some((m) => m.method === "ui/notifications/initialized"));
