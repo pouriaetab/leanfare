@@ -18,7 +18,7 @@ beforeEach(async () => { await reset({ ticked: ALL_TICKED }); setSwitch(true); }
 describe("the switch", () => {
   test("off and on again: only a file in the data folder holds it, and the page reads it from the state", async () => {
     expect((await ui(url, "/api/state")).json.switchOn).toBe(true);
-    expect((await ui(url, "/api/switch", { on: false })).json).toEqual({ on: false, stopped: { plans: 0, trial: false } });
+    expect((await ui(url, "/api/switch", { on: false })).json).toEqual({ on: false, stopped: { plans: 0, delegates: 0, trial: false } });
     expect((await ui(url, "/api/state")).json.switchOn).toBe(false);
     expect(existsSync(paths.off)).toBe(true);
     expect(switchedOn()).toBe(false);
@@ -123,13 +123,13 @@ describe("while Leanfare is off, work from another process is refused, and what 
     for (let i = 0; i < 200 && runView(plan.id)!.parts[0].status !== "running"; i++) await Bun.sleep(25);
     const r = (await ui(url, "/api/switch", { on: false })).json;
     expect(r.on).toBe(false);
-    expect(r.stopped).toEqual({ plans: 1, trial: false });
+    expect(r.stopped).toEqual({ plans: 1, delegates: 0, trial: false });
     for (let i = 0; i < 200 && runView(plan.id)!.running; i++) await Bun.sleep(25);
     expect(runView(plan.id)!.parts[0].status).toBe("stopped");
     setSwitch(true);
     startTrial();
     const t = (await ui(url, "/api/switch", { on: false })).json;
-    expect(t.stopped).toEqual({ plans: 0, trial: true });
+    expect(t.stopped).toEqual({ plans: 0, delegates: 0, trial: true });
     expect(trialRunning()).toBe(false);
   });
 

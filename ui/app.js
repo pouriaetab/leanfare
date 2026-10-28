@@ -2478,7 +2478,7 @@
       const { on, stopped } = await api("/api/switch", { body: { on: next } });
       S.st.switchOn = on;
       renderShell();
-      const what = [stopped?.plans ? `${stopped.plans} running plan${stopped.plans === 1 ? "" : "s"}` : "", stopped?.trial ? "the trial" : ""].filter(Boolean);
+      const what = [stopped?.plans ? `${stopped.plans} running plan${stopped.plans === 1 ? "" : "s"}` : "", stopped?.delegates ? `${stopped.delegates} hand off${stopped.delegates === 1 ? "" : "s"} still working` : "", stopped?.trial ? "the trial" : ""].filter(Boolean);
       toast(next ? "Leanfare is on in your apps again." : `Leanfare is off in your apps.${what.length ? ` It stopped ${andList(what)}.` : ""}`, "done"); // the line at the top says the rest
     } catch (e) { S.st.switchOn = !next; renderShell(); failed(e); }
   }

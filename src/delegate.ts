@@ -26,7 +26,7 @@ import { DELEGATE_LIMITS, type DelegateFile } from "./readfiles";
 import { guessTask, rating, type Guess, type Msg } from "./router";
 import type { Mode } from "./settings";
 import { UserError } from "./upstream";
-import { localDay, localMonth, now } from "./util";
+import { localDay, localMonth, now, randomId } from "./util";
 
 export type Kind = "read" | "write" | "reason";
 export type Effort = "low" | "medium" | "high";
@@ -390,3 +390,49 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   write({ ...row, model: first.meta.model.id, cost: first.cost, answerTokens, status: "ok", chance, checker: check.checker?.id ?? null, verdict: picked ? check.verdict : null, checkCost: check.cost, rerun: firstUsed ? model.id : null, rerunCost });
   return { ...result, receipt: receiptOf(result, input.maxOut) };
 }
+
+// ---- a hand off that takes longer than an app waits ------------------------------------------------
+// An app waits about a minute for a tool's answer (Cowork's link to this computer: 60 seconds). A hand off
+// asked with a wait runs on its own: its answer comes back within the wait when it can, and otherwise the
+// app gets an id and asks again with it. The last 50 are kept, for 2 hours; switching Leanfare off stops them.
+interface Job { id: string; started: number; done: boolean; result: DelegateResult | null; error: { status: number; message: string } | null; ac: AbortController; settled: Promise<void> }
+const jobs = new Map<string, Job>();
+const KEEP_MS = 2 * 60 * 60_000;
+const KEEP_N = 50;
+
+export function startDelegate(input: DelegateInput): Job {
+  for (const [id, j] of jobs) if (j.done && Date.now() - j.started > KEEP_MS) jobs.delete(id);
+  while (jobs.size >= KEEP_N) jobs.delete(([...jobs.values()].find((j) => j.done) ?? [...jobs.values()][0]).id);
+  const ac = new AbortController();
+  const job: Job = { id: randomId(), started: Date.now(), done: false, result: null, error: null, ac, settled: Promise.resolve() };
+  job.settled = runDelegate(input, ac.signal)
+    .then((r) => { job.result = r; }, (e: any) => { job.error = { status: e instanceof UserError ? e.status : 500, message: String(e?.message ?? e) }; })
+    .finally(() => { job.done = true; });
+  jobs.set(job.id, job);
+  return job;
+}
+
+// The job after at most this many seconds of waiting for it to end (sooner when the asker goes away).
+export async function waitDelegate(id: string, seconds: number, signal?: AbortSignal): Promise<Job | null> {
+  const job = jobs.get(id);
+  if (!job) return null;
+  if (!job.done && seconds > 0) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let gone: (() => void) | undefined;
+    await Promise.race([
+      job.settled,
+      new Promise<void>((r) => { timer = setTimeout(r, seconds * 1000); }),
+      new Promise<void>((r) => { gone = () => r(); signal?.addEventListener("abort", gone, { once: true }); }),
+    ]);
+    clearTimeout(timer);
+    if (gone) signal?.removeEventListener("abort", gone);
+  }
+  return job;
+}
+
+export function stopDelegates(): number {
+  let n = 0;
+  for (const j of jobs.values()) if (!j.done) { j.ac.abort(); n++; }
+  return n;
+}
+
