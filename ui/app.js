@@ -514,12 +514,12 @@
     const st = (n) => run?.parts.find((x) => x.n === n) ?? null;
     const rows = P.parts.map((p) => {
       const r = st(p.n);
-      const td = (label, props) => h("td", { "data-label": label, ...props });
+      const td = (label, props, ...kids) => h("td", { "data-label": label, ...props }, ...kids);
       return h("tr", { class: p.where === "you" ? "yours" : "" },
         td("#", { text: String(p.n) }),
         h("td", { "data-label": "Part", class: "part" }, h("b", { text: p.title }), h("div", { class: "fine", text: p.why })),
         td("Kind", { text: `${p.kind}, ${p.effort}` }),
-        td("Runs on", { text: p.where === "you" ? (P.manager === "you" ? "you" : `you (${P.manager})`) : RUNS_ON[p.where] }),
+        td("Runs on", {}, p.where === "you" ? (P.manager === "you" ? "you" : `you (${P.manager})`) : RUNS_ON[p.where], p.risk ? h("span", { class: "chip warn", title: "A free tier: what is sent there may be read or kept by its company. Make the plan private to keep it on this computer.", text: p.risk }) : null),
         td("Model", { text: p.model?.label ?? p.use?.label ?? "your model" }),
         td("Time", { text: p.seconds === null ? "—" : secsShort(p.seconds) }),
         td("Tokens", { text: p.where === "you" ? `~${tokShort(p.tokens)} of your plan` : `~${tokShort(p.tokens)} kept` }),
@@ -2387,12 +2387,21 @@
         h("span", { class: "hs-label", text: r.on ? "Use" : "Off" }), h("span", { class: "track", "aria-hidden": "true" }, h("span", { class: "knob" }))) : null;
       const lims = r.windows.length ? `${r.windows.map(windowText).join(" · ")}${r.source ? ` (${r.source})` : ""}` : null;
       card.append(h("div", { class: "prow" + (r.ready ? "" : " off") },
-        h("div", { class: "pinfo" }, h("div", { class: "pname", text: r.label }),
+        h("div", { class: "pinfo" }, h("div", { class: "pname" }, r.label, r.risk ? h("span", { class: "chip warn", text: r.risk }) : null),
           lims ? h("div", { class: "note lim", text: lims }) : null,
           r.limit ? h("div", { class: "note", text: r.limit }) : null,
-          r.needs ? h("div", { class: "note", text: r.needs }) : null),
+          r.needs ? h("div", { class: "note", text: r.needs }) : null,
+          r.riskWhy ? h("details", { class: "why" }, h("summary", { text: "Why it says so" }), h("p", { class: "note", text: r.riskWhy })) : null),
         sw ?? h("span", {})));
     }
+    // Where your projects' files may go (platforms.ts: mayTake); the details stay folded until asked for.
+    const to = S.st?.settings.filesTo ?? "any";
+    card.append(h("div", { class: "files-to" },
+      h("div", { class: "pname", text: "Your projects' files go to" }),
+      h("div", { class: "seg wrap", role: "group", "aria-label": "Your projects' files go to" }, ...[["any", "Any platform that is on"], ["notFree", "Not to a free tier that may be read"], ["local", "Only this computer"]].map(([k, label]) =>
+        h("button", { type: "button", "aria-pressed": String(to === k), text: label, onclick: () => patchSettings({ filesTo: k }, k === "any" ? "Files may go to any platform that is on." : k === "notFree" ? "Files skip free tiers that may be read." : "Files stay on this computer.") }))),
+      h("details", { class: "why" }, h("summary", { text: "What this does" }),
+        h("p", { class: "note", text: "Files from your projects, in a plan's parts or the delegate, go only where this says; work with no files may still go to any platform that is on. A part no model there can take stays with you. Not to a free tier: they skip Gemini's free key and OpenRouter's free models. Only this computer: they go to your models in Ollama. An app can also ask for one task or plan to stay on this computer (private)." }))));
     card.append(h("p", { class: "fine", text: "The nearest limit shows first: the 5 hours before the week. A plan's numbers come only from its own app (Claude Code's status line, Codex's log files). Off: plans and the delegate leave that one out; the chat uses the models you ticked." }));
     return card;
   }

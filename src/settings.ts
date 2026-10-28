@@ -46,6 +46,7 @@ export interface Settings {
   codexPlan: boolean; // a plan's reading, drafting and working out parts may run on your ChatGPT plan through Codex (codex.ts); off until you turn it on
   setupDone: boolean; // the first run's Set up was done (setup.ts); until then the app opens on it
   appsOff: string[]; // platforms plans and the delegate leave out (platforms.ts): provider ids, "chatgpt" (OpenAI and Codex), "local"
+  filesTo: "any" | "notFree" | "local"; // where your projects' files may go in plans and the delegate (platforms.ts: mayTake)
 }
 
 export const DEFAULTS: Settings = {
@@ -72,6 +73,7 @@ export const DEFAULTS: Settings = {
   codexPlan: false,
   setupDone: false,
   appsOff: [],
+  filesTo: "any",
 };
 
 // What a short answer is, given to the chat screen's models before the chat's own instructions
@@ -147,6 +149,7 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
     if (typeof p[k] !== "boolean") return { error: `${k} must be true or false` };
     out[k] = p[k];
   }
+  if ("filesTo" in p) { if (!["any", "notFree", "local"].includes(p.filesTo)) return { error: "filesTo must be any, notFree or local" }; out.filesTo = p.filesTo; }
   if ("planAuto" in p) {
     if (typeof p.planAuto === "boolean") return { error: "planAuto must be a dollar amount from 0 to 1,000" };
     const v = p.planAuto === null || p.planAuto === "" ? 0 : Number(p.planAuto);

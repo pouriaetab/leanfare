@@ -81,7 +81,7 @@ export const PLAN_APP_HTML = `<!doctype html>
     const rows = plan.parts.map((p) => el("tr", { class: p.runs_on === "you" ? "you" : "" },
       el("td", { class: "n", text: p.n }),
       el("td", {}, el("b", { text: p.title }), el("div", { class: "why", text: p.kind + ", " + p.effort + (p.needs.length ? " · after " + p.needs.join(", ") : "") })),
-      el("td", { "data-l": "Runs on", text: RUNS[p.runs_on] || p.runs_on }),
+      el("td", { "data-l": "Runs on", text: (RUNS[p.runs_on] || p.runs_on) + (p.risk ? " (" + p.risk + ")" : "") }),
       el("td", { "data-l": "Model", text: p.model_label || (p.runs_on === "you" ? (p.your_model && p.your_model.label) || "your model" : p.model || "") }),
       el("td", { class: "t", "data-l": "Time", text: secs(p.seconds) }),
       el("td", { "data-l": "Tokens", text: "~" + tok(p.tokens) + (p.runs_on === "you" ? " of your plan" : " kept") }),
