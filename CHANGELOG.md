@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.0
+
+- Simple to start. The first time, Leanfare opens on Set up: the AI apps on this computer and the models it can hand work to, and one press, **Turn on Leanfare**, adds it to each app. Then it opens on Chat, with the one step each app needs at the top. When no model you ticked can be used yet, Set up ticks the first models of each provider you have, and with none it offers the quickest way to get one: Connect OpenRouter, add a key, or a free model for Ollama. Settings, In your apps, **Set up all at once** runs it again.
+- One switch at the top, **In your apps**, turns Leanfare off and on in all your apps at once. Off, its tools hand nothing over and your apps do the work themselves; running plan parts and the trial stop, and a line at the top says it is off.
+- Day, Auto and Night at the top right. Auto is day from 7 AM to 7 PM by this computer's clock; the colors are set before the page is drawn, so it never flashes the wrong ones.
+- A short README; the details are in the guide, `docs/GUIDE.md`.
+
+Fixed from 0.6.0:
+
+- A folder where an app's settings file should be no longer stops the list of apps; that app is shown as one Leanfare leaves alone.
+- The plan's page in Claude Desktop no longer shows the word "null" when no local model fits this computer.
+
 ## 0.6.0
 
 - Your ChatGPT plan, through Codex: turn it on in Settings, and a plan's reading, drafting and working out parts run on Codex, signed in with ChatGPT, before any pay per use model. Read only, in the folder of their files, without your MCP servers, apps or plugins, two at a time; they count toward your ChatGPT plan's Codex limits, and Leanfare pays nothing for them. Leanfare leaves Codex alone near 85% of the plan's 5 hours or week.
