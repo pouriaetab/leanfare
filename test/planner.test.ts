@@ -139,6 +139,24 @@ describe("where each part runs", () => {
     expect(r.split.note).toContain("did not read as parts");
   });
 
+  test("a split that takes too long is let go before an app stops waiting, and the rules split it; a Stop of yours still stops", async () => {
+    await keys("openai", "google", "deepseek");
+    process.env.LEANFARE_SPLIT_SECONDS = "1";
+    fake.hooks.answer = (prompt) => (prompt.includes("The person works in") ? SPLIT : null);
+    fake.hooks.slow = (prompt) => (prompt.includes("The person works in") ? 4000 : 0);
+    try {
+      const t0 = Date.now();
+      const r = await makePlan({ task: "Port the CLI to Rust", files: [], manager: "Codex", signal: signal() });
+      expect(Date.now() - t0).toBeLessThan(3000);
+      expect(r.split.by).toBe("rules");
+      expect(r.split.note).toBe("The model took more than 1 second to split it, so Leanfare split it by rules.");
+      expect(r.parts.length).toBeGreaterThan(0);
+      const mine = new AbortController();
+      setTimeout(() => mine.abort(), 200);
+      await expect(makePlan({ task: "Port the CLI to Rust", files: [], manager: "Codex", signal: mine.signal })).rejects.toThrow("Stopped.");
+    } finally { delete process.env.LEANFARE_SPLIT_SECONDS; fake.hooks.slow = null; }
+  });
+
   test("a search part goes to a model that searches the web, or stays with you without one", async () => {
     await keys("openai", "google");
     const r = await makePlan({ task: "Research the cheapest coding models and compare them", files: [], manager: "Claude Code", split: "rules", signal: signal() });
