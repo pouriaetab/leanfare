@@ -95,6 +95,7 @@ const TOOLS = [
         part: { type: "integer", minimum: 1, description: "The part's number in the plan." },
         model: { type: "string", description: "For a delegate answer: the model id its receipt named, such as deepseek/deepseek-v4-flash." },
         kind: { type: "string", enum: ["read", "write", "reason", "search"], description: "For a delegate answer: the kind you gave it." },
+        handoff: { type: "integer", minimum: 1, description: "For a delegate answer: the hand off's number, from its receipt." },
       },
       required: ["verdict"],
       additionalProperties: false,
@@ -142,7 +143,7 @@ const TOOLS = [
   {
     name: "spend",
     title: "What was spent",
-    description: "What the user spent on AI through Leanfare today and this month, the budget left, what Auto saved against their usual model, and the top models.",
+    description: "What the user spent on AI through Leanfare today and this month, the budget left, what Auto saved against their usual model, the top models, and the work Leanfare did for apps this month (plan and delegate): the share kept out of their plans, its cost and the grades.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { title: "What was spent", readOnlyHint: true, openWorldHint: false },
   },
@@ -195,6 +196,17 @@ const TOOLS = [
 // ---- the tools -------------------------------------------------------------------------
 
 const usd = (v: number | null | undefined) => (v === null || v === undefined ? "unknown" : v === 0 ? "$0" : v < 0.01 ? `$${v.toPrecision(2)}` : `$${v.toFixed(v < 1 ? 4 : 2)}`);
+const count = (n: number) => n.toLocaleString("en-US");
+// The spend tool's lines for the work Leanfare did for apps this month (savings.ts: work).
+function workLines(w: any): string {
+  if (!w?.tasks) return "No work was handed to Leanfare by your apps this month (plan and delegate).";
+  const graded = w.grades.good + w.grades.partly + w.grades.wrong;
+  const checked = w.checks.passed + w.checks.failed;
+  return [
+    `Work for your apps this month (plan and delegate): ${count(w.tasks)} task${w.tasks === 1 ? "" : "s"}, ${w.keptPct === null ? "nothing measured yet" : `${Math.round(w.keptPct * 100)}% kept out of your plans`} (${count(w.kept)} tokens stayed out, ${count(w.back)} came back), ${usd(w.cost)}.`,
+    `Quality: ${graded ? `${count(w.grades.good)} of ${count(graded)} graded good, ${count(w.grades.partly)} partly, ${count(w.grades.wrong)} wrong` : "no answer graded yet"}; checks: ${checked ? `${count(w.checks.passed)} of ${count(checked)} passed` : "none yet"}.`,
+  ].join("\n");
+}
 const text = (t: string, structured?: unknown) => ({ content: [{ type: "text", text: t }], ...(structured !== undefined ? { structuredContent: structured } : {}) });
 const failure = (t: string) => ({ content: [{ type: "text", text: t }], isError: true });
 
@@ -301,7 +313,7 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
   if (name === "grade") {
     if (!["good", "partly", "wrong"].includes(args?.verdict)) return failure("grade needs a verdict: good, partly or wrong.");
     const body = typeof args.id === "string" && Number.isInteger(args.part) ? { id: args.id, part: args.part, verdict: args.verdict }
-      : typeof args.model === "string" && typeof args.kind === "string" ? { model: args.model, kind: args.kind, verdict: args.verdict } : null;
+      : typeof args.model === "string" && typeof args.kind === "string" ? { model: args.model, kind: args.kind, verdict: args.verdict, ...(Number.isInteger(args.handoff) ? { handoff: args.handoff } : {}) } : null;
     if (!body) return failure("grade needs the plan's id and the part's number, or, for a delegate answer, the model and the kind.");
     const { j } = await call("/api/grades", { method: "POST", json: body }, signal);
     return text(`Graded ${args.verdict}. ${j.text}`, j.standing);
@@ -413,12 +425,12 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
       ({ j } = await call("/api/delegate", { method: "POST", json: body }, signal));
     }
     if (j.running) return text(`Still working in Leanfare (${j.seconds} seconds so far). Call delegate again with id "${j.id}" and nothing else to get the answer.`, { running: true, id: j.id, seconds: j.seconds });
-    const gradeIt = ["read", "write", "reason"].includes(j.kind) ? `\n\n(Once you have used it: grade, with model ${j.model.id} and kind ${j.kind}.)` : "";
+    const gradeIt = ["read", "write", "reason"].includes(j.kind) ? `\n\n(Once you have used it: grade, with model ${j.model.id}, kind ${j.kind}${j.row ? ` and handoff ${j.row}` : ""}.)` : "";
     return text(`${j.answer}\n\n(${j.receipt})${gradeIt}`, {
       answer: j.answer, model: j.model.id, cost_usd: j.cost, total_usd: j.total, task: j.task, effort: j.effort,
       check: j.check.picked ? { verdict: j.check.verdict, by: j.check.checker?.id ?? null, why: j.check.why || null, cost_usd: j.check.cost } : null,
       first: j.first ? { model: j.first.model.id, cost_usd: j.first.cost } : null,
-      tokens: j.tokens, cut: j.cut, seconds: j.seconds,
+      tokens: j.tokens, cut: j.cut, seconds: j.seconds, handoff: j.row ?? null,
     });
   }
   if (name === "trial") {
@@ -449,9 +461,12 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
       s.budget ? `Budget: ${usd(s.budget.amount)} a month, ${usd(s.budget.left)} left (${Math.floor(s.budget.pct ?? 0)}% used).` : "No monthly budget is set.",
       v.saved?.amount ? `Auto saved ${usd(v.saved.amount)} against the usual model this month${v.more?.ratio ? `: ${v.more.ratio.toFixed(1)} times as many answers for the money` : ""}.` : "Auto has not saved anything against the usual model yet this month.",
       v.byModel?.length ? `By model: ${v.byModel.slice(0, 5).map((r: any) => `${r.label} ${usd(r.cost)} (${r.answers})`).join(", ")}.` : "",
+      workLines(v.work),
       s.paused ? "Leanfare is paused: new requests wait." : "",
     ].filter(Boolean);
-    return text(lines.join("\n"), { today_usd: s.today, month_usd: s.month, answers: s.answers, budget: s.budget, saved_usd: v.saved?.amount ?? 0, top: s.top });
+    const w = v.work;
+    return text(lines.join("\n"), { today_usd: s.today, month_usd: s.month, answers: s.answers, budget: s.budget, saved_usd: v.saved?.amount ?? 0, top: s.top,
+      work: w ? { tasks: w.tasks, kept_share: w.keptPct, tokens_kept_out: w.kept, tokens_came_back: w.back, cost_usd: w.cost, grades: w.grades, checks: { passed: w.checks.passed, failed: w.checks.failed } } : null });
   }
   if (name === "models") {
     const { j: st } = await call("/api/state", {}, signal);
