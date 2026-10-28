@@ -6,9 +6,10 @@ import { join } from "node:path";
 import { VERSION } from "../src/config";
 import { fake } from "./app";
 import { KEYS } from "./fake";
+import { freePort } from "./ports";
 
 const cliPath = new URL("../src/cli.ts", import.meta.url).pathname;
-const port = 4600 + Math.floor(Math.random() * 50);
+const port = await freePort();
 const env = (dir = mkdtempSync(join(tmpdir(), "leanfare-cli-"))) => {
   // LEANFARE_PORT: a command with no record of a running Leanfare looks at the test's port, never at the
   // one a real Leanfare uses on this computer (the Mac app's, 4747).
@@ -81,7 +82,7 @@ describe("leanfare", () => {
     expect(again.out).toContain("not running");
   });
   test("stop and status leave alone a Leanfare that uses another data folder, even when its port is named", async () => {
-    const q = 4800 + Math.floor(Math.random() * 50);
+    const q = await freePort();
     const otherEnv = { ...env(), LEANFARE_PORT: String(q) };
     const other = Bun.spawn([process.execPath, cliPath, "--port", String(q)], { env: otherEnv, stdout: "pipe", stderr: "pipe" });
     try {
@@ -103,7 +104,7 @@ describe("leanfare", () => {
 describe("leanfare after a restart", () => {
   test("the OpenRouter credit is read again by itself at start", async () => {
     const d = mkdtempSync(join(tmpdir(), "leanfare-cli-"));
-    const p = 4660 + Math.floor(Math.random() * 30);
+    const p = await freePort();
     const state = async () => (await (await fetch(`http://127.0.0.1:${p}/api/state`, { headers: { "x-leanfare": "1" } })).json()) as any;
     const credit = async () => (await state()).providers.find((x: any) => x.id === "openrouter").credit;
     let first: ReturnType<typeof Bun.spawn> | null = null, second: ReturnType<typeof Bun.spawn> | null = null;
