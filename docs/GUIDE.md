@@ -41,6 +41,7 @@ Every top AI model in one app on your own computer, and on top of the AI apps yo
 - **Your own models, tested here.** Arena rates few small models, so Auto would not pick most of the ones people run. Test it asks one of yours 8 questions with known answers about files Leanfare makes up, on your computer (free, a few minutes, nothing leaves it). One that gets at most one wrong takes reading first, at low and medium effort, in plans and the delegate: it is free, and a stronger model of yours still checks a sample of its answers.
 - **Models on a drive.** Ollama models on an attached drive that Ollama does not use are found (up to three folders deep), and Use them points Ollama's models folder there, after your yes. What was in the folder is kept under another name.
 - **Where Leanfare may send work.** Settings lists each platform (Claude, ChatGPT, Gemini, Grok, the models on this computer, and the others you have a key for) with what is left before its nearest limit: a Claude or ChatGPT plan's 5 hours before its week (from Claude Code's status line and Codex's log files), a free Gemini key's requests today, your budget, or no limit. A switch turns each one off for plans and the delegate; the chat uses the models you ticked. The `spend` tool says the same.
+- **Free tiers marked, private work kept here.** A free Gemini key is marked "people may read it" (Google's terms for its free tier: people may read what is sent, and Google asks that nothing sensitive or personal goes there), and so are OpenRouter's free models, whose providers may train on what is sent. The mark shows in Settings, on a plan's parts and in a hand off's receipt. Settings chooses where your projects' files go (any platform that is on, by default; not to a free tier; or only this computer), and an app can ask for one task or plan to stay on this computer (private).
 - **A budget that holds.** Each request reserves the most it can cost before it goes out. A warning at 80%; at 100%, keep going on the cheapest model or stop.
 - **A chat that does the everyday things.** Short answers by default. Attach images, PDFs and text files. Edit a question, ask again, or ask another model and see both costs. Per chat instructions, readable thinking, search, export, and import from ChatGPT or Claude.
 - **Light and private.** One program, one SQLite file, no telemetry, no runtime dependencies. Keys stay in your system's keychain, or a file only you can read. Leanfare reads usage numbers, never your words (see [Privacy](#privacy)).
@@ -94,13 +95,13 @@ Settings, **In your apps**, lists the AI apps on this computer. **Add** puts Lea
 
 The tools (an MCP server, `leanfare mcp`, which starts Leanfare when it is not running):
 
-- **delegate** hands a task and its files to a cheaper model (below).
+- **delegate** hands a task and its files to a cheaper model (below); with private, it stays on this computer.
 - **ask** sends a question through Leanfare, with its cost.
 - **spend** says what was spent today and this month, the budget, what Auto saved, and what Leanfare did for your apps this month: the share kept out of your plans, its cost and the grades.
 - **models** lists the models you ticked, with prices and ratings.
 - **estimate** prices a prompt before sending it: the model Auto would pick, its time, and at the same quality the cheapest and the fastest choice.
 - **trial** runs the trial (below) and reports on it.
-- **plan** splits a task into parts, each with where it runs and its model, as a table (see [Plan a task](#plan-a-task)).
+- **plan** splits a task into parts, each with where it runs and its model, as a table (see [Plan a task](#plan-a-task)); with private, the whole plan stays on this computer.
 - **plan_run**, **plan_status** and **plan_stop** run Leanfare's parts of a plan in the background, give their answers, and stop them.
 - **grade** says how good the answer of a plan's part or of `delegate` was: good, partly or wrong (see [Grades](#grades)).
 - **local_model** says where your models are, suggests one for each kind of work, tests a model you have (action test), has Ollama download one after the user's yes, and says how a test or a download goes.
@@ -239,6 +240,7 @@ Leanfare reads usage numbers, never your words.
 - **Find my keys** reads only the files named above, only when you press it; a key goes only to its own provider, to test it. **Your login shell's settings** are asked for key variables only (names ending in `_KEY`), and only by a Leanfare that did not start from a terminal.
 - **Your chats in Leanfare** stay on your computer and go only to the AI company you pick. The cost ledger, the delegate's and the trial's records keep models, token counts, times and costs, never what you wrote.
 - **A plan** goes to the model that splits it (or to none, by rules), and each part, with its files, to the model the table names for it. When that model cannot answer (busy, or no longer ticked), another of yours takes it (a free part stays on free models), and the part's receipt says which. Some answers are also checked by a stronger model of yours, which sees the part, its files and the answer. The answers are saved in your project's `.leanfare` folder, nowhere else.
+- **A free tier** may not keep what you send to itself: Google's terms for a free Gemini key let people read it and use it to improve Google's products, and OpenRouter's free models may be kept or trained on by their providers. Leanfare marks them and sends them your projects' files only as Settings says; **private** work (a plan or a hand off an app marks so) goes only to models on this computer.
 - **A part on Codex** goes to OpenAI through your own Codex command, as any Codex task does, and Codex reads what it needs, as when you use it. Leanfare asks Codex only how it is signed in, and never reads its sign in.
 - **Grades** keep the model, the kind of work and the grade, never the question or the answer. **What Leanfare did for your apps** is counted from the same records: kinds of work, numbers of files, token counts, models, costs and grades.
 - **A local model** is downloaded by Ollama, from its library, only after your yes. **The test of a model** runs on your computer only, on made up files; Leanfare keeps how many were right. **Models on a drive** are found by their folders' names and sizes; no file of theirs is read.
