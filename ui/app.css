@@ -386,8 +386,10 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
   .top { gap: 10px; padding: 0 12px; }
   .brand span { display: none; }
   #spendPill, .pill.running .lbl { display: none; }
-  .tabs { flex: 1; }
-  .tabs button { flex: 1; padding: 6px 8px; min-height: 40px; }
+  .top { flex-wrap: wrap; height: auto; min-height: 56px; row-gap: 8px; padding: 8px 12px; }
+  .tabs { order: 3; flex: 1 0 100%; }
+  .tabs button { flex: 1; padding: 6px 4px; min-height: 40px; }
+  .top-right { margin-left: auto; }
   .btn { min-height: 40px; }
   .btn.small { min-height: 36px; }
   input[type="text"], input[type="password"], input[type="number"], select, textarea { font-size: 16px; min-height: 42px; }
@@ -492,4 +494,51 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
   .plan-table td::before { content: attr(data-label); color: var(--muted); font-size: 11.5px; min-width: 64px; flex: none; }
   .plan-table td.part { display: block; }
   .plan-table td.part::before, .plan-table td:first-child { display: none; }
+}
+
+/* ---- the first run's Set up, and the switch at the top ------------------------------------------ */
+#app.simple .tabs, #app.simple .top-right { display: none; }
+#app.simple .top { border-bottom-color: transparent; }
+/* Leanfare on or off in your apps: a labelled switch in the top bar */
+.hswitch { flex: none; display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 5px 0 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--muted); font-size: 13px; font-weight: 550; cursor: pointer; white-space: nowrap; }
+.hswitch:hover { border-color: var(--line-strong); }
+.hswitch[aria-checked="true"] { color: var(--text); }
+.hswitch .track { position: relative; display: block; width: 34px; height: 20px; border-radius: 10px; background: var(--line-strong); transition: background 0.15s; }
+.hswitch .knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 8px; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); transition: left 0.15s; }
+.hswitch[aria-checked="true"] .track { background: var(--good); }
+.hswitch[aria-checked="true"] .knob { left: 16px; }
+.notice.next { align-items: flex-start; background: var(--accent-soft); color: var(--text); }
+.notice.next .grow { display: flex; flex-direction: column; gap: 2px; }
+.notice.next .warn-text { font-size: 13px; }
+/* Set up: a card in the middle of the window, like a desktop app's first run; the whole screen on a phone */
+.tab.simple { overflow-y: auto; background: var(--bg); }
+.tab.simple.on { display: block; }
+.simple-col { max-width: 540px; margin: 36px auto; padding: 30px 34px 26px; display: flex; flex-direction: column; gap: 20px; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); }
+.simple-block { display: flex; flex-direction: column; gap: 8px; }
+.simple-h1 { margin: 0; font-size: 26px; line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
+.simple-label { font-size: 12px; font-weight: 650; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.big-sub { margin: 0; font-size: 15px; line-height: 1.45; color: var(--muted); }
+.spacer { display: none; } /* on a phone the last button sits at the bottom (below) */
+.list-card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); overflow: hidden; }
+.list-card.pad { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.list-card.pad p { margin: 0; }
+.list-row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; min-height: 52px; }
+.list-row + .list-row { border-top: 1px solid var(--line); }
+.lr-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.lr-title { font-size: 15px; font-weight: 600; }
+.list-row .note, .list-card.pad .note { font-size: 13.5px; color: var(--muted); }
+.found-mark { flex: none; width: 24px; height: 24px; border-radius: 12px; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; }
+.found-mark.ok { color: var(--good); background: var(--good-soft); }
+.found-mark.warn { color: var(--warn); background: var(--warn-soft); }
+.big-btn { width: 100%; min-height: 50px; border-radius: 12px; font-size: 16px; }
+.simple-col .fine.center, .simple-col .row.center { text-align: center; justify-content: center; }
+.simple-col .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.flash { animation: flash 1.8s ease-out; }
+@keyframes flash { from { box-shadow: 0 0 0 3px var(--accent); } to { box-shadow: 0 0 0 0 transparent; } }
+@media (max-width: 760px) {
+  .tab.simple { background: var(--panel); }
+  .simple-col { max-width: none; min-height: 100%; margin: 0; padding: 20px 16px 22px; border: 0; border-radius: 0; box-shadow: none; }
+  .simple-h1 { font-size: 28px; }
+  .spacer { display: block; flex: 1 1 auto; }
+  .hswitch { min-height: 40px; }
 }
