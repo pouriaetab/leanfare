@@ -315,9 +315,11 @@
   });
 
   // ---- state --------------------------------------------------------------------------
+  // The screens with a tab; Set up has none (the first run, or Settings, In your apps).
+  const SCREEN = (t) => (["chat", "plan", "savings", "settings"].includes(t) ? t : null);
   const S = {
     st: null,
-    tab: isPhone() ? "chat" : store.get("tab", "chat"),
+    tab: isPhone() ? null : SCREEN(store.get("screen", null)), // null: decided at the start (Set up on the first run)
     chatId: store.get("chat", null),
     messages: [],
     chats: [],
@@ -342,6 +344,8 @@
     apps: null, // Use Leanfare in your apps: each AI app on this computer and whether Leanfare's tools are in it
     showAllApps: false,
     registry: null, // Add a provider: models.dev's list of providers that speak OpenAI's format
+    setup: null, // Set up: the apps and models on this computer, from /api/setup
+    afterSetup: null, // what each app needs after Set up (a restart), shown at the top until Done
   };
   const ready = () => S.st && S.st.usableCount > 0;
   const modelsOf = (pid) => (S.st?.models?.[pid] ?? []);
@@ -391,6 +395,12 @@
   function renderShell() {
     const st = S.st;
     if (!st) return;
+    $("#app").classList.toggle("simple", !S.tab || S.tab === "setup"); // no tabs before the first screen is picked, nor on Set up
+    // The switch at the top: Leanfare on or off in your apps (switch.ts).
+    const on = st.switchOn !== false;
+    const sw = $("#appsSwitch");
+    sw.setAttribute("aria-checked", String(on));
+    sw.title = on ? "Leanfare is on in your apps: they hand simple work to it. Press to turn it off." : "Leanfare is off in your apps: they do all the work themselves. Press to turn it on.";
     document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === S.tab)));
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t.id === "tab-" + S.tab));
     const sp = $("#spendPill");
@@ -410,6 +420,11 @@
     pb.className = "btn" + (st.pause.paused ? " amber" : "");
     const n = $("#notices");
     const list = [];
+    if (!on) list.push(h("div", { class: "notice warn" }, h("span", { class: "grow", text: "Leanfare is off in your apps: they do all the work themselves until you turn it on." }), h("button", { class: "btn small", text: "Turn on", onclick: () => toggleAppsSwitch(true) })));
+    // After Set up: the one step each app needs (each says its app's name), until Done.
+    if (S.afterSetup?.length) list.push(h("div", { class: "notice next" },
+      h("div", { class: "grow" }, h("b", { text: "One last step" }), ...S.afterSetup.flatMap((x) => [h("div", { text: x.after }), x.note ? h("div", { class: "warn-text", text: x.note }) : null])),
+      h("button", { class: "btn small", text: "Done", onclick: () => { S.afterSetup = null; renderShell(); } })));
     if (st.pause.paused) list.push(h("div", { class: "notice warn" }, h("span", { class: "grow", text: `Paused. New requests wait until you press Start again${st.pause.waiting ? ` (${st.pause.waiting} waiting now)` : ""}. Answers already running finish.` }), h("button", { class: "btn small", text: "Start again", onclick: togglePause })));
     for (const x of st.notices) {
       list.push(h("div", { class: "notice " + x.level }, h("span", { class: "grow", text: x.text }),
@@ -417,7 +432,9 @@
         x.kind === "budget" ? h("button", { class: "btn small", text: "Budget", onclick: () => setTab("settings") }) : null,
         x.kind === "update" && x.url ? h("a", { class: "btn small", href: x.url, target: "_blank", rel: "noopener noreferrer", text: "What changed" }) : null));
     }
-    n.replaceChildren(...list);
+    // Drawn again only when what they say changes, so a button is never rebuilt under your finger.
+    const key = list.map((x) => x.textContent).join("|");
+    if (n.dataset.key !== key) { n.dataset.key = key; n.replaceChildren(...list); }
   }
 
   async function togglePause() {
@@ -430,8 +447,9 @@
 
   function setTab(t) {
     S.tab = t;
-    if (!isPhone()) store.set("tab", t);
+    if (!isPhone() && SCREEN(t)) store.set("screen", t); // the screen the page opens on next time
     renderShell();
+    if (t === "setup") { S.setup = null; S.setupError = null; renderSetup(); }
     if (t === "chat") renderChat();
     if (t === "savings") loadSavings();
     if (t === "settings") { renderSettings(); loadLocal(); }
@@ -1820,6 +1838,7 @@
   function renderLocal() {
     const old = document.getElementById("localCard");
     if (old) keepInputs(old.parentNode, () => old.replaceWith(localCardEl()));
+    focusSetting(); // a button of Set up may have asked for this card
   }
 
   // While a download runs, only its bar and words are repainted in place, so the Stop button under
@@ -2107,7 +2126,7 @@
         cur ? h("button", { class: "btn", type: "button", text: "Remove", onclick: () => patchSettings({ plans: { [k]: null } }, `${label} plan removed.`) }) : null);
     });
     const hidden = keys.filter((k) => !shown.includes(k));
-    return h("div", { class: "setting" }, h("h3", { text: "Your subscriptions" }), ...rows,
+    return h("div", { class: "setting", id: "plansSetting" }, h("h3", { text: "Your subscriptions" }), ...rows,
       hidden.length ? h("button", { class: "more-toggle", type: "button", text: `▸ More subscriptions (${hidden.map((k) => subs[k].label).join(", ")})`, onclick: () => { S.showAllPlans = true; renderSettings(); } }) : null,
       h("p", { text: "Savings then shows each plan's limits (the 5 hours and the week, where Leanfare can read them) and the tokens your Claude Code and Codex use, in the months the plan covers. Leanfare reads only the token counts in those programs' log files on this computer, never the words; of other AI apps it reads only that they are here and when they were last opened." }),
       h("label", { class: "check" }, h("input", { type: "checkbox", checked: !!s.showValue, onchange: (e) => patchSettings({ showValue: e.target.checked }, e.target.checked ? "Savings also shows what your plan use would cost per use." : "Savings shows your plans in tokens and limits only.") }), "Also show what that use would cost per use, at API prices"),
@@ -2120,7 +2139,7 @@
   // used only after you tick it. The page only ever sees their last four characters.
   function keysCardEl() {
     const input = h("input", { type: "password", placeholder: "Paste any API key: Leanfare finds its provider", autocomplete: "off", "aria-label": "Any API key", "data-keep": "any-key" });
-    return h("div", { class: "setting keys-any" },
+    return h("div", { class: "setting keys-any", id: "keysCard" },
       h("div", { class: "row" }, input, runButton("Add key", (signal) => addAnyKey(input, signal), "btn primary"), runButton("Find my keys", (signal) => findMyKeys(signal))),
       S.found ? foundListEl() : null);
   }
@@ -2302,8 +2321,10 @@
       a.auto && (a.status === "added" || a.status === "old" || a.auto.on || a.auto.partly) ? h("div", { class: "row auto-row" },
         h("span", { class: "grow note", text: `${a.auto.what}${a.auto.on ? " · on" : a.auto.partly ? " · partly on" : ""}.` }),
         runButton(a.auto.on || a.auto.partly ? "Turn off" : "Turn on", (signal) => toggleAuto(a, !(a.auto.on || a.auto.partly), signal), a.auto.on || a.auto.partly ? "btn small" : "btn small primary")) : null);
-    return h("div", { class: "setting apps" }, h("h3", { text: "Use Leanfare in your apps" }),
+    return h("div", { class: "setting apps", id: "appsSetting" }, h("h3", { text: "Use Leanfare in your apps" }),
       h("p", { text: "Adds Leanfare's tools (plan, delegate, ask, spend, models, estimate, trial) to the AI apps you already use, so they work as usual with Leanfare on top. Leanfare changes only its own entry in each app's settings, and keeps a copy of the file as it was." }),
+      h("div", { class: "row" }, h("button", { class: "btn small", type: "button", text: "Set up all at once", onclick: () => setTab("setup") }),
+        h("span", { class: "note", text: "Every app found, and the first models when none is ticked, with one press" })),
       S.apps?.loading ? h("p", { class: "note", text: "Looking for the AI apps on this computer…" }) : null,
       ...here.map(row),
       !S.apps?.loading && !here.length ? h("p", { class: "note", text: "None of the apps Leanfare knows are on this computer yet." }) : null,
@@ -2394,7 +2415,7 @@
       planCapSettingEl(s), codexSettingEl(s), gradesSettingEl(),
       h("div", { class: "setting" }, h("h3", { text: "Your usual model" }), usualSel,
         h("p", { text: "The model you would use without Leanfare. Savings are measured against it." })),
-      h("div", { class: "setting" }, h("h3", { text: "Monthly budget" }),
+      h("div", { class: "setting", id: "budgetSetting" }, h("h3", { text: "Monthly budget" }),
         h("div", { class: "row" }, budgetBox, h("button", { class: "btn", text: "Save", onclick: () => patchSettings({ budget: budgetBox.querySelector("input").value || null }, "Budget saved.") }),
           b.budget !== null ? h("span", { class: "note", text: `${money(b.spent)} spent · ${money(b.left)} left` }) : null),
         h("p", { text: "When it runs out:" }), limitSeg,
@@ -2437,7 +2458,128 @@
     keepInputs(el, () => el.replaceChildren(left, right)); // what is typed in key boxes survives the redraw
     el.querySelector(".colL").scrollTop = scrollL;
     el.querySelector(".colR").scrollTop = scrollR;
+    focusSetting();
   }
+
+  // ---- the first run: Set up, and the switch at the top ----------------------------------------
+  // Most people want Leanfare ready and out of the way: Set up puts it in the AI apps on this computer
+  // with one press, and the switch at the top turns it off and on in all of them at once.
+  const andList = (xs) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
+  // Where the page goes after Set up: the screen you used last (0.6 kept it as "tab"), or Chat.
+  const landing = () => SCREEN(store.get("screen", null)) ?? SCREEN(store.get("tab", null)) ?? "chat";
+
+  async function toggleAppsSwitch(want) {
+    if (!S.st) return;
+    const next = typeof want === "boolean" ? want : S.st.switchOn === false;
+    S.st.switchOn = next; // shown at once, confirmed by the server below
+    renderShell();
+    try {
+      const { on, stopped } = await api("/api/switch", { body: { on: next } });
+      S.st.switchOn = on;
+      renderShell();
+      const what = [stopped?.plans ? `${stopped.plans} running plan${stopped.plans === 1 ? "" : "s"}` : "", stopped?.trial ? "the trial" : ""].filter(Boolean);
+      toast(next ? "Leanfare is on in your apps again." : `Leanfare is off in your apps.${what.length ? ` It stopped ${andList(what)}.` : ""}`, "done"); // the line at the top says the rest
+    } catch (e) { S.st.switchOn = !next; renderShell(); failed(e); }
+  }
+
+  async function loadSetup(signal) {
+    try { S.setup = await api("/api/setup", { signal }); S.setupError = null; }
+    catch (e) { if (e?.name === "AbortError") throw e; S.setupError = String(e?.message ?? e); }
+    if (S.tab === "setup") renderSetup();
+  }
+  function renderSetup() {
+    const el = $("#tab-setup");
+    const v = S.setup;
+    const title = h("div", { class: "simple-block" }, h("h1", { class: "simple-h1", text: "Set up Leanfare" }),
+      h("p", { class: "big-sub", text: "Leanfare works inside the AI apps you already use. It hands simple work, like reading files and drafting, to cheaper or free models, and you keep working as before." }));
+    if (!v) {
+      if (!S.setupError && !S.setupLoading) { S.setupLoading = true; loadSetup().finally(() => { S.setupLoading = false; }); }
+      el.replaceChildren(h("div", { class: "simple-col" }, title, h("p", { class: "note", text: S.setupError ? `Leanfare could not look at this computer: ${S.setupError}` : "Looking at this computer…" }),
+        S.setupError ? runButton("Look again", (signal) => loadSetup(signal)) : null));
+      return;
+    }
+    const apps = v.apps.filter((a) => a.status !== "broken");
+    const broken = v.apps.filter((a) => a.status === "broken");
+    const row = (name, sub, ok = true) => h("div", { class: "list-row" },
+      h("span", { class: "found-mark " + (ok ? "ok" : "warn"), "aria-hidden": "true", text: ok ? "✓" : "!" }),
+      h("div", { class: "lr-main" }, h("div", { class: "lr-title", text: name }), h("div", { class: "note", text: sub })));
+    const found = h("div", { class: "simple-block" }, h("div", { class: "simple-label", text: "Found on this computer" }),
+      h("div", { class: "list-card" },
+        ...apps.map((a) => row(a.name, a.status === "added" ? "Leanfare is in here already" : "Leanfare goes in here")),
+        ...broken.map((a) => row(a.name, a.note ?? "Its settings file cannot be read, so Leanfare leaves it alone.", false)),
+        ...v.models.map((m) => row(m.name, `A model to hand work to: ${m.how}`)),
+        !v.apps.length ? row("No AI apps found", "Leanfare works inside Claude Code, Claude Desktop, Cursor, Codex, Gemini CLI and more. Install one, then press Look again.", false) : null));
+    const needModel = v.ready ? null : h("div", { class: "simple-block" }, h("div", { class: "simple-label", text: "One more thing" }),
+      v.ollama ? h("div", { class: "list-card pad" }, // Ollama runs, with no model yet
+        h("p", { class: "lr-title", text: "Get a free model for Ollama" }),
+        h("p", { class: "note", text: "Ollama is running on this computer, with no model yet. Leanfare suggests the best free model that fits this computer and has Ollama download it when you say yes. Then press Look again." }),
+        h("div", { class: "row" }, h("button", { class: "btn primary", type: "button", text: "Get a free model", onclick: () => openSetting("localCard") }),
+          runButton("Connect OpenRouter", async (signal) => { await connectOpenRouter(signal); await loadSetup(signal); })))
+      : h("div", { class: "list-card pad" },
+        h("p", { class: "lr-title", text: "Leanfare needs a model to hand work to" }),
+        h("p", { class: "note", text: "The quickest is OpenRouter, which has free models: you sign in on its page. Or add a key you have, or install Ollama (ollama.com) for free models on this computer, then press Look again." }),
+        h("div", { class: "row" }, runButton("Connect OpenRouter", async (signal) => { await connectOpenRouter(signal); await loadSetup(signal); }, "btn primary"),
+          h("button", { class: "btn", type: "button", text: "Add a key", onclick: () => openSetting("keysCard") }))));
+    const allIn = apps.length > 0 && apps.every((a) => a.status === "added");
+    const planners = apps.filter((a) => a.plansItself).map((a) => a.name);
+    const what = `It adds Leanfare's tools to each app${planners.length ? `, and to ${andList(planners)} a few lines on when to hand work over` : ""}. Remove takes them out again (Settings, In your apps).`;
+    const why = v.busy ? "Still finishing the app it is on…" : !apps.length ? "Turn on needs an AI app on this computer." : !v.ready ? "Turn on needs a model first (above)." : null;
+    // While it runs the button is its own Stop: Set up stops before the next app, and the list then shows what it did.
+    const turnOn = runButton(allIn ? "Turn on Leanfare again" : "Turn on Leanfare", (signal) => turnOnLeanfare(signal), "btn primary big-btn");
+    if (why) { turnOn.disabled = true; turnOn.title = why; }
+    el.replaceChildren(h("div", { class: "simple-col" }, title, found, needModel, h("div", { class: "spacer" }),
+      h("div", { class: "simple-block" }, turnOn,
+        h("p", { class: "fine center", text: why ?? what }),
+        h("p", { class: "fine center", text: "Leanfare reads usage numbers, never your words." }),
+        h("div", { class: "row center" }, runButton("Look again", (signal) => loadSetup(signal), "btn quiet small"),
+          h("button", { class: "btn quiet small", type: "button", text: v.setupDone ? "Back" : "Skip for now", onclick: skipSetup })))));
+  }
+  async function turnOnLeanfare(signal) {
+    let r;
+    try { r = await api("/api/setup", { body: {}, signal }); }
+    catch (e) { if (e?.name === "AbortError") followSetup(); throw e; }
+    S.setup = r.setup; S.apps = null;
+    const ok = r.results.filter((x) => x.ok), bad = r.results.filter((x) => !x.ok);
+    const notIn = bad.length ? `Not in ${bad.map((x) => `${x.name} (${x.error})`).join("; ")}.` : "";
+    if (!ok.length) { if (S.tab === "setup") renderSetup(); toast(notIn || "There was no AI app to put Leanfare in.", "error"); return; }
+    S.afterSetup = ok.map((x) => ({ name: x.name, after: x.after, note: x.note ?? null })); // shown at the top until Done
+    if (S.tab === "setup") setTab(landing()); // you may have gone to another screen meanwhile
+    else renderShell();
+    toast(`Leanfare is on in ${andList(ok.map((x) => x.name))}. ${notIn}`.trim(), bad.length ? "error" : "done");
+    refreshState(); // Set up may have ticked the first models
+  }
+  // After a Stop, Set up finishes the app it is on: the list follows it until it is done.
+  async function followSetup() {
+    for (let i = 0; i < 120; i++) {
+      await new Promise((ok) => setTimeout(ok, i ? 500 : 150));
+      if (S.tab !== "setup") return;
+      try { await loadSetup(); } catch { return; }
+      if (!S.setup?.busy) return;
+    }
+  }
+  async function skipSetup() {
+    if (!S.setup?.setupDone) { try { await api("/api/settings", { body: { setupDone: true } }); } catch (e) { failed(e); return; } }
+    if (S.tab === "setup") setTab(landing());
+  }
+
+  // A button of Set up opens a card in Settings and shows where it is. Settings draws itself again as
+  // its cards load (a redraw puts back the scroll it had), so for a few seconds each redraw brings the
+  // card back into view and keeps it lit, until you scroll or press something there yourself.
+  function openSetting(id) {
+    S.focus = { id, until: Date.now() + 4000 };
+    setTab("settings");
+    focusSetting();
+  }
+  function focusSetting() {
+    const f = S.focus;
+    if (!f) return;
+    if (Date.now() > f.until) { S.focus = null; return; }
+    const el = document.getElementById(f.id);
+    if (!el) return;
+    try { el.scrollIntoView({ block: "start" }); } catch {}
+    el.classList.add("flash");
+  }
+  for (const ev of ["wheel", "touchstart", "keydown", "mousedown"]) $("#tab-settings")?.addEventListener(ev, () => { S.focus = null; }, { passive: true });
 
   function applyTheme() {
     const t = store.get("theme", "auto");
@@ -2459,12 +2601,15 @@
     if (a && a !== composer?.ta && (a.matches?.("input, textarea, select") || a.isContentEditable)) return;
     stopLive();
   });
+  $("#appsSwitch").addEventListener("click", (e) => { if (e.detail > 1) return; toggleAppsSwitch(); }); // a double click is one press
   (async () => {
+    const first = S.tab ? null : api("/api/setup").catch(() => null); // with no screen kept: Set up until it is done
     await refreshState();
     if (!S.st) return;
     await loadChats();
     renderChat();
     if (S.chatId) await openChat(S.chatId);
+    if (!S.tab) { const v = await first; S.tab = v && !v.setupDone ? "setup" : landing(); }
     setTab(S.tab);
     setInterval(() => { if (document.visibilityState === "visible") refreshState(); }, 4000);
     document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshState(); });

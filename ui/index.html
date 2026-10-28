@@ -17,7 +17,7 @@
 <script src="/app.js" defer></script>
 </head>
 <body>
-<div id="app">
+<div id="app" class="simple">
   <header class="top">
     <div class="brand">
       <svg viewBox="0 0 32 32" aria-hidden="true"><rect class="lg-bg" width="32" height="32" rx="9"/><path class="lg-line" d="M8 10.5 L14 16.5 L18 13 L24 20.5"/><circle class="lg-dot" cx="24" cy="20.5" r="2.4"/></svg>
@@ -32,12 +32,14 @@
     <div class="top-right">
       <div id="runningPill" class="pill running" hidden></div>
       <button id="spendPill" class="pill" title="What you spent this month. Opens Savings."></button>
+      <button id="appsSwitch" class="hswitch" type="button" role="switch" aria-checked="true"><span class="hs-label">In your apps</span><span class="track" aria-hidden="true"><span class="knob"></span></span></button>
       <button id="pauseBtn" class="btn" title="Pause: new requests wait until you press Start again. Answers already running finish."></button>
     </div>
   </header>
   <div id="notices" aria-live="polite"></div>
   <main>
-    <section id="tab-chat" class="tab chat on" role="tabpanel"></section>
+    <section id="tab-setup" class="tab simple" role="tabpanel" aria-label="Set up"></section>
+    <section id="tab-chat" class="tab chat" role="tabpanel"></section>
     <section id="tab-plan" class="tab plan" role="tabpanel"></section>
     <section id="tab-savings" class="tab savings" role="tabpanel"></section>
     <section id="tab-settings" class="tab settings" role="tabpanel"></section>
