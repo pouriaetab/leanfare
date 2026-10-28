@@ -92,7 +92,9 @@ const plain = (v: unknown): v is Record<string, any> => !!v && typeof v === "obj
 // The file's JSON, when it is a JSON object whose servers (if any) are an object too.
 function readJson(file: string, key: string): { ok: true; j: any } | { ok: false } {
   if (!existsSync(file)) return { ok: true, j: {} };
-  const text = readFileSync(file, "utf8");
+  let text: string;
+  try { text = readFileSync(file, "utf8"); } catch { return { ok: false }; } // a folder or an unreadable file where the settings should be: left alone
+
   if (!text.trim()) return { ok: true, j: {} };
   try { const j = JSON.parse(text); return plain(j) && (j[key] === undefined || plain(j[key])) ? { ok: true, j } : { ok: false }; } catch { return { ok: false }; }
 }
@@ -171,7 +173,9 @@ function tomlRemove(text: string): { text: string; found: boolean } {
 function tomlStatus(a: AppDef): AppStatus {
   const file = a.file();
   if (!existsSync(file)) return "not added";
-  const t = parseToml(readFileSync(file, "utf8"));
+  let text: string;
+  try { text = readFileSync(file, "utf8"); } catch { return "broken"; } // a folder or an unreadable file where config.toml should be
+  const t = parseToml(text);
   if (t === null) return "broken";
   const e = plain(t.mcp_servers) ? t.mcp_servers.leanfare : undefined;
   return !e ? "not added" : same(e) && Object.keys(e).every((k) => k === "command" || k === "args") ? "added" : "old";
