@@ -60,6 +60,12 @@ test("every color in the styles is a token, and Night defines every color Day do
   // And no color set from the script either (the page sets sizes there, never colors).
   expect([...js.matchAll(/style:\s*\{([^}]*)\}/g)].filter((m) => /color|background/i.test(m[1]))).toEqual([]);
 });
+test("Savings scrolls as one page: its cards keep their height in a short window", () => {
+  // .card may shrink (min-height 0, so a list inside can scroll); a card of the page's own column must not.
+  expect(css).toMatch(/\.card \{[^}]*min-height: 0/);
+  expect(css).toMatch(/\.savings \{[^}]*flex-direction: column[^}]*overflow-y: auto/);
+  expect(css).toContain(".savings > .card { flex: none; }");
+});
 test("the page starts simple, shows no screen before the script picks one, and sets the theme before it is drawn", () => {
   expect(html).toContain('<div id="app" class="simple">');
   expect(html).not.toMatch(/class="tab[^"]*\bon\b/);
