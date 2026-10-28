@@ -22,7 +22,7 @@ import { CODEX_ID, codexState } from "./codex";
 import { GRADED_KINDS, VERDICTS, addGrade, giveAnotherChance, standing, standingText, standings } from "./grades";
 import { plansBrief, plansView } from "./plans";
 import { meterViews, setStatusline } from "./meter";
-import { checkDelegate, runDelegate } from "./delegate";
+import { checkDelegate, runDelegate, startDelegate, stopDelegates, waitDelegate } from "./delegate";
 import { checkPlan, gradePart, makePlan, runView, startRun, stopAllRuns, stopRun } from "./planner";
 import { setAuto } from "./workers";
 import { setUp, setupView } from "./setup";
@@ -347,6 +347,16 @@ function describeFiles(messages: any[]): Msg[] {
 
 // ---- the screens' API ----------------------------------------------------------------
 
+// Seconds to wait for a hand off, from 0 to 50; null when none was asked.
+const waitOf = (x: unknown) => { if (x === undefined || x === null || x === "") return null; const n = Number(x); return Number.isFinite(n) && n >= 0 ? Math.min(50, n) : null; };
+// A hand off as the door gets it: its answer once done (an error as before), or that it still works.
+function handOff(job: Awaited<ReturnType<typeof waitDelegate>>): Response {
+  if (!job) return fail(404, "No hand off with that id: Leanfare was restarted, or it is more than 2 hours old.");
+  if (!job.done) return json({ id: job.id, running: true, seconds: Math.round((Date.now() - job.started) / 1000) });
+  if (job.error) return fail(job.error.status, job.error.message);
+  return json({ ...job.result, id: job.id, running: false });
+}
+
 async function readBody(req: Request): Promise<any> {
   const t = await req.text();
   if (!t) return {};
@@ -378,9 +388,9 @@ async function api(req: Request, url: URL): Promise<Response> {
     const b = await readBody(req);
     if (typeof b?.on !== "boolean") return fail(400, "on must be true or false");
     setSwitch(b.on);
-    // Off stops what is already going too: the parts of running plans, and the trial.
-    const stopped = { plans: 0, trial: false };
-    if (!b.on) { stopped.plans = stopAllRuns(); stopped.trial = trialRunning(); await stopTrial(); }
+    // Off stops what is already going too: the parts of running plans, hand offs still working, and the trial.
+    const stopped = { plans: 0, delegates: 0, trial: false };
+    if (!b.on) { stopped.plans = stopAllRuns(); stopped.delegates = stopDelegates(); stopped.trial = trialRunning(); await stopTrial(); }
     return json({ on: switchedOn(), stopped });
   }
   if (p === "/api/setup" && m === "GET") return json(setupView());
@@ -571,13 +581,19 @@ async function api(req: Request, url: URL): Promise<Response> {
     saveSettings({ providers: { ...settings().providers, [def.id]: next } });
     return json(state());
   }
-  // Claude's delegate (see delegate.ts): a task and its files, handed over by the MCP door.
+  // Claude's delegate (see delegate.ts): a task and its files, handed over by the MCP door. Asked with a
+  // wait (the door's: under the minute an app waits), it runs on its own, and the answer comes back within the
+  // wait or later through its id. Without one, as before: the answer when it is done.
   if (p === "/api/delegate" && m === "POST") {
     if (offForApps(req)) return fail(409, OFF_TEXT);
-    const v = checkDelegate(await readBody(req));
+    const b = await readBody(req);
+    const v = checkDelegate(b);
     if (typeof v === "string") return fail(400, v);
-    return json(await runDelegate(v, req.signal));
+    const wait = waitOf(b?.wait);
+    if (wait === null) return json(await runDelegate(v, req.signal));
+    return handOff(await waitDelegate(startDelegate(v).id, wait, req.signal));
   }
+  if (p === "/api/delegate" && m === "GET") return handOff(await waitDelegate(url.searchParams.get("id") ?? "", waitOf(url.searchParams.get("wait")) ?? 0, req.signal));
   // The plan (planner.ts): a task split into parts, each with where it runs and on which model.
   if (p === "/api/plan" && m === "POST") {
     if (offForApps(req)) return fail(409, OFF_TEXT);
