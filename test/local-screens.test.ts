@@ -8,6 +8,7 @@ import { store, type Model } from "../src/data";
 import { probe, SUGGESTED } from "../src/local";
 import { ALL_TICKED, boot, fake, keys, reset, ui } from "./app";
 import { closeApp, openApp as open } from "./dom";
+const MACHINE = process.platform === "darwin" ? "Mac" : "computer"; // what the texts call this computer
 
 const GB = 1e9;
 let url = "";
@@ -32,26 +33,28 @@ const bad = (doc: any) => /\bnull\b|\bundefined\b|NaN|\[object Object\]/.test(do
 const pulled = () => fake.seen.filter((s) => s.path === "/ollama/api/pull").map((s) => s.body.model);
 
 describe("the suggested local model", () => {
-  test("Settings: the model, its size, whether it fits, its rating and licence, and why; Download downloads that one", async () => {
+  test("Settings: where the models are, then one for each kind of work, with its size, rating, licence and why; Download downloads that one", async () => {
     const doc = await open(url);
     doc.querySelector('.tabs button[data-tab="settings"]').click();
-    const row = () => doc.querySelector("#localCard .srow");
-    await waitFor(() => !!row());
-    const t = row().textContent;
+    const rows = () => [...doc.querySelectorAll("#localCard .krow")] as any[];
+    await waitFor(() => rows().length === 3);
+    const card = doc.querySelector("#localCard").textContent;
+    expect(card).toMatch(new RegExp(`Where your models areOllama keeps your 1 model \\(2\\.0 GB\\) in .+, on this ${MACHINE}'s own disk, with 200 GB free\\. New downloads go there too\\.`));
+    expect(card).toContain(`This ${MACHINE} has 64 GB of memory: a model up to about 27 GB runs comfortably, up to about 37 GB tightly.`);
+    expect(rows().map((r) => r.querySelector(".k").textContent)).toEqual(["Reading and pulling out facts", "Drafting text", "Working things out"]);
+    const t = rows()[0].textContent;
     expect(t).toContain("gemma4:31b-it-qat");
     expect(t).toContain("19 GB");
-    expect(t).toContain("fits");
     expect(t).toContain("★ 1437");
-    expect(t).toContain("Apache-2.0");
-    expect(doc.querySelector("#localCard").textContent).toContain("Suggested for this computer");
-    expect(doc.querySelector("#localCard").textContent).toContain("is rated like Gemma 4 31B");
+    expect(t).toContain(`Rated like Gemma 4 31B for this (1437), it runs comfortably in this ${MACHINE}'s 64 GB of memory. Apache 2.0: free to use for work.`);
     expect([...doc.querySelectorAll("#localCard .lrow .nm")].map((n: any) => n.textContent)).toEqual(["llama3.2"]); // the installed list is apart
-    row().querySelector("button").click();
+    expect(doc.querySelector("#localCard .lrow").textContent).toContain("not rated");
+    rows()[0].querySelector("button").click();
     await waitFor(() => pulled().includes("gemma4:31b-it-qat"));
     expect(pulled()).toEqual(["gemma4:31b-it-qat"]);
     expect((await ui(url, "/api/local/pull")).json.pull).toMatchObject({ name: "gemma4:31b-it-qat", active: true, size: 19 * GB }); // its size was passed: checked before anything downloaded
-    await waitFor(() => !doc.querySelector("#localCard .srow"));
-    expect(doc.querySelector("#localCard .srow")).toBeNull(); // while it downloads, the suggestion steps aside
+    await waitFor(() => !rows().some((r) => r.querySelector("button")));
+    expect(rows().some((r) => r.querySelector("button"))).toBe(false); // while it downloads, the suggestions offer no other download
     expect(bad(doc)).toBe(false);
   }, 20000);
 
@@ -60,8 +63,13 @@ describe("the suggested local model", () => {
     const doc = await open(url);
     doc.querySelector('.tabs button[data-tab="settings"]').click();
     await waitFor(() => !!doc.querySelector("#localCard")?.textContent.includes("On this computer"));
-    expect(doc.querySelector("#localCard .srow")).toBeNull();
-    expect(doc.querySelector("#localCard").textContent).toContain("Suggested for this computer: none. None of the rated open models on Leanfare's list runs in 16 GB of memory.");
+    const rows = [...doc.querySelectorAll("#localCard .krow")].map((r: any) => r.textContent);
+    // Reading: the model you have, offered for the test, since Arena does not rate it.
+    expect(rows[0]).toContain("llama3.2");
+    expect(rows[0]).toContain(`Arena does not rate it, so Leanfare tests it here first: 8 questions with known answers about made up files, free, a few minutes, and nothing leaves this ${MACHINE}.`);
+    expect(doc.querySelectorAll("#localCard .krow")[0].querySelector("button").textContent).toBe(`Test it on this ${MACHINE}`);
+    for (const r of rows.slice(1)) expect(r).toContain(`No rated open model fits this ${MACHINE}'s 16 GB of memory. Your other models do it.`);
+    expect(bad(doc)).toBe(false);
   }, 20000);
 
   test("the Plan tab: a plan whose reading goes to pay per use names it, and Download it downloads it", async () => {

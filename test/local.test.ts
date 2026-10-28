@@ -166,7 +166,7 @@ describe("downloading a model", () => {
       await Bun.sleep(15);
     }
     expect(last).toMatchObject({ status: "done", active: false, percent: 100, model: "ollama/gemma3:12b", fit: "tight" });
-    expect(last.message).toBe("Downloaded gemma3:12b (8.1 GB). It is ticked. Leanfare has no rating for this name, so Auto does not pick it: choose it by name in the chat.");
+    expect(last.message).toBe("Downloaded gemma3:12b (8.1 GB). It is ticked. Arena does not rate it, so Auto does not pick it: test it here (Settings, Local models), and if it passes it takes reading in plans and the delegate.");
     expect(seen.some((p) => p > 0 && p < 100)).toBe(true); // it was seen part way
     expect(seen).toEqual([...seen].sort((a, b) => a - b));
     expect(pulls()).toHaveLength(1);
