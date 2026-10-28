@@ -62,6 +62,8 @@ export const PLAN_APP_HTML = `<!doctype html>
   const RUNS = { you: "you", local: "Leanfare, this computer", free: "Leanfare, free", paid: "Leanfare, pay per use", codex: "Leanfare, through Codex" };
   const NOW = { waiting: "waiting", running: "running…", done: "done", failed: "failed", stopped: "stopped", yours: "yours", after_yours: "after yours", blocked: "waits", asks: "waits for a yes" };
   let plan = null, run = null, timer = null, off = null; // off: what Leanfare said when it was switched off
+  let pressed = false; // the run was started here, by pressing Run, not by the app with plan_run
+  let watch = null;
   // When every part stays with you: what would send some out (as the planner says it).
   const nothingOut = (parts) => {
     const hints = [parts.some((p) => p.kind === "search" && p.runs_on === "you") ? "tick Perplexity Sonar in Leanfare and the searches go out" : "",
@@ -102,8 +104,8 @@ export const PLAN_APP_HTML = `<!doctype html>
       el("div", { class: "row" },
         now && (left || going) ? el("button", { class: "go", id: "run", disabled: going ? "" : null, onclick: start, text: going ? "Running…" : (run ? "Run the rest" : "Run Leanfare's parts") + (paidParts.length ? (unknown ? " (paid parts, cost not known)" : " (about " + usd(paid) + " paid)") : "") }) : null,
         going ? el("button", { id: "stop", onclick: stop, text: "Stop" }) : null,
-        run && !going && run.parts.some((p) => p.answer) ? el("button", { id: "back", onclick: handBack, text: "Hand the answers to Claude" }) : null,
-        el("span", { class: "muted", text: going ? "Leanfare runs its parts on your computer; this updates as they finish." : "" })),
+        pressed && run && !going && run.parts.some((p) => p.answer) ? el("button", { id: "back", onclick: handBack, text: "Hand the answers to Claude" }) : null,
+        el("span", { class: "muted", text: going ? (pressed ? "" : "Claude started this run. ") + "Leanfare runs its parts on your computer; this updates as they finish." : run && !pressed ? "Claude started this run and reads the answers itself." : "" })),
       off ? el("p", { class: "bad", text: off }) : null,
     ].filter(Boolean); // replaceChildren would print a left out part as the word null
     if (run) for (const p of run.parts.filter((x) => x.answer || x.error)) kids.push(el("details", {}, el("summary", { text: "Part " + p.n + " · " + p.title + " · " + (NOW[p.status] || p.status) + (p.model ? " · " + p.model : "") }), p.answer ? el("pre", { text: p.answer }) : null, p.error ? el("p", { class: "bad", text: p.error }) : null));
@@ -112,7 +114,21 @@ export const PLAN_APP_HTML = `<!doctype html>
     app.replaceChildren(...kids);
     size();
   }
+  // The app may run the plan's parts itself (plan_run), as Claude does when told to: then this page follows
+  // that run, so the chat offers one next step, not two. It looks a few seconds after the plan arrives, then
+  // every 3 seconds for a minute, until a run shows or Run is pressed here.
+  async function look(tries) {
+    clearTimeout(watch);
+    if (run || pressed || !plan) return;
+    try {
+      const r = await request("tools/call", { name: "plan_status", arguments: { id: plan.id } });
+      const sc = r && !r.isError && r.structuredContent;
+      if (sc && Array.isArray(sc.parts) && !run && !pressed) { run = sc; draw(); if (run.running) follow(); return; }
+    } catch (e) {} // no run of it yet
+    if (tries > 0 && !run && !pressed) watch = setTimeout(() => look(tries - 1), 3000);
+  }
   async function start() {
+    pressed = true; clearTimeout(watch);
     try {
       const r = await request("tools/call", { name: "plan_run", arguments: { id: plan.id, paid: "yes" } }); // pressing Run is the yes for the paid parts shown on it
       const sc = r && r.structuredContent;
@@ -150,7 +166,8 @@ export const PLAN_APP_HTML = `<!doctype html>
   function show(result) {
     const sc = result && result.structuredContent;
     if (!sc || !Array.isArray(sc.parts)) { $("#app").replaceChildren(el("p", { class: "muted", text: (result && result.content && result.content[0] && result.content[0].text) || "No plan to show." })); size(); return; }
-    plan = sc; run = null; draw();
+    plan = sc; run = null; pressed = false; draw();
+    clearTimeout(watch); watch = setTimeout(() => look(20), 2500);
   }
   window.addEventListener("message", (e) => {
     if (e.source !== host) return; // only the app this page is shown in
