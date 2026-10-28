@@ -98,7 +98,7 @@ describe("the door's delegate", () => {
     for (let i = 0; i < 5 && got.structuredContent?.running; i++) got = (await call("delegate", { id })).result;
     expect(got.content[0].text).toContain("Hello from");
     expect(got.content[0].text).toContain("grade, with model");
-    expect(got.content[0].text).toContain("and kind write");
+    expect(got.content[0].text).toMatch(/, kind write and handoff \d+\.\)$/);
     const bad = (await call("delegate", { id: "../etc" })).result;
     expect(bad.isError).toBe(true);
     const none = (await call("delegate", {})).result;

@@ -531,7 +531,8 @@
     const head = ["#", "Part", "Kind", "Runs on", "Model", "Time", "Tokens", "Cost", "When", ...(run ? ["Now"] : [])];
     const table = h("div", { class: "plan-table-wrap" }, h("table", { class: "plan-table" }, h("thead", {}, h("tr", {}, ...head.map((x) => h("th", { text: x })))), h("tbody", {}, ...rows)));
     const time = [t.seconds !== null ? `Leanfare's parts take ${secsShort(t.seconds)} done at once` : "", t.after !== null && t.after !== undefined ? `${t.seconds !== null ? "the ones after yours take" : "Leanfare's parts wait for yours, then take"} ${secsShort(t.after)}${t.seconds !== null ? " once yours are done" : ""}` : ""].filter(Boolean).join("; ");
-    const sum = h("p", { class: "plan-sum", text: `${t.out} of ${t.parts} parts go to Leanfare, keeping about ${tokShort(t.kept)} tokens out of your plan${t.used ? `; about ${tokShort(t.used)} stay in it` : ""}.${time ? ` ${time}.` : ""} Pay per use: ${t.cost === null ? "not known" : money(t.cost)}.${t.out ? "" : ` ${nothingOut(P.parts)}`}` });
+    const share = t.kept > 0 ? ` (${t.used ? `${Math.max(1, Math.min(99, Math.round((t.kept / (t.kept + t.used)) * 100)))}%` : "all"} of this task)` : "";
+    const sum = h("p", { class: "plan-sum", text: `${t.out} of ${t.parts} parts go to Leanfare, keeping about ${tokShort(t.kept)} tokens out of your plan${share}${t.used ? `; about ${tokShort(t.used)} stay in it` : ""}.${time ? ` ${time}.` : ""} Pay per use: ${t.cost === null ? "not known" : money(t.cost)}.${t.out ? "" : ` ${nothingOut(P.parts)}`}` });
     // A local model that would run the reading and drafting free: pressing Download it is the yes.
     const localNote = P.local ? h("p", { class: "fine plan-local" }, `A local model fits this computer: ${P.local.name} (${gbs(P.local.size)}), rated like ${P.local.like}, free to run. `,
       h("button", { class: "btn small", type: "button", text: "Download it", onclick: async () => {
@@ -1570,20 +1571,52 @@
     return card;
   }
 
-  // Delegated tasks (delegate.ts): what other apps handed over, and what the checks found.
-  function delegateCardEl(d) {
-    if (!d) return null;
-    const pct = (x) => `${Math.round(x * 100)}%`;
-    const ran = d.passed + d.failed + d.unclear;
-    const again = d.reruns ? `, ${num(d.failed)} failed and ${d.reruns === d.failed ? (d.failed === 1 ? "was" : "were") : `${num(d.reruns)} ${d.reruns === 1 ? "was" : "were"}`} asked again one tier up` : d.failed ? `, ${num(d.failed)} failed` : "";
-    return h("div", { class: "card", id: "delegateCard" },
-      h("h3", {}, "Delegated tasks", h("span", { class: "grow" }), h("small", { text: "through the delegate tool" })),
-      h("p", { text: `${num(d.tasks)} task${d.tasks === 1 ? "" : "s"} handed over this month, ${money(d.cost)} in all${d.checkCost > 0 ? ` (checks ${money(d.checkCost)})` : ""}.` }),
-      d.kept > 0 ? h("p", { text: `Leanfare read about ${num(d.kept)} tokens of files so the app that asked did not have to; the answers came to about ${num(d.answerTokens)}.` }) : null,
-      d.passed + d.failed > 0
-        ? h("p", { text: `Checks: ${num(ran)} run, ${num(d.passed)} passed (${pct(d.passRate)}, 90% range ${pct(d.passLo)} to ${pct(d.passHi)})${again}.` })
-        : h("p", { text: ran ? `Checks: ${num(ran)} run, none with a clear verdict.` : "No answer was checked yet." }),
-      d.weighted !== null && d.passed + d.failed >= 5 ? h("p", { class: "fine", text: `Weighted by each answer's chance of being checked, about ${pct(d.weighted)} of all handed over answers would pass.` }) : null);
+  // What Leanfare did for your apps this month (savings.ts: work): the hand offs and plan parts, what stayed out
+  // of the app's plan, the cost, how the app graded the answers and what the checks found; then the last few.
+  const WHERE = { local: "this computer", free: "free", plan: "your ChatGPT plan", paid: "paid" };
+  const pctText = (x) => (x === null || x === undefined ? "—" : `${Math.round(x * 100)}%`);
+  const plural = (n, one, many = one + "s") => `${num(n)} ${n === 1 ? one : many}`;
+  function whenText(iso) {
+    const d = new Date(iso), today = new Date();
+    const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+    if (d.toDateString() === today.toDateString()) return `Today ${time}`;
+    if (d.toDateString() === yesterday.toDateString()) return `Yesterday ${time}`;
+    return d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  }
+  function workCardEl(w, d) {
+    if (!w || !w.tasks) return null;
+    const graded = w.grades.good + w.grades.partly + w.grades.wrong;
+    const checked = w.checks.passed + w.checks.failed;
+    const places = [["free", "free"], ["local", "on this computer"], ["plan", "on your ChatGPT plan"], ["paid", "paid"]].filter(([k]) => w.where[k]).map(([k, t]) => `${num(w.where[k])} ${t}`).join(" · ");
+    const tiles = h("div", { class: "cards6" },
+      stat("kept", "Kept out of your plans", pctText(w.keptPct), `${num(w.kept)} tokens stayed out · ${num(w.back)} came back`, w.keptPct >= 0.5 ? "good" : ""),
+      stat("workCost", "Cost of that work", money(w.cost), places),
+      stat("quality", "Quality", graded ? `${num(w.grades.good)} of ${num(graded)} good` : "Not graded yet",
+        graded ? `${num(w.grades.partly)} partly · ${num(w.grades.wrong)} wrong · graded by your apps` : "your app grades the answers it uses", graded ? (w.grades.good === graded ? "good" : "") : "small"),
+      stat("checked", "Checked", checked ? `${num(w.checks.passed)} of ${num(checked)} passed` : "None yet",
+        w.checks.again ? `${num(w.checks.again)} ${w.checks.again === 1 ? "was" : "were"} asked again one tier up` : "a stronger model checks a sample", checked ? (w.checks.failed ? "" : "good") : "small"));
+    const chips = (r) => r.grades.length ? r.grades.map((g) => h("span", { class: `chip ${g === "good" ? "good" : g === "wrong" ? "bad" : "warn"}`, text: g }))
+      : r.checks.length ? r.checks.map((c) => h("span", { class: `chip ${c === "pass" ? "good" : "bad"}`, text: c === "pass" ? "check passed" : "check failed" }))
+      : [h("span", { class: "none", text: "not graded" })];
+    const what = (r) => `${r.plan ? `Plan, ${plural(r.parts, "part")} here: ` : "Hand off: "}${r.kinds.join(", ")}${r.files ? ` · ${plural(r.files, "file")}` : ""}`;
+    const table = h("table", { class: "trial-table work-table" },
+      h("thead", {}, h("tr", {}, ...["When", "What", "Where it ran", "Kept out", "Cost", "Quality"].map((x) => h("th", { text: x })))),
+      h("tbody", {}, ...w.recent.map((r) => h("tr", {},
+        h("td", { "data-label": "When", text: whenText(r.ts) }),
+        h("td", { "data-label": "What", class: "what", text: what(r) }),
+        h("td", { "data-label": "Where", text: r.models.map((m) => `${WHERE[m.where] ?? m.where}: ${m.label}`).join(" · ") }),
+        h("td", { "data-label": "Kept out", text: pctText(r.keptPct) }),
+        h("td", { "data-label": "Cost", text: money(r.cost) }),
+        h("td", { "data-label": "Quality" }, ...chips(r))))));
+    const again = d && d.reruns ? `, ${num(d.failed)} failed and ${d.reruns === d.failed ? (d.failed === 1 ? "was" : "were") : `${num(d.reruns)} ${d.reruns === 1 ? "was" : "were"}`} asked again one tier up` : d && d.failed ? `, ${num(d.failed)} failed` : "";
+    const checks = d && d.passed + d.failed > 0
+      ? `Checks: ${num(d.passed + d.failed + d.unclear)} run, ${num(d.passed)} passed (${pctText(d.passRate)}, 90% range ${pctText(d.passLo)} to ${pctText(d.passHi)})${again}.${d.weighted !== null && d.passed + d.failed >= 5 ? ` Weighted by each answer's chance of being checked, about ${pctText(d.weighted)} of all answers would pass.` : ""}`
+      : "";
+    return h("div", { class: "card work", id: "workCard" },
+      h("h3", {}, "What Leanfare did for your apps", h("span", { class: "grow" }), h("small", { text: `${plural(w.tasks, "task")} this month, through plan and delegate` })),
+      tiles, table,
+      h("p", { class: "fine", text: `${checks ? checks + " " : ""}Kept out counts what your app did not have to read; the thinking and writing it did not have to do comes on top. No words are kept, only sizes, models and grades.` }));
   }
 
   // ---- the delegate trial (trial.ts) ------------------------------------------------------------
@@ -1728,10 +1761,10 @@
     const src = v.bySource.map((s) => `${SOURCES[s.source] ?? s.source}: ${num(s.answers)}`).join(" · ");
     el.replaceChildren(
       h("div", { class: "sv-head" }, h("h2", { text: title }), h("span", { class: "grow" }), pickMonth, runButton("Refresh", async (signal) => { await loadSavings(); await loadPlans(true, signal); toast("Up to date.", "done"); })),
+      workCardEl(v.work, v.delegate),
       plansCardEl(),
       h("div", { class: "section-title", text: "Pay per use: what your keys and credits spent through Leanfare" }),
       cards,
-      delegateCardEl(v.delegate),
       trialCardEl(),
       h("div", { class: "sv-grid" },
         h("div", { class: "card" }, h("h3", {}, "By model", h("span", { class: "grow" }), h("small", { text: src })), h("div", { class: "scroll" }, byModel)),

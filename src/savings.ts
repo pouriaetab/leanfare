@@ -7,6 +7,7 @@
 // Gap to your subscription: the price you entered minus what you spent.
 // More for your money: what all your answers would have cost on your usual
 //    model, divided by what they cost.
+import { CODEX_ID } from "./codex";
 import { TASKS, getModel } from "./data";
 import { db } from "./db";
 import { weightedPass, wilson } from "./delegate";
@@ -22,10 +23,59 @@ export const DEFINITIONS = {
   answers: "Finished answers this month, from the chat and from your other apps. Stopped answers are counted separately.",
   budget: "Your monthly budget minus what was spent and what requests still running have reserved.",
   top: "The model that wrote the most answers this month.",
+  kept: "Work Leanfare did for your apps this month (hand offs and plan parts): what its models read that the app never did (the files, and a plan part's own text), against the answers the app read back. What stays out of an app's context does not count toward its plan. The thinking and writing the app did not have to do is not counted, so this is the least it kept out.",
+  workCost: "What that work cost: the hand offs, the plan parts and their checks, and the models that split the plans. Free and local models count as $0; a part Codex did counts in your ChatGPT plan, not here.",
+  quality: "How the app that asked graded the answers it used (good, partly or wrong), from Leanfare's grade tool or the Plan tab. Answers nobody graded are not counted.",
+  checked: "Answers a stronger model of yours checked. With checks on auto: every high effort answer, a quarter of the medium ones and a tenth of the low ones; a free part's checker is free too. A failed answer is asked again one tier up.",
   delegate: "Tasks another app (Claude Code, Claude Desktop) handed to Leanfare through its delegate tool. Leanfare read the files itself, so their text stayed out of that app's context. The pass rate counts checked answers only, with a 90% range (Wilson). The weighted rate counts each checked answer once for every answer it stands for (one over its chance of being checked), so it speaks for all handed over answers.",
 };
 
 const taskLabel = (t: string) => TASKS.find(([id]) => id === t)?.[1] ?? t;
+const KIND_WORD: Record<string, string> = { read: "reading", write: "drafting", reason: "working out", search: "searching the web" };
+// Where a part of the work ran: on this computer, on a free model, on the user's ChatGPT plan (Codex), or paid per use.
+const whereOf = (id: string, cost: number | null) => (id === CODEX_ID ? "plan" : getModel(id)?.local ? "local" : cost === 0 ? "free" : "paid");
+const nameOf = (id: string) => (id === CODEX_ID ? "Codex" : getModel(id)?.label ?? (id.split("/").slice(1).join("/") || id));
+
+// What Leanfare did for the user's apps this month: the hand offs and the plan parts (the delegations table,
+// which keeps no words). Stayed out: what Leanfare's models read that the app never did (the files, and a plan
+// part's own text); came back: the answers the app read. The thinking and writing the app did not have to do
+// is not counted, so the share is the least it kept out. Then the cost, how the app graded the answers, what
+// the checks found, and the last few, a plan's parts together.
+export function work(month = localMonth()) {
+  const rows = db.query(`SELECT id, ts, kind, model, rerun, cost, check_cost, rerun_cost, files, file_tokens, task_tokens, answer_tokens, verdict, plan, grade
+    FROM delegations WHERE month = ? AND status = 'ok' ORDER BY id`).all(month) as any[];
+  // The ledger's plan answers: the models that split plans, and the web searches (which have their own rows here too).
+  const planLedger = (db.query("SELECT COALESCE(SUM(cost), 0) AS v FROM ledger WHERE month = ? AND source = 'plan' AND status != 'error'").get(month) as any).v;
+  const costOf = (r: any) => (r.cost ?? 0) + (r.check_cost ?? 0) + (r.rerun_cost ?? 0);
+  const stayed = (rs: any[]) => rs.reduce((n, r) => n + r.file_tokens + r.task_tokens, 0);
+  const back = (rs: any[]) => rs.reduce((n, r) => n + r.answer_tokens, 0);
+  const share = (k: number, b: number) => (k + b > 0 ? k / (k + b) : null);
+  const ranOn = (r: any) => r.rerun ?? r.model;
+  const grades = { good: 0, partly: 0, wrong: 0 };
+  for (const r of rows) if (r.grade in grades) grades[r.grade as keyof typeof grades]++;
+  const where = { local: 0, free: 0, plan: 0, paid: 0 };
+  for (const r of rows) where[whereOf(ranOn(r), r.cost) as keyof typeof where]++;
+  // The last 8: a plan's parts as one line, a hand off as its own.
+  const groups = new Map<string, any[]>();
+  for (const r of rows) { const key = r.plan ? `plan:${String(r.plan).split(":")[0]}` : `row:${r.id}`; groups.set(key, [...(groups.get(key) ?? []), r]); }
+  const recent = [...groups.entries()].map(([key, rs]) => {
+    const models = [...new Map(rs.map((r) => [ranOn(r), { label: nameOf(ranOn(r)), where: whereOf(ranOn(r), r.cost) }])).values()];
+    const k = stayed(rs), b = back(rs);
+    return {
+      ts: rs[rs.length - 1].ts, plan: key.startsWith("plan:"), parts: rs.length,
+      kinds: [...new Set(rs.map((r) => KIND_WORD[r.kind] ?? "a task"))], files: rs.reduce((n, r) => n + r.files, 0), models,
+      kept: k, back: b, keptPct: share(k, b), cost: rs.reduce((n, r) => n + costOf(r), 0),
+      grades: rs.map((r) => r.grade).filter(Boolean), checks: rs.map((r) => r.verdict).filter((v) => v === "pass" || v === "fail"),
+    };
+  }).sort((x, y) => (x.ts < y.ts ? 1 : -1)).slice(0, 8);
+  const k = stayed(rows), b = back(rows);
+  return {
+    tasks: groups.size, parts: rows.length, kept: k, back: b, keptPct: share(k, b),
+    cost: rows.reduce((n, r) => n + costOf(r), 0) + Math.max(0, planLedger - rows.filter((r) => r.kind === "search").reduce((n, r) => n + (r.cost ?? 0), 0)), where, grades,
+    checks: { passed: rows.filter((r) => r.verdict === "pass").length, failed: rows.filter((r) => r.verdict === "fail").length, again: rows.filter((r) => r.rerun).length },
+    recent,
+  };
+}
 const labelOf = (id: string) => getModel(id)?.label ?? id.split("/").slice(1).join("/");
 
 export function savings(month = localMonth()) {
@@ -96,6 +146,7 @@ export function savings(month = localMonth()) {
     byDay,
     bySource,
     delegate,
+    work: work(month),
     definitions: DEFINITIONS,
   };
 }

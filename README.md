@@ -34,7 +34,7 @@ Leanfare needs a model to hand work to. It uses an API key your computer already
 ## The app
 
 - **The switch at the top**, In your apps, turns Leanfare off and on in all your apps at once. Off means your apps do all the work themselves.
-- **Chat** talks to any model, and each answer says which model wrote it and what it cost. **Plan** splits a task across models. **Savings** shows what Leanfare saved and what you spent. **Settings** has the rest: models and keys, your apps, your plans, a monthly budget. Leanfare picks all of it for you. Change it only if you want to.
+- **Chat** talks to any model, and each answer says which model wrote it and what it cost. **Plan** splits a task across models. **Savings** shows what Leanfare saved, what it did for your apps (the share kept out of your plans, and how good the answers were), and what you spent. **Settings** has the rest: models and keys, your apps, your plans, a monthly budget. Leanfare picks all of it for you. Change it only if you want to.
 - The [guide](https://github.com/pouriaetab/leanfare/blob/main/docs/GUIDE.md) explains each part.
 
 ## Privacy

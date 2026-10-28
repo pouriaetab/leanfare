@@ -93,7 +93,7 @@ The tools (an MCP server, `leanfare mcp`, which starts Leanfare when it is not r
 
 - **delegate** hands a task and its files to a cheaper model (below).
 - **ask** sends a question through Leanfare, with its cost.
-- **spend** says what was spent today and this month, the budget, and what Auto saved.
+- **spend** says what was spent today and this month, the budget, what Auto saved, and what Leanfare did for your apps this month: the share kept out of your plans, its cost and the grades.
 - **models** lists the models you ticked, with prices and ratings.
 - **estimate** prices a prompt before sending it: the model Auto would pick, its time, and at the same quality the cheapest and the fastest choice.
 - **trial** runs the trial (below) and reports on it.
@@ -160,7 +160,7 @@ Write what you want done in the **Plan** tab, or let Claude call the `plan` tool
 
 ### Grades
 
-Once the app you work in has used the answer of a part Leanfare ran, or of `delegate`, it grades it with the `grade` tool: good (used as it was), partly (fixed or redone in part) or wrong (not used). In the Plan tab you can grade too, under each answer. The grade goes with the model that answered and the kind of work: reading, drafting, working things out or searching.
+Once the app you work in has used the answer of a part Leanfare ran, or of `delegate`, it grades it with the `grade` tool: good (used as it was), partly (fixed or redone in part) or wrong (not used). In the Plan tab you can grade too, under each answer. The grade goes with the model that answered and the kind of work: reading, drafting, working things out or searching. It is also kept with that answer's record, so Savings shows the quality of the month's work (`delegate` gives each answer a handoff number for this).
 
 A model graded below good too often for a kind (at least 3 of its last 20 grades, under half good, partly counting half) is moved down: plans and the delegate skip it for that kind while another model can take it. Settings, How the models did for you, lists the grades of each model and gives one that was moved down another chance. Leanfare keeps only the model, the kind, the effort, the grade, who gave it and when, and only each model's last 20 grades for a kind.
 
@@ -174,8 +174,13 @@ A model graded below good too often for a kind (at least 3 of its last 20 grades
 
 ## Your subscriptions and pay per use
 
-Savings shows two things apart:
+Savings shows three things apart:
 
+- **What Leanfare did for your apps**, once an app has handed it work this month (plans and `delegate`):
+  - **Kept out of your plans:** what Leanfare's models read that your app never did (the files, and a plan part's own text) against the answers your app read back, as a share and in tokens. The thinking and writing your app did not have to do is not counted, so the share is the least it kept out. A plan says the same before it runs: about how many tokens its parts keep out of your plan, and what share of the task that is.
+  - **The cost of that work,** and where it ran: free, on this computer, on your ChatGPT plan through Codex, or paid.
+  - **The quality:** how your apps graded the answers they used (see [Grades](#grades)), and what the checks by a stronger model found.
+  - **The last few,** each plan's parts on one line, with where each ran, its share kept out, its cost and its grades. The `spend` tool tells your app the same.
 - **Your subscriptions.** Pick your plans in Settings (Claude Pro or Max, ChatGPT Go, Plus, Pro or Business, Perplexity Pro or Max, Google AI Plus, Pro or Ultra, Grok, Copilot Pro or Pro+, Cursor Pro or Ultra; the price can be edited), with the month each started and, for one you ended, the month it ended. Each shows its limits: a 5 hour window and a week for Claude and Codex, weekly or monthly allowances for the others. Savings shows a plan only in its months, and names the AI apps it found on this computer (from when each came and when it was last used).
   - **Claude:** this month's Claude Code tokens, and what is left of the 5 hours and the week, from Claude Code's status line (**Add to the status line** on the Savings page). Settings can also show what that use would cost at API prices.
   - **ChatGPT:** the same from Codex's own log files, which also name your plan, so Leanfare offers it.
@@ -232,7 +237,7 @@ Leanfare reads usage numbers, never your words.
 - **Your chats in Leanfare** stay on your computer and go only to the AI company you pick. The cost ledger, the delegate's and the trial's records keep models, token counts, times and costs, never what you wrote.
 - **A plan** goes to the model that splits it (or to none, by rules), and each part, with its files, to the model the table names for it. When that model cannot answer (busy, or no longer ticked), another of yours takes it (a free part stays on free models), and the part's receipt says which. Some answers are also checked by a stronger model of yours, which sees the part, its files and the answer. The answers are saved in your project's `.leanfare` folder, nowhere else.
 - **A part on Codex** goes to OpenAI through your own Codex command, as any Codex task does, and Codex reads what it needs, as when you use it. Leanfare asks Codex only how it is signed in, and never reads its sign in.
-- **Grades** keep the model, the kind of work and the grade, never the question or the answer.
+- **Grades** keep the model, the kind of work and the grade, never the question or the answer. **What Leanfare did for your apps** is counted from the same records: kinds of work, numbers of files, token counts, models, costs and grades.
 - **A local model** is downloaded by Ollama, from its library, only after your yes.
 - **The apps on this computer** are found by dates only: Spotlight's, and the times of their own folders and files (when each came and when it was last used). No file of theirs is opened.
 - **No telemetry.** Leanfare talks to the AI companies you use; to llmledger's price list once a day; to models.dev's list of providers when you add a provider or look for keys (kept for a day); to OpenRouter when you use it; and to GitHub's list of releases once a day to see whether a new version is out (Settings can turn this off). Nothing else, and nothing about you or your use.

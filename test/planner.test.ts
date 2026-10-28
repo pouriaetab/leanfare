@@ -4,7 +4,7 @@ import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chainSeconds, checkPlan, forgetPlans, keptPlan, makePlan, modelInYourApp, nothingOut, paidOf, readSplit, rulesSplit, runView, SIZE_TOKENS, SPLIT_SYSTEM, splitView, startRun, stopRun, tableOf, type Part } from "../src/planner";
+import { chainSeconds, checkPlan, forgetPlans, gradePart, keptPlan, makePlan, modelInYourApp, nothingOut, paidOf, readSplit, rulesSplit, runView, SIZE_TOKENS, SPLIT_SYSTEM, splitView, startRun, stopRun, tableOf, type Part } from "../src/planner";
 import { saveSettings } from "../src/settings";
 import { saveSnap } from "../src/statusline";
 import { ALL_TICKED, boot, fake, keys, ledger, reset, ui } from "./app";
@@ -179,7 +179,7 @@ describe("where each part runs", () => {
     const t = tableOf({ task: "x", manager: "Claude Code", parts, totals: { parts: 2, out: 1, later: 0, kept: SIZE_TOKENS.large, used: 5000, seconds: 40, after: null, cost: 0 }, split: { by: "rules", model: null, cost: null, note: null }, limits: null });
     expect(t).toContain("| 1 | Read / the logs | read, low | Leanfare, on this computer | Qwen | ~40 s | ~150k kept | $0 | now |");
     expect(t).toContain("| 2 | Fix it | code, high | you (Claude Code) | Claude Sonnet 4.6 |  | ~5k of your plan | in your plan | after 1 |"); // the model to pick in your app
-    expect(t).toContain("1 of 2 parts go to Leanfare, keeping about 150k tokens out of your plan; about 5k stay in it.");
+    expect(t).toContain("1 of 2 parts go to Leanfare, keeping about 150k tokens out of your plan (97% of this task); about 5k stay in it.");
   });
 
   test("POST /api/plan: checked, then planned", async () => {
@@ -246,6 +246,30 @@ describe("running a plan here (the Plan tab)", () => {
       expect(p1.receipt).toContain(`The plan named ${named2.label}, which could not answer`);
       expect(p1.receipt).toContain(`so ${p1.model} answered.`);
     } finally { fake.hooks.fail = null; }
+  });
+
+  test("Savings shows a plan's parts as one line: what stayed out (each part's own text too), where each ran, its grades", async () => {
+    await keys("openai", "google", "deepseek");
+    fake.hooks.answer = (prompt) => (prompt.includes("The person works in") ? SPLIT : null);
+    const plan = await makePlan({ task: "Reverse engineer LiteLLM", files: [], manager: "Claude Code", signal: signal() });
+    startRun(plan.id, { paid: true });
+    await until(() => !runView(plan.id)!.running);
+    const done = runView(plan.id)!.parts.filter((p) => p.status === "done");
+    expect(done.length).toBeGreaterThan(1);
+    gradePart(plan.id, done[0].n, "good", "you");
+    gradePart(plan.id, done[1].n, "partly", "you");
+    const w = (await ui(url, "/api/savings")).json.work;
+    expect(w).toMatchObject({ tasks: 1, parts: done.length, grades: { good: 1, partly: 1, wrong: 0 } });
+    expect(w.recent).toHaveLength(1);
+    expect(w.recent[0]).toMatchObject({ plan: true, parts: done.length, files: 0 });
+    expect(w.recent[0].grades.sort()).toEqual(["good", "partly"]);
+    // No files: what stayed out is the parts' own text (the part, what the earlier parts found, the task), which Claude Code never read.
+    expect(w.kept).toBeGreaterThan(0);
+    expect(w.keptPct).toBeGreaterThan(0);
+    expect(w.recent[0].models.length).toBeGreaterThan(0);
+    for (const m of w.recent[0].models) expect(["free", "paid", "local", "plan"]).toContain(m.where);
+    // The split's model counts in the cost of that work.
+    expect(w.cost).toBeGreaterThanOrEqual(w.recent[0].cost);
   });
 
   test("files named by path in the Plan tab are measured, then handed over when their part runs", async () => {
@@ -373,6 +397,13 @@ describe("folders and searches", () => {
     const one = runView(plan.id)!.parts[0];
     expect(one).toMatchObject({ status: "done", answer: "Hello from sonar." });
     expect(one.receipt).toContain("Sonar");
+    // A search part runs without the delegate, and still shows in Savings with the plan's other parts.
+    const w = (await ui(url, "/api/savings")).json.work;
+    expect(w.recent[0].kinds).toContain("searching the web");
+    expect(w.recent[0].models).toContainEqual({ label: "Sonar", where: "paid" });
+    expect(one.cost).toBeGreaterThan(0);
+    const run = runView(plan.id)!;
+    expect(w.cost).toBeCloseTo(run.parts.reduce((n, p) => n + (p.cost ?? 0), 0), 10); // split by rules: its parts are all it cost, the search counted once
     fake.hooks.fail = (_text, provider) => (provider === "perplexity" ? 500 : null);
     const again = await make();
     startRun(again.id, { paid: true });
