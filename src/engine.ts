@@ -2,12 +2,12 @@
 // the same steps: wait while paused, choose the model, reserve the budget,
 // send, count the tokens, record the cost.
 import { baseOf, provider, runtime, type ProviderId } from "./config";
-import { LOCAL_CONTEXT, getModel, isRetired, localNeed, served, store, type Model } from "./data";
+import { LOCAL_CONTEXT, allModels, getModel, isRetired, localNeed, served, store, type Model } from "./data";
 import { isLocalFound } from "./providers";
 import { ZERO, costOf, fromAnthropicUsage, fromOpenAIUsage, mediaIn, promptChars, promptMax, promptTokens, type Usage } from "./cost";
 import { db } from "./db";
 import { getKey } from "./keys";
-import { MODES, settings, type Mode } from "./settings";
+import { MODES, saveSettings, settings, type Mode } from "./settings";
 import { estimateFor, expectedOutput, guessTask, ledgerWhy, pickModel, resolveModel, type Candidate, type Guess, type Msg } from "./router";
 import { forgetSpeeds, parseSpeed, secondsFor, type SpeedChoice } from "./speed";
 import { successor } from "./retire";
@@ -38,6 +38,21 @@ export function notReadyMessage(id: ProviderId): string {
 
 export function usableModels(only?: (m: Model) => boolean): Model[] {
   return settings().ticked.map((id) => getModel(id)).filter((m): m is Model => !!m && providerReady(m.provider) && served(m) && (!only || only(m)));
+}
+
+// A provider you have but ticked none of the models of (a key just added, Ollama just found, or Set up's
+// first run): its short list is ticked, or every model it has on this computer, since those are free.
+export function firstPicks(pid: ProviderId): Model[] {
+  const all = allModels().filter((m) => m.provider === pid);
+  const ticked = new Set(settings().ticked);
+  if (all.some((m) => ticked.has(m.id))) return []; // you already chose for this provider
+  const mine = all.filter((m) => served(m));
+  return pid === "ollama" || provider(pid)?.local ? mine : mine.filter((m) => m.top);
+}
+export function tickTop(pid: ProviderId): Model[] {
+  const pick = firstPicks(pid);
+  if (pick.length) saveSettings({ ticked: [...settings().ticked, ...pick.map((m) => m.id)] });
+  return pick;
 }
 
 // The "usual model" savings are measured against: your choice, or the best rated model you ticked.
