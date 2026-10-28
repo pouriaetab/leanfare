@@ -1,7 +1,7 @@
 {
   "name": "Leanfare",
   "short_name": "Leanfare",
-  "description": "Every top AI model in one app on your own computer.",
+  "description": "Leanfare makes the AI apps you already use cost less.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f5f5f2",
