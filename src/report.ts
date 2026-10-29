@@ -29,7 +29,12 @@ export interface ReportPart {
   ts: string; kind: string | null; model: string; label: string; provider: string; where: "local" | "free" | "plan" | "paid";
   read: number; back: number; cost: number | null; ms: number | null;
   grade: Grade | null; gradedBy: "app" | "check" | null; check: "pass" | "fail" | null; checker: string | null; side: "same" | "better" | "worse" | null; plan: string | null;
+  used: Used | null; // what the outside models used for it, measured from its calls (null: a hand off before 0.10, or a plan part run elsewhere)
 }
+// Tokens the outside models used, measured from the provider's own counts: what they read (the task and files, every
+// call), their thinking where it is known, and what they wrote. thought null: not known for some call; estimated: from
+// a thinking text, about four characters a token. calls: answers, second tries, checks and side by side, failed ones too.
+export interface Used { read: number; thought: number | null; wrote: number; calls: number; failed: number; estimated: boolean; byRole: Partial<Record<"answer" | "check" | "side", { read: number; thought: number | null; wrote: number; calls: number }>> }
 export interface Own { fresh: number; cached: number; input: number; output: number }
 export interface ReportPrompt {
   key: string; // what the id is kept under: the session's file and the prompt's time, or a group's first hand off
@@ -39,6 +44,7 @@ export interface ReportPrompt {
   prompt: number | null; // the prompt's own tokens (Claude Code), about four characters each
   own: Own | null; // null: the app does not say
   parts: ReportPart[]; kept: number; back: number; cost: number; saved: number | null; grade: Grade | null;
+  used: Used | null; // what the outside models used for its parts, measured (null: none of them was)
 }
 
 // From and to of a range, by this computer's clock: today starts at local midnight.
@@ -76,9 +82,52 @@ const labelOf = (id: string) => (id === CODEX_ID ? "Codex" : getModel(id)?.label
 const whereOf = (id: string, cost: number | null): ReportPart["where"] => (id === CODEX_ID ? "plan" : getModel(id)?.local ? "local" : cost === 0 ? "free" : "paid");
 const freshOf = (u: { uncached: number; cacheWrite: number; cacheWrite1h?: number; output: number }) => u.uncached + u.cacheWrite + (u.cacheWrite1h ?? 0) + u.output;
 
+// What each hand off's calls used, by its mark (ledger.job): every call made for it, as the ledger has them. Side by
+// side runs after the answer went back, so its calls can come a little later than the span.
+const ROLE: Record<string, "answer" | "check" | "side"> = { delegate: "answer", check: "check", sidebyside: "side" };
+function usedIn(from: number, to: number): Map<string, Used> {
+  let rows: any[] = [];
+  try {
+    rows = db.query(`SELECT job, source, COUNT(*) AS calls, SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS failed, SUM(in_tokens) AS rd, SUM(out_tokens) AS out,
+        SUM(CASE WHEN think_source IS NULL AND out_tokens > 0 THEN 1 ELSE 0 END) AS unknown, SUM(COALESCE(think_tokens, 0)) AS th, SUM(CASE WHEN think_source = 'text' THEN 1 ELSE 0 END) AS est
+      FROM ledger WHERE job IS NOT NULL AND ts >= ? AND ts < ? GROUP BY job, source`).all(new Date(from).toISOString(), new Date(to + DAY).toISOString()) as any[];
+  } catch { return new Map(); } // the database busy: no measured numbers this time
+  // Summed as output and the thinking known in it; written is the output less the thinking, or all of it when the
+  // thinking of some call is not known (then it is said as not split).
+  type Acc = { read: number; out: number; th: number; unknown: boolean; calls: number; failed: number; est: boolean };
+  const done = (a: Acc) => ({ read: a.read, thought: a.unknown ? null : a.th, wrote: a.unknown ? a.out : a.out - a.th, calls: a.calls });
+  const acc = new Map<string, { all: Acc; roles: Partial<Record<"answer" | "check" | "side", Acc>> }>();
+  const zero = (): Acc => ({ read: 0, out: 0, th: 0, unknown: false, calls: 0, failed: 0, est: false });
+  for (const r of rows) {
+    const j = acc.get(r.job) ?? { all: zero(), roles: {} };
+    const role = ROLE[r.source] ?? "answer";
+    for (const a of [j.all, (j.roles[role] ??= zero())]) {
+      a.read += r.rd; a.out += r.out; a.th += r.th; a.unknown ||= r.unknown > 0; a.calls += r.calls; a.failed += r.failed; a.est ||= r.est > 0;
+    }
+    acc.set(r.job, j);
+  }
+  const out = new Map<string, Used>();
+  for (const [job, j] of acc) {
+    out.set(job, { ...done(j.all), failed: j.all.failed, estimated: j.all.est,
+      byRole: Object.fromEntries(Object.entries(j.roles).map(([k, a]) => [k, done(a!)])) });
+  }
+  return out;
+}
+// Parts' measured tokens summed: null when none of them were measured. Written counts the thinking in when the
+// thinking of some part is not known, as for one part.
+export function sumUsed(us: (Used | null)[]): Used | null {
+  const xs = us.filter((u): u is Used => !!u);
+  if (!xs.length) return null;
+  const unknown = xs.some((u) => u.thought === null);
+  const sum = (f: (u: Used) => number) => xs.reduce((n, u) => n + f(u), 0);
+  return { read: sum((u) => u.read), thought: unknown ? null : sum((u) => u.thought!), wrote: sum((u) => u.wrote + (unknown ? u.thought ?? 0 : 0)),
+    calls: sum((u) => u.calls), failed: sum((u) => u.failed), estimated: xs.some((u) => u.estimated), byRole: {} };
+}
+
 // The hand offs and plan parts in a span (finished ones), each with its grade: the app's, else the check's verdict.
 function partsIn(from: number, to: number): (ReportPart & { app: string | null; appModel: string | null; at: number })[] {
-  const rows = db.query(`SELECT d.id, d.ts, d.kind, d.model, d.rerun, d.cost, d.check_cost, d.rerun_cost, d.file_tokens, d.task_tokens, d.answer_tokens, d.verdict, d.checker, d.grade, d.plan, d.app, d.app_model, d.ms,
+  const used = usedIn(from, to);
+  const rows = db.query(`SELECT d.id, d.ts, d.kind, d.model, d.rerun, d.cost, d.check_cost, d.rerun_cost, d.file_tokens, d.task_tokens, d.answer_tokens, d.verdict, d.checker, d.grade, d.plan, d.app, d.app_model, d.ms, d.job,
       c.verdict AS side, COALESCE(c.top_cost, 0) + COALESCE(c.judge_cost, 0) AS side_cost
     FROM delegations d LEFT JOIN comparisons c ON c.handoff = d.id AND c.verdict IN ('same', 'better', 'worse')
     WHERE d.status = 'ok' AND d.ts >= ? AND d.ts < ? ORDER BY d.ts, d.id`).all(new Date(from).toISOString(), new Date(to).toISOString()) as any[];
@@ -94,6 +143,7 @@ function partsIn(from: number, to: number): (ReportPart & { app: string | null; 
       grade, gradedBy: grade === null ? null : ["good", "partly", "wrong"].includes(r.grade) ? "app" : "check",
       check: r.verdict === "pass" || r.verdict === "fail" ? r.verdict : null, checker: r.checker ? labelOf(r.checker) : null,
       side: r.side ?? null, plan: r.plan ? String(r.plan).split(":")[0] : null, app: r.app ?? null, appModel: r.app_model ?? null,
+      used: r.job ? used.get(r.job) ?? null : null,
     };
   });
 }
@@ -116,7 +166,7 @@ export async function report(q: ReportQuery, inner = false): Promise<Report> {
   for (const [file, ps] of bySession) {
     ps.forEach((p, i) => cc.push({
       key: `cc:${basename(file)}:${p.ts}`, id: null, ts: new Date(p.ts).toISOString(), app: "Claude Code", thread: sessionOf(file), project: p.project,
-      model: null, plan: ccPlan, prompt: Math.ceil(p.chars / 4), own: { fresh: 0, cached: 0, input: 0, output: 0 }, parts: [], kept: 0, back: 0, cost: 0, saved: null, grade: null,
+      model: null, plan: ccPlan, prompt: Math.ceil(p.chars / 4), own: { fresh: 0, cached: 0, input: 0, output: 0 }, parts: [], kept: 0, back: 0, cost: 0, saved: null, grade: null, used: null,
       start: p.ts, end: ps[i + 1]?.ts ?? Infinity, models: new Map(),
     }));
   }
@@ -150,7 +200,7 @@ export async function report(q: ReportQuery, inner = false): Promise<Report> {
     const samePlan = open && part.plan && open.parts.some((x) => x.plan === part.plan);
     if (!open || open.app !== app || (!samePlan && part.at - open.last > GAP)) {
       open = { key: `h:${part.id}`, id: null, ts: part.ts, app, thread: null, project: null, model: part.appModel ? { id: part.appModel, label: modelName(part.appModel) } : null,
-        plan: planFor(app), prompt: null, own: null, parts: [], kept: 0, back: 0, cost: 0, saved: null, grade: null, last: part.at, appModel: part.appModel };
+        plan: planFor(app), prompt: null, own: null, parts: [], kept: 0, back: 0, cost: 0, saved: null, grade: null, used: null, last: part.at, appModel: part.appModel };
       others.push(open);
     }
     open.parts.push(part); open.last = part.at;
@@ -178,7 +228,8 @@ export async function report(q: ReportQuery, inner = false): Promise<Report> {
     .map((p) => {
       const kept = p.parts.reduce((n, x) => n + x.read, 0), back = p.parts.reduce((n, x) => n + x.back, 0);
       const out: ReportPrompt = { key: p.key, id: p.id, ts: p.ts, app: p.app, thread: p.thread, project: p.project, model: p.model, plan: p.plan, prompt: p.prompt, own: p.own, parts: p.parts,
-        kept, back, cost: p.parts.reduce((n, x) => n + (x.cost ?? 0), 0), saved: p.own ? (kept + p.own.fresh > 0 ? kept / (kept + p.own.fresh) : null) : null, grade: worst(p.parts.map((x) => x.grade)) };
+        kept, back, cost: p.parts.reduce((n, x) => n + (x.cost ?? 0), 0), saved: p.own ? (kept + p.own.fresh > 0 ? kept / (kept + p.own.fresh) : null) : null, grade: worst(p.parts.map((x) => x.grade)),
+        used: sumUsed(p.parts.map((x) => x.used)) };
       return out;
     })
     .sort((a, b) => (a.ts < b.ts ? 1 : -1));
@@ -202,6 +253,8 @@ export async function report(q: ReportQuery, inner = false): Promise<Report> {
     own: { fresh: freshKnown, cached: known.reduce((n, p) => n + p.own!.cached, 0), measured: known.length, notKnown: shown.length - known.length,
       byApp: [...new Set(shown.map((p) => p.app))].map((app) => ({ app, measured: shown.some((p) => p.app === app && p.own), fresh: shown.filter((p) => p.app === app && p.own).reduce((n, p) => n + p.own!.fresh, 0) })) },
     cost: { usd: ps.reduce((n, x) => n + (x.cost ?? 0), 0), freeShare: ps.length ? ps.filter((x) => x.where !== "paid").length / ps.length : null, parts: ps.length, prompts: shown.length },
+    // What the outside models used, measured (0.10 on): the parts that have it, and how many do not (older ones).
+    outside: { ...(sumUsed(ps.map((x) => x.used)) ?? { read: 0, thought: 0, wrote: 0, calls: 0, failed: 0, estimated: false }), byRole: undefined, measured: ps.filter((x) => x.used).length, notMeasured: ps.filter((x) => !x.used).length },
     quality: { ...counts, graded, goodShare: graded ? counts.good / graded : null, blind: blind.length, judge: [...judges.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null },
   };
 
