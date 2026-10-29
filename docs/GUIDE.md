@@ -250,14 +250,14 @@ reply = client.chat.completions.create(model="auto", messages=[{"role": "user", 
 
 Leanfare reads usage numbers, never your words.
 
-- **Your plans** takes the model, the time and the token counts from each line of Claude Code's and Codex's log files, and drops the rest of the line. **The status line** reads only the two percentages Claude Code hands it.
+- **Your plans** takes the model, the time and the token counts from each line of Claude Code's and Codex's log files, and drops the rest of the line. For the report, it also takes when each prompt you typed in Claude Code began and how many characters it had, never its words. **The status line** reads only the two percentages Claude Code hands it.
 - **Find my keys** reads only the files named above, only when you press it; a key goes only to its own provider, to test it. **Your login shell's settings** are asked for key variables only (names ending in `_KEY`), and only by a Leanfare that did not start from a terminal.
 - **Your chats in Leanfare** stay on your computer and go only to the AI company you pick. The cost ledger, the delegate's and the trial's records keep models, token counts, times and costs, never what you wrote.
 - **A plan** goes to the model that splits it (or to none, by rules), and each part, with its files, to the model the table names for it. When that model cannot answer (busy, or no longer ticked), another of yours takes it (a free part stays on free models), and the part's receipt says which. Some answers are also checked by a stronger model of yours, which sees the part, its files and the answer. The answers are saved in your project's `.leanfare` folder, nowhere else.
 - **A free tier** may not keep what you send to itself: Google's terms for a free Gemini key let people read it and use it to improve Google's products, and OpenRouter's free models may be kept or trained on by their providers. Leanfare marks them and sends them your projects' files only as Settings says; **private** work (a plan or a hand off an app marks so) goes only to models on this computer.
 - **A part on Codex** goes to OpenAI through your own Codex command, as any Codex task does, and Codex reads what it needs, as when you use it. Leanfare asks Codex only how it is signed in, and never reads its sign in.
 - **Side by side** sends a hand off's task and files to your top model too, and the two answers to the judge: models you ticked, under the same rules as the hand off, and never a private task. It keeps the models, the verdict and the costs, never the words.
-- **Grades** keep the model, the kind of work and the grade, never the question or the answer. **What Leanfare did for your apps** is counted from the same records: kinds of work, numbers of files, token counts, models, costs and grades.
+- **Grades** keep the model, the kind of work and the grade, never the question or the answer. **What Leanfare did for your apps** and the report are counted from the same records: kinds of work, numbers of files, token counts, models, costs, grades and how long each hand off took.
 - **A local model** is downloaded by Ollama, from its library, only after your yes. **The test of a model** runs on your computer only, on made up files; Leanfare keeps how many were right. **Models on a drive** are found by their folders' names and sizes; no file of theirs is read.
 - **The apps on this computer** are found by dates only: Spotlight's, and the times of their own folders and files (when each came and when it was last used). No file of theirs is opened.
 - **No telemetry.** Leanfare talks to the AI companies you use; to llmledger's price list once a day; to models.dev's list of providers when you add a provider or look for keys (kept for a day); to OpenRouter when you use it; and to GitHub's list of releases once a day to see whether a new version is out (Settings can turn this off). Nothing else, and nothing about you or your use.
@@ -293,6 +293,9 @@ Everything lives in `~/.leanfare`: the database (settings, cost ledger, chats an
 | Trial pass | An effort passes when it gets at least 9 of the 10 trial questions right. |
 | Grade score | A model's grades for one kind of work, good 1, partly 0.5, wrong 0, averaged over its last 20. Under 0.5, from 3 grades on, it is moved down. |
 | Local rating | A model on your computer takes the Arena rating of the same model in the cloud (the same family and size), 15 points lower for the lighter copy. |
+| New tokens | What an app used that it did not read again from its cache: its uncached input, its cache writes and its output. Each turn reads the whole conversation again from the cache, so those reads are shown apart. |
+| Kept out (the report) | The tokens Leanfare's models read for a prompt: the files and each part's own text. The share is kept out ÷ (kept out + the app's new tokens), over the prompts whose app's own use is known (Claude Code's). |
+| A prompt (the report) | In Claude Code, from a prompt you typed to your next one in the same session; its hand offs belong to it, and its tokens are its characters ÷ 4. In other apps, hand offs less than 10 minutes apart, a plan's parts always together. |
 
 ## Data and credits
 
