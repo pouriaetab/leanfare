@@ -2543,7 +2543,13 @@
         runButton("Update list", (signal) => refreshList("custom", signal)),
         h("button", { class: "btn small", type: "button", text: "Remove provider", onclick: () => removeCustom(p) })));
     }
-    if (p.id === "google") body.append(h("label", { class: "check" }, h("input", { type: "checkbox", checked: p.free, onchange: (e) => patchProvider(p.id, { free: e.target.checked }) }), "My Google key is on the free plan (count its answers as $0)"));
+    // A free plan (freeplans.ts): its answers count as $0, and the page says what its terms or limits mean.
+    const FREE_PLAN_TEXT = {
+      google: "My Google key is on the free plan (count its answers as $0)",
+      groq: "My Groq key is on the free plan (count its answers as $0; work above 8,000 tokens a minute goes to another model)",
+      mistral: "My Mistral key is on the free Experiment plan (count its answers as $0; Mistral may train on what is sent)",
+    };
+    if (FREE_PLAN_TEXT[p.id]) body.append(h("label", { class: "check" }, h("input", { type: "checkbox", checked: p.free, onchange: (e) => patchProvider(p.id, { free: e.target.checked }) }), FREE_PLAN_TEXT[p.id]));
     if (p.id === "ollama") {
       const l = p.list;
       body.append(h("div", { class: "row" },
