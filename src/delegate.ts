@@ -24,6 +24,7 @@ import { passedLocal } from "./localpass";
 import { mayTake, modelOn, readRisk } from "./platforms";
 import { movedDown } from "./grades";
 import { fromAnotherCompany, masked } from "./judge";
+import { startSideBySide } from "./sidebyside";
 import { plan, runChat, usableModels, type ChatOptions } from "./engine";
 import { DELEGATE_LIMITS, type DelegateFile } from "./readfiles";
 import { guessTask, rating, type Guess, type Msg } from "./router";
@@ -461,6 +462,11 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     seconds: (performance.now() - started) / 1000,
   };
   result.row = write({ ...row, model: first.meta.model.id, cost: first.cost, answerTokens, status: "ok", chance, checker: check.checker?.id ?? null, verdict: picked ? check.verdict : null, checkCost: check.cost, rerun: firstUsed ? model.id : null, rerunCost });
+  // Now and then the top model answers it too, and a judge of a third company compares the two blind (sidebyside.ts).
+  // In the background: this answer goes back now. Not for a private task, nor a plan's part kept to free or local
+  // models, nor an answer a failed check replaced (the check judged it).
+  if (result.row !== null && doer && input.kind && !input.private && !limit && !firstUsed)
+    startSideBySide({ handoff: result.row, kind: input.kind, effort: input.effort, guess, messages, system, maxOut: input.maxOut, task: input.task, block, doer, answer: final.text, allowed: kept(() => true) });
   return { ...result, receipt: receiptOf(result, input.maxOut) };
 }
 
