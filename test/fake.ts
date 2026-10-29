@@ -93,7 +93,9 @@ function replyFor(text: string, provider: string): string | null {
 function promptText(body: any): string {
   const parts: string[] = [];
   if (typeof body?.system === "string") parts.push(body.system);
-  for (const m of body?.messages ?? []) parts.push(typeof m.content === "string" ? m.content : JSON.stringify(m.content));
+  if (typeof body?.instructions === "string") parts.push(body.instructions); // OpenAI's Responses shape (Perplexity's Agent API)
+  if (typeof body?.input === "string") parts.push(body.input);
+  for (const m of [...(body?.messages ?? []), ...(Array.isArray(body?.input) ? body.input : [])]) parts.push(typeof m.content === "string" ? m.content : JSON.stringify(m.content));
   return parts.join("\n");
 }
 
@@ -246,6 +248,8 @@ export function startFake() {
       const keyOk = provider === "ollama" || auth === KEYS[provider] || auth === SHAPED[provider] || (provider === "openrouter" && auth === OAUTH_KEY);
       // Perplexity has no model list: a request naming a model that does not exist answers 400 to a good key.
       if (provider === "perplexity" && body?.model === "leanfare-key-check") return keyOk ? Response.json({ error: { message: "Invalid model" } }, { status: 400 }) : Response.json({ error: { message: "Invalid API key" } }, { status: 401 });
+      // Sonar's old chat completions address is gone (July 2026): Perplexity answers only through its Agent API.
+      if (provider === "perplexity" && url.pathname.endsWith("/chat/completions")) return Response.json({ error: { message: "Sonar Chat Completions is now Agent API" } }, { status: 410 });
       if (url.pathname.endsWith("/models") || url.pathname.endsWith("/key") || url.pathname.includes("/v1/models")) {
         if (provider === "openrouter" && url.pathname.endsWith("/models")) return Response.json({ data: [
           { id: "acme/acme-large", name: "Acme: Large", pricing: { prompt: "0.000001", completion: "0.000004" }, context_length: 100000, created: 1790000000, architecture: { input_modalities: ["text", "image"], output_modalities: ["text"] }, supported_parameters: ["tools", "reasoning"] },
@@ -269,7 +273,7 @@ export function startFake() {
       const u = directive(text, "usage");
       const inTok = u?.[0] ?? Math.ceil(text.length / 4);
       // Like a real provider, never write more than the request allows.
-      const limit = body?.max_completion_tokens ?? body?.max_tokens ?? body?.options?.num_predict ?? Infinity;
+      const limit = body?.max_completion_tokens ?? body?.max_tokens ?? body?.max_output_tokens ?? body?.options?.num_predict ?? Infinity;
       const outTok = Math.min(u?.[1] ?? 12, limit);
       let capped = (u?.[1] ?? 12) > limit;
       const cached = directive(text, "cached")?.[0] ?? 0;
@@ -381,6 +385,31 @@ export function startFake() {
               send({ id: "c1", object: "chat.completion.chunk", model: body.model, choices: [{ index: 0, delta: {}, finish_reason: finishReason }] });
               if (wantsUsage && !nousage) send({ id: "c1", object: "chat.completion.chunk", model: body.model, choices: [], usage });
               c.enqueue(enc.encode("data: [DONE]\n\n"));
+              c.close();
+            } catch {}
+          },
+        }), { headers: { "content-type": "text/event-stream" } });
+      }
+      if (provider === "perplexity" && url.pathname.endsWith("/v1/agent")) {
+        const usage = { input_tokens: inTok, output_tokens: outTok, total_tokens: inTok + outTok, input_tokens_details: { cached_tokens: cached }, output_tokens_details: { reasoning_tokens: 0 },
+          cost: { currency: "USD", input_cost: 0.0001, output_cost: 0.0001, tool_calls_cost: 0.0025, total_cost: 0.0027 }, tool_calls_details: { web_search: 1 } };
+        const status = capped ? "incomplete" : "completed";
+        const whole = { id: "resp_fake", object: "response", model: body.model, status, ...(capped ? { incomplete_details: { reason: "max_output_tokens" } } : {}),
+          output: [{ type: "search_results", results: [{ url: "https://example.com/a", title: "A page" }] }, { type: "message", role: "assistant", content: [{ type: "output_text", text: answer, annotations: [] }] }], ...(nousage ? {} : { usage }) };
+        if (!body.stream) return Response.json(whole);
+        return new Response(new ReadableStream({
+          async start(c) {
+            const send = (type: string, o: any) => c.enqueue(enc.encode(`event: ${type}\ndata: ${JSON.stringify({ type, ...o })}\n\n`));
+            try {
+              send("response.created", { response: { id: "resp_fake", status: "in_progress" } });
+              for (const t of split) {
+                if (rec.aborted) return;
+                if (!t) continue;
+                send("response.output_text.delta", { item_id: "msg_1", output_index: 1, content_index: 0, delta: t });
+                if (cut) { c.close(); return; }
+                if (gap) await Bun.sleep(gap);
+              }
+              send(capped ? "response.incomplete" : "response.completed", { response: whole });
               c.close();
             } catch {}
           },

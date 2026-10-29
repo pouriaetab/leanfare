@@ -397,7 +397,7 @@ describe("folders and searches", () => {
     startRun(plan.id, { paid: true });
     await until(() => !runView(plan.id)!.running);
     const one = runView(plan.id)!.parts[0];
-    expect(one).toMatchObject({ status: "done", answer: "Hello from sonar." });
+    expect(one).toMatchObject({ status: "done", answer: "Hello from perplexity/sonar." }); // through Perplexity's Agent API
     expect(one.receipt).toContain("Sonar");
     // A search part runs without the delegate, and still shows in Savings with the plan's other parts.
     const w = (await ui(url, "/api/savings")).json.work;

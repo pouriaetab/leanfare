@@ -106,16 +106,29 @@ describe("a pasted key finds its provider", () => {
 });
 
 describe("the new built in providers", () => {
-  test("Perplexity: its own cost report (search fee included) is what counts", async () => {
+  test("Perplexity: through its Agent API with web search on; its own cost report (search fee included) is what counts", async () => {
     await reset({ ticked: ["perplexity/sonar"] });
     await keys("perplexity");
-    const r = await post(`${url}/v1/chat/completions`, { model: "perplexity/sonar", messages: [{ role: "user", content: "What happened today?" }] });
+    const r = await post(`${url}/v1/chat/completions`, { model: "perplexity/sonar", max_tokens: 500, messages: [{ role: "system", content: "Be brief." }, { role: "user", content: "What happened today?" }] });
     expect(r.status).toBe(200);
-    expect(r.headers.get("x-leanfare-cost-usd")).toBe("0.00520000");
+    expect(r.headers.get("x-leanfare-cost-usd")).toBe("0.00270000");
+    const j = await r.json();
+    expect([j.object, j.choices[0].message.content, j.choices[0].finish_reason]).toEqual(["chat.completion", "Hello from perplexity/sonar.", "stop"]);
     const last = fake.seen.filter((s) => s.provider === "perplexity").at(-1)!;
-    expect(last.path).toBe("/perplexity/chat/completions");
-    expect(last.body.model).toBe("sonar");
+    expect(last.path).toBe("/perplexity/v1/agent"); // Sonar's chat completions address moved to the Agent API
+    expect(last.body).toMatchObject({ model: "perplexity/sonar", input: "What happened today?", instructions: "Be brief.", tools: [{ type: "web_search" }], max_output_tokens: 500, stream: false });
     expect(ledger().at(-1)).toMatchObject({ model: "perplexity/sonar", price_status: "provider" });
+  });
+  test("Perplexity, streamed: its answer as chat completions chunks, then its cost", async () => {
+    await reset({ ticked: ["perplexity/sonar"] });
+    await keys("perplexity");
+    const r = await post(`${url}/v1/chat/completions`, { model: "perplexity/sonar", stream: true, messages: [{ role: "user", content: "What happened today? [usage 3000 400]" }] });
+    const raw = await r.text();
+    const chunks = raw.split("\n\n").filter((b) => b.startsWith("data: {")).map((b) => JSON.parse(b.slice(6)));
+    expect(chunks.map((c) => c.choices?.[0]?.delta?.content ?? "").join("")).toBe("Hello from perplexity/sonar.");
+    expect(chunks.at(-1).choices[0].finish_reason).toBe("stop");
+    expect(raw).toContain("cost_usd=0.00270000");
+    expect(ledger().at(-1)).toMatchObject({ model: "perplexity/sonar", in_tokens: 3000, out_tokens: 400, status: "ok" });
   });
   test("Groq: a model id with a slash goes to Groq as it is", async () => {
     await reset({ ticked: ["groq/openai/gpt-oss-120b"] });
