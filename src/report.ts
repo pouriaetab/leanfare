@@ -11,6 +11,7 @@ import { basename } from "node:path";
 import { CODEX_ID } from "./codex";
 import { getModel } from "./data";
 import { db } from "./db";
+import { modelStats, type ModelStat } from "./modelstats";
 import { modelName, planFor } from "./planner";
 import { recentEntries, recentPrompts } from "./plans";
 import { now } from "./util";
@@ -292,10 +293,15 @@ export async function report(q: ReportQuery, inner = false): Promise<Report> {
     return { kind, parts: xs.length, ...c, best: models[0] ? { id: models[0].id, label: models[0].label } : null };
   }).sort((a, b) => b.parts - a.parts || KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind));
 
-  return { from: new Date(q.from).toISOString(), to: new Date(q.to).toISOString(), step, tiles, series, byModel, byKind, prompts: shown.slice(0, 200), more: Math.max(0, shown.length - 200), options };
+  // Speed, failures, cost and quality per model: every call in the span (modelstats.ts), with its grades from the parts.
+  const speed: SpeedRow[] = modelStats({ from: q.from, to: q.to, provider: q.provider, model: q.model })
+    .map((m) => { const b = byModel.find((x) => x.id === m.id); return { ...m, graded: b?.graded ?? 0, goodShare: b?.goodShare ?? null }; });
+
+  return { from: new Date(q.from).toISOString(), to: new Date(q.to).toISOString(), step, tiles, series, byModel, byKind, speed, prompts: shown.slice(0, 200), more: Math.max(0, shown.length - 200), options };
 }
 
-export type Report = { from: string; to: string; step: number; tiles: any; series: { at: string; kept: number; used: number }[]; byModel: any[]; byKind: any[]; prompts: ReportPrompt[]; more: number; options: any };
+export type SpeedRow = ModelStat & { graded: number; goodShare: number | null };
+export type Report = { from: string; to: string; step: number; tiles: any; series: { at: string; kept: number; used: number }[]; byModel: any[]; byKind: any[]; speed: SpeedRow[]; prompts: ReportPrompt[]; more: number; options: any };
 
 // Prompt ids: PRM and a number (PRM-1042), one count for every app, in the order of the prompts' times. Each is given
 // once and kept (the prompts table), so a prompt has the same id in every span and filter, and two prompts alike in
