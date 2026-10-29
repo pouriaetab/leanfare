@@ -1779,7 +1779,7 @@
       : !d ? h("div", { class: "empty", text: "Reading the report…" })
       : !d.prompts.length ? h("div", { class: "empty", text: "Nothing in this span yet. Hand offs and plan parts from your apps, and Claude Code's prompts, show here." })
       : h("div", { class: "rp-body" + (S.report.loading ? " busy" : "") }, reportTiles(d), reportChartEl(d),
-          h("div", { class: "rp-two" }, reportModelsEl(d), reportKindsEl(d)), reportPromptsEl(d));
+          h("div", { class: "rp-two" }, reportModelsEl(d), reportKindsEl(d)), reportSpeedEl(d), reportPromptsEl(d));
     return h("section", { class: "rp", id: "reportCard" },
       h("div", { class: "sv-head" }, h("h2", { text: "Report" }), h("span", { class: "muted", text: "what Leanfare did for your apps" })),
       filters, body);
@@ -1889,6 +1889,107 @@
             g ? [["good", k.good], ["warn", k.partly], ["bad", k.wrong]].filter(([, v]) => v).map(([c, v]) => h("i", { class: c, style: { width: `${(v / g) * 100}%` } })) : h("i", { class: "none", style: { width: "100%" } })),
           h("span", { class: "meta" }, h("span", { text: g ? `${k.good} good · ${k.partly} partly · ${k.wrong} wrong` : "not graded yet" }), h("span", { class: "best", text: k.best ? `best: ${k.best.label}` : "" })));
       }));
+  }
+
+  // Speed, failures, cost and quality per model (0.10): every call in the span. A dot for each model (time for an
+  // answer against how often it was graded good), and a table with the numbers behind it.
+  const SP_FAIL = { busy: "busy", limit: "rate limited", timeout: "timed out", unreachable: "could not be reached", server: "error on its side", refused: "refused", cut: "cut off or empty", other: "other errors" };
+  const spSec = (v) => (v === null || v === undefined ? "—" : v < 10 ? `${v} s` : v < 120 ? `${Math.round(v)} s` : `${Math.round(v / 60)} min`);
+  const spFails = (m) => Object.keys(SP_FAIL).filter((k) => m.fails?.[k]).map((k) => `${m.fails[k]} ${SP_FAIL[k]}`).join(" · ");
+  const spWhere = (m) => (m.where === "local" ? "this computer · Ollama" : `${RP_WHERE[m.where] ?? m.where} · ${rpProvider(m.provider)}`);
+  function spNow(m) {
+    const notes = [];
+    if (m.movedDown?.length) notes.push(`moved down for ${m.movedDown.map((k) => (RP_KIND[k] ?? k).toLowerCase()).join(" and ")} (graded below good too often)`);
+    return [h("span", { class: "chip good", text: "ready" }), notes.length ? h("span", { class: "tiny", text: notes.join("; ") }) : null];
+  }
+  function reportSpeedEl(d) {
+    const rows = d.speed ?? [];
+    if (!rows.length) return [];
+    const chart = h("div", { class: "rp-chart sp-chart" });
+    const draw = () => drawSpeed(chart, rows, Math.max(280, Math.min(560, chart.clientWidth || 520)));
+    const RO = window.ResizeObserver;
+    if (RO) { let w = 0; new RO(() => { if (chart.clientWidth && chart.clientWidth !== w) { w = chart.clientWidth; draw(); } }).observe(chart); }
+    draw();
+    const dots = h("div", { class: "card rp-card" }, h("h3", { text: "Models: speed against quality" }),
+      h("p", { class: "muted", text: "Each dot is a model: how long its answers took (the middle answer) and how often your app graded them good. Up and left is better. Bigger dots answered more." }),
+      h("div", { class: "sp-top" }, chart,
+        h("dl", { class: "sp-key" },
+          h("dt", { text: "Time" }), h("dd", { text: "From each call's own clock: the first word (time to first token) and the whole answer. The middle one and the slowest 1 in 10." }),
+          h("dt", { text: "Failures" }), h("dd", { text: "Busy (503, 529), rate limited (429), timed out, could not be reached, and other errors. Each try counts, also when Auto passed the work on." }),
+          h("dt", { text: "Quality" }), h("dd", { text: "Your app's grades of its answers, else the blind checks. Not graded yet: on the bottom line, hollow." }))));
+    const table = h("div", { class: "card rp-card" }, h("h3", { text: "Models: speed, failures, cost and quality" }),
+      h("p", { class: "muted", text: "Every call in this span: hand offs, checks, side by side, plans and chats. Most calls first." }),
+      h("div", { class: "scroll" }, h("table", { class: "trial-table sp-table" },
+        h("thead", {}, h("tr", {}, h("th", { text: "Model" }), h("th", { class: "num", text: "Calls" }), h("th", { text: "Failed" }),
+          h("th", { class: "num" }, "First word", h("span", { class: "tiny", text: "middle · slowest 1 in 10" })),
+          h("th", { class: "num" }, "Whole answer", h("span", { class: "tiny", text: "middle · slowest 1 in 10" })),
+          h("th", { class: "num", text: "Writes" }), h("th", { class: "num", text: "Cost a call" }), h("th", { class: "num", text: "Good" }), h("th", { text: "Now" }))),
+        h("tbody", {}, ...rows.map((m) => h("tr", {},
+          h("td", { class: "nm" }, h("b", { text: m.label }), h("span", { class: "tiny", text: spWhere(m) })),
+          h("td", { class: "num", text: num(m.calls) }),
+          h("td", {}, m.failed ? [h("span", { class: "fail", text: `${num(m.failed)} failed` }), h("span", { class: "tiny", text: spFails(m) })] : h("span", { class: "muted", text: "none" })),
+          h("td", { class: "num", text: m.first ? `${spSec(m.first.mid)} · ${spSec(m.first.slow)}` : "—" }),
+          h("td", { class: "num", text: m.whole ? `${spSec(m.whole.mid)} · ${spSec(m.whole.slow)}` : "—" }),
+          h("td", { class: "num", text: m.perSecond ? `${num(m.perSecond)} /s` : "—" }),
+          h("td", { class: "num", text: m.costPerCall === null ? "—" : money(m.costPerCall) }),
+          h("td", { class: "num" + (m.goodShare === null ? " muted" : ""), text: m.goodShare === null ? "not graded" : pctText(m.goodShare) }),
+          h("td", { class: "now" }, spNow(m))))))));
+    return [dots, table];
+  }
+  function drawSpeed(box, rows, W) {
+    const H = 300, L = 46, R = 12, T = 14, B = 46, pw = W - L - R, ph = H - T - B;
+    const timed = rows.filter((m) => m.whole);
+    const secs = timed.map((m) => Math.max(0.1, m.whole.mid));
+    const lo = Math.min(1, 10 ** Math.floor(Math.log10(Math.min(...secs, 1)))), hi = Math.max(10, 10 ** Math.ceil(Math.log10(Math.max(...secs, 1))));
+    const graded = timed.filter((m) => m.goodShare !== null).map((m) => m.goodShare);
+    const yLo = Math.max(0, Math.min(0.4, Math.floor(Math.min(...graded, 1) * 10) / 10));
+    const x = (s) => L + ((Math.log10(Math.max(lo, s)) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo))) * pw;
+    const y = (g) => T + ph - ((Math.max(yLo, g) - yLo) / (1 - yLo)) * ph;
+    const ticksX = [];
+    for (let p = lo; p <= hi; p *= 10) for (const f of pw < 420 ? [1] : [1, 2, 5]) if (p * f >= lo && p * f <= hi) ticksX.push(p * f); // narrow: tens only
+    const ticksY = [0, 0.25, 0.5, 0.75, 1].map((f) => yLo + f * (1 - yLo));
+    const maxCalls = Math.max(...timed.map((m) => m.calls), 1);
+    const kids = [
+      ...ticksY.map((v) => [svg("line", { x1: L, x2: L + pw, y1: y(v), y2: y(v), class: v === yLo ? "axis" : "grid" }), svg("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end", class: "tick" }, `${Math.round(v * 100)}%`)]),
+      ...ticksX.map((v) => [svg("line", { x1: x(v), x2: x(v), y1: T, y2: T + ph, class: "grid" }), svg("text", { x: x(v), y: T + ph + 15, "text-anchor": v === lo ? "start" : v === hi ? "end" : "middle", class: "tick" }, spSec(v))]),
+      svg("text", { x: L + pw / 2, y: H - 8, "text-anchor": "middle", class: "tick" }, "seconds for an answer (the middle one), log scale"),
+    ];
+    // Labels right of their dot, or left near the edge; one that would cover another is left to the tooltip.
+    const placed = [];
+    const free = (b) => !placed.some((o) => b.x < o.x + o.w && o.x < b.x + b.w && b.y < o.y + o.h && o.y < b.y + b.h);
+    const tip = h("div", { class: "rp-tip", hidden: true });
+    const order = [...timed].sort((a, b) => b.calls - a.calls);
+    for (const m of order) {
+      const cx = x(m.whole.mid), cy = y(m.goodShare ?? yLo), r = 5 + 6 * Math.sqrt(m.calls / maxCalls);
+      placed.push({ x: cx - r, y: cy - r, w: 2 * r, h: 2 * r });
+      const cls = m.goodShare === null ? "spd none" : "spd ready";
+      const dot = svg("circle", { cx, cy, r, class: cls, tabindex: 0, role: "img", "aria-label": `${m.label}: ${spSec(m.whole.mid)} an answer, ${m.goodShare === null ? "not graded" : pctText(m.goodShare) + " good"}` });
+      const show = () => {
+        tip.replaceChildren(h("div", { class: "when", text: m.label }),
+          h("div", { text: `${spSec(m.whole.mid)} an answer${m.first ? `, first word ${spSec(m.first.mid)}` : ""}` }),
+          h("div", { text: m.goodShare === null ? "not graded yet" : `${pctText(m.goodShare)} good of ${num(m.graded)} graded` }),
+          h("div", { text: `${num(m.calls)} calls${m.failed ? `, ${num(m.failed)} failed: ${spFails(m)}` : ", none failed"}` }));
+        tip.hidden = false;
+        tip.style.left = `${Math.min(W - 190, Math.max(0, cx + r + 6))}px`;
+        tip.style.top = `${Math.max(0, cy - 30)}px`;
+      };
+      dot.addEventListener("mouseenter", show); dot.addEventListener("focus", show);
+      dot.addEventListener("touchstart", show, { passive: true });
+      dot.addEventListener("mouseleave", () => { tip.hidden = true; }); dot.addEventListener("blur", () => { tip.hidden = true; });
+      kids.push(dot);
+    }
+    for (const m of order) {
+      const cx = x(m.whole.mid), cy = y(m.goodShare ?? yLo), r = 5 + 6 * Math.sqrt(m.calls / maxCalls);
+      const text = m.goodShare === null ? `${m.label}, not graded yet` : m.label, w = text.length * 6.4 + 4;
+      const right = cx + r + 4 + w <= L + pw;
+      const tries = [{ x: right ? cx + r + 4 : cx - r - 4 - w, y: cy - 7 }, { x: cx - w / 2, y: cy - r - 16 }, { x: cx - w / 2, y: cy + r + 2 }];
+      const b = tries.map((t) => ({ ...t, w, h: 14 })).find((t) => t.x >= 0 && t.x + w <= W && t.y >= 0 && t.y + 14 <= T + ph + 2 && free(t));
+      if (!b) continue;
+      placed.push(b);
+      kids.push(svg("text", { x: b.x, y: b.y + 11, class: m.goodShare === null ? "lab none" : "lab" }, text));
+    }
+    const chart = svg("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Each model's time for an answer against how often it was graded good" }, kids);
+    box.replaceChildren(chart, tip);
   }
 
   // What the outside models used for a part, measured: read, thinking (where known) and written.

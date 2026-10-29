@@ -12,6 +12,7 @@ import { VERSION } from "./config";
 import { OFF_TEXT, switchedOn } from "./switch";
 import { call, where } from "./client";
 import { secondsText } from "./util";
+import { FAIL_KINDS, FAIL_WORD } from "./fails";
 import { reportText } from "./trialtext";
 import { APP_MIME, PLAN_APP_HTML, PLAN_APP_URI } from "./planapp";
 import { REPORT_APP_HTML, REPORT_APP_URI } from "./reportapp";
@@ -240,6 +241,15 @@ export function usedText(u: any): string | null {
   return u.thought === null ? `${tokShort(u.read)} read, ${tokShort(u.wrote)} written (thinking not split)`
     : `${tokShort(u.read)} read, ${tokShort(u.thought)} thinking${u.estimated ? " (partly from its text)" : ""}, ${tokShort(u.wrote)} written`;
 }
+// Speed and failures of the models used most in the span: the middle answer's time, and what failed.
+const sec = (v: number) => (v < 10 ? `${v} s` : `${Math.round(v)} s`);
+export function speedLine(rows: any[] | undefined): string {
+  if (!rows?.length) return "";
+  return `Speed by model: ${rows.slice(0, 5).map((m: any) => {
+    const failed = m.failed ? `${m.failed} of ${m.calls} calls failed (${FAIL_KINDS.filter((k) => m.fails?.[k]).map((k) => `${m.fails[k]} ${FAIL_WORD[k]}`).join(", ")})` : `${m.calls} call${m.calls === 1 ? "" : "s"}, none failed`;
+    return `${m.label} ${m.whole ? `${sec(m.whole.mid)} an answer${m.first ? ` (first word ${sec(m.first.mid)})` : ""}` : "no answer yet"}, ${failed}`;
+  }).join("; ")}.`;
+}
 export function reportLines(r: any, range: string): string {
   const t = r.tiles;
   if (!r.prompts.length) return `Leanfare's report, ${SPAN[range] ?? range}: nothing handed to Leanfare yet in this span.`;
@@ -250,6 +260,7 @@ export function reportLines(r: any, range: string): string {
     `Cost of the hand offs: ${usd(t.cost.usd)}; ${pctOf(t.cost.freeShare)} of parts free or on this computer; ${t.cost.parts} parts in ${t.cost.prompts} prompts.`,
     t.outside?.measured ? `What the outside models used (measured): ${usedText(t.outside)}, in ${t.outside.calls} call${t.outside.calls === 1 ? "" : "s"}${t.outside.failed ? ` (${t.outside.failed} failed)` : ""}${t.outside.notMeasured ? `; ${t.outside.notMeasured} older part${t.outside.notMeasured === 1 ? "" : "s"} not measured` : ""}.` : "",
     `Quality: ${t.quality.graded ? `${pctOf(t.quality.goodShare)} good (${t.quality.partly} partly, ${t.quality.wrong} wrong; ${t.quality.blind} judged blind)` : "not graded yet"}.`,
+    speedLine(r.speed),
     r.byModel.length ? `Work by model: ${r.byModel.slice(0, 6).map((m: any) => `${m.label} ${tokShort(m.read)} tokens, ${m.parts} part${m.parts === 1 ? "" : "s"}${m.goodShare !== null ? `, ${pctOf(m.goodShare)} good` : ""}`).join("; ")}.` : "",
     `Last prompts:\n${r.prompts.slice(0, 6).map((p: any) => `- ${p.id ? `${p.id}, ` : ""}${new Date(p.ts).toISOString().slice(0, 16).replace("T", " ")} UTC, ${p.app}${p.model ? ` (${p.model.label}${p.plan ? `, ${planShort(p.plan)}` : ""})` : ""}: ${p.parts.length ? `${[...new Set(p.parts.map((x: any) => x.label))].join(", ")}, ${tokShort(p.kept)} kept out${p.saved !== null ? `, ${pctOf(p.saved)} saved` : ""}` : "nothing handed off"}${p.grade ? `, ${p.grade}` : ""}`).join("\n")}`,
     `The full report: Leanfare, Savings (${where().base}/#report).`,
@@ -274,6 +285,7 @@ function compactReport(r: any, range: string, app: string | null = null) {
     range, app, from: r.from, to: r.to, step: r.step, tiles: r.tiles, series: r.series,
     byModel: r.byModel.slice(0, 6).map((m: any) => ({ label: m.label, where: m.where, read: m.read, parts: m.parts, cost: m.cost, goodShare: m.goodShare })),
     byKind: r.byKind,
+    speed: (r.speed ?? []).slice(0, 6).map((m: any) => ({ label: m.label, where: m.where, calls: m.calls, failed: m.failed, fails: m.fails, first: m.first, whole: m.whole, goodShare: m.goodShare })),
     prompts: r.prompts.slice(0, 6).map((p: any) => ({ id: p.id, ts: p.ts, app: p.app, model: p.model?.label ?? null, plan: planShort(p.plan), parts: [...new Set(p.parts.map((x: any) => x.label))], kept: p.kept, saved: p.saved, grade: p.grade, used: p.used ? { read: p.used.read, thought: p.used.thought, wrote: p.used.wrote } : null })),
     open_url: `${where().base}/#report`,
   };
