@@ -4,7 +4,8 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-export function fakeClaude(folder: string, opts: { slowMs?: number } = {}): string {
+// gate: claude mcp add waits until that file exists (it writes <gate>.started first), so a test can act while it runs.
+export function fakeClaude(folder: string, opts: { slowMs?: number; gate?: string } = {}): string {
   const f = join(folder, "bin", "claude");
   mkdirSync(dirname(f), { recursive: true });
   writeFileSync(f, `#!${process.execPath}
@@ -16,6 +17,7 @@ const file = path.join(root, ".claude.json");
 const j = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
 const a = process.argv.slice(2);
 ${opts.slowMs ? `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${opts.slowMs}); // a slow claude` : ""}
+${opts.gate ? `if (a[0] === "mcp" && a[1] === "add") { const g = ${JSON.stringify(opts.gate)}; fs.writeFileSync(g + ".started", ""); for (let i = 0; i < 600 && !fs.existsSync(g); i++) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50); }` : ""}
 j.mcpServers ??= {};
 if (a[0] === "mcp" && a[1] === "add") { const i = a.indexOf("--"); j.mcpServers[a[4]] = { type: "stdio", command: a[i + 1], args: a.slice(i + 2), env: {} }; console.log("Added stdio MCP server " + a[4]); }
 else if (a[0] === "mcp" && a[1] === "remove") { if (!j.mcpServers[a[4]]) { console.error("No MCP server found"); process.exit(1); } delete j.mcpServers[a[4]]; }
