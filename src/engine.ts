@@ -14,6 +14,7 @@ import { successor } from "./retire";
 import { addSpent, budgetState, release, tryReserve, wouldFit } from "./budget";
 import { failOfStatus, failOfText, type FailKind } from "./fails";
 import { noteFailure, restOf, restText } from "./rest";
+import { fitsFree, onFreePlan } from "./freeplans";
 import { AnthropicStreamTranslator, UserError, anthropicDefaultMax, anthropicToOpenAI, effortFor, headersFor, networkError, ollamaChunks, ollamaPlain, ollamaToOpenAI, openaiBody, plainError, thinkRoom, toAnthropic, toOllama } from "./upstream";
 import { SSEParser, dollars, localDay, localMonth, median, now, providerMessage, randomId, redact, usd8 } from "./util";
 import { takesImages, takesPdfs } from "./files";
@@ -70,7 +71,7 @@ export function usualModel(): Model | null {
 export function chargeOf(m: Model, listCost: number | null): { cost: number | null; status: string } {
   if (m.local) return { cost: 0, status: "local" };
   if (m.free) return { cost: 0, status: "free" };
-  if (m.provider === "google" && settings().providers.google?.free) return { cost: 0, status: "free plan" };
+  if (onFreePlan(m.provider)) return { cost: 0, status: "free plan" }; // a free key, as you said in Settings (freeplans.ts)
   if (listCost === null) return { cost: null, status: "unknown" };
   return { cost: listCost, status: "listed" };
 }
@@ -268,7 +269,7 @@ export async function plan(input: PlanInput): Promise<Plan> {
   const inChars = input.tokens !== undefined ? input.tokens * 4 : promptChars(input.messages as any, input.system);
   const need = localNeed(inChars, input.maxOut);
   const plainAsk = input.plain !== false && !input.hasTools;
-  const roomy = (m: Model) => m.provider !== "ollama" || (plainAsk && (m.context === null || m.context >= need));
+  const roomy = (m: Model) => (m.provider !== "ollama" || (plainAsk && (m.context === null || m.context >= need))) && fitsFree(m, inChars, input.maxOut ?? 1000); // a free plan's tokens a minute
   const base = (m: Model) => (!byAddress || byAddress(m)) && (!(media.images || media.pdfs) || takes(m));
   const extra = input.only;
   const only = (m: Model) => base(m) && roomy(m) && (!extra || extra(m));
