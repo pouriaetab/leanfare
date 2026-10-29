@@ -2472,10 +2472,10 @@
     if (!list.length) return null;
     return h("div", { class: "side-results" }, h("h4", { text: "Side by side with the top model" }),
       h("p", { class: "note", text: "Judged blind by a model of a third company: it was not told which model wrote which answer." }),
-      h("div", { class: "lmodels" }, ...list.map((x) => h("div", { class: "lrow", title: x.text },
+      h("div", { class: "lmodels" }, ...list.map((x) => h("div", { class: "lrow side", title: x.text },
         h("span", { class: "nm", title: x.model, text: `${x.label} · ${GRADE_KIND[x.kind] ?? x.kind}` }),
-        h("span", { class: "facts" }, h("span", { text: `as good in ${x.same + x.better} of ${x.n}${x.better ? `, better in ${x.better}` : ""}` }),
-          h("span", { class: "note", text: `against ${x.tops.join(", ")}` }))))));
+        h("span", { class: "facts" }, h("span", { text: `as good in ${x.same + x.better} of ${x.n}${x.better ? `, better in ${x.better}` : ""}` })),
+        h("span", { class: "vs", text: `against ${x.tops.join(", ")} · judged by ${x.judges.join(", ")}` })))));
   }
 
   // A test (mcp.ts: markedBy): answers handed back to your apps mark which model wrote each paragraph.
@@ -2493,8 +2493,8 @@
       ...[[0, "Off"], [20, "1 in 20 hand offs"], [10, "1 in 10 hand offs"], [5, "1 in 5 hand offs"]].map(([v, t]) => h("option", { value: String(v), text: t, selected: (s.sideBySide ?? 10) === v })));
     const m = S.sideMonth;
     return h("div", { class: "setting", id: "sideCard" }, h("h3", { text: "Side by side" }),
-      h("div", { class: "row" }, often, h("span", { text: "at most" }), box,
-        h("button", { class: "btn", type: "button", text: "Save", onclick: () => patchSettings({ sideBySideCap: box.querySelector("input").value || 0 }, "Saved.") }), h("span", { text: "a month" })),
+      h("div", { class: "row" }, often, h("span", { text: "at most" }), box, h("span", { text: "a month" }),
+        h("button", { class: "btn", type: "button", text: "Save", onclick: () => patchSettings({ sideBySideCap: box.querySelector("input").value || 0 }, "Saved.") })),
       h("p", { text: "Now and then the best rated model you ticked answers a hand off too, after its answer went back to your app, and a model of a third company compares the two answers without knowing which model wrote which (in a random order, with what each says of its own model hidden). So you see how close each model's work is to the top model's, for each kind of work. Never for a private task, never past this limit or your budget. Leanfare keeps only the verdicts and costs." }),
       m && m.compared ? h("p", { class: "note", text: `This month: ${num(m.compared)} compared, as good as the top model in ${num(m.asGood)}; ${money(m.cost)} of your ${money(s.sideBySideCap ?? 1)}.` }) : null);
   }
