@@ -104,6 +104,8 @@ The tools (an MCP server, `leanfare mcp`, which starts Leanfare when it is not r
 - **plan** splits a task into parts, each with where it runs and its model, as a table (see [Plan a task](#plan-a-task)); with private, the whole plan stays on this computer.
 - **plan_run**, **plan_status** and **plan_stop** run Leanfare's parts of a plan in the background, give their answers, and stop them.
 - **grade** says how good the answer of a plan's part or of `delegate` was: good, partly or wrong (see [Grades](#grades)).
+
+`plan` and `delegate` take `your_model`, the model the app runs on (claude-opus-5-5, say). A plan then names it, and your plan from Settings, for the parts that stay with you ("you (Claude, on your Claude Max plan)", Claude Opus 5.5); Claude Code, which can run a part on another of its models in a subagent, still gets the one to use. Each hand off keeps the app it came from and that model, numbers and names only.
 - **local_model** says where your models are, suggests one for each kind of work, tests a model you have (action test), has Ollama download one after the user's yes, and says how a test or a download goes.
 
 To add it by hand, the command is the `leanfare` program with the argument `mcp`, for example in Claude Desktop's settings file (Settings, Developer, Edit Config):

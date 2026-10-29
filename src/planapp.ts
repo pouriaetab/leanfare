@@ -75,14 +75,16 @@ export const PLAN_APP_HTML = `<!doctype html>
   function draw() {
     const app = $("#app");
     if (!plan) return;
+    // Who a part that stays with you runs on: the app's own plan, when Settings names it.
+    const youText = (pl) => (pl.you && pl.you.plan ? "you (on your " + pl.you.plan.replace(/ plan$/i, "") + " plan)" : RUNS.you || "you");
     const st = (n) => (run ? run.parts.find((p) => p.n === n) : null);
     const byN = (n) => plan.parts.find((q) => q.n === n) || {};
     const laterOf = (p, seen = 0) => seen < 50 && p.needs.some((n) => byN(n).runs_on === "you" || (byN(n).needs && laterOf(byN(n), seen + 1))); // it waits for one of yours, through its needs
     const rows = plan.parts.map((p) => el("tr", { class: p.runs_on === "you" ? "you" : "" },
       el("td", { class: "n", text: p.n }),
       el("td", {}, el("b", { text: p.title }), el("div", { class: "why", text: p.kind + ", " + p.effort + (p.needs.length ? " · after " + p.needs.join(", ") : "") })),
-      el("td", { "data-l": "Runs on", text: (RUNS[p.runs_on] || p.runs_on) + (p.risk ? " (" + p.risk + ")" : "") }),
-      el("td", { "data-l": "Model", text: p.model_label || (p.runs_on === "you" ? (p.your_model && p.your_model.label) || "your model" : p.model || "") }),
+      el("td", { "data-l": "Runs on", text: (p.runs_on === "you" ? youText(plan) : RUNS[p.runs_on] || p.runs_on) + (p.risk ? " (" + p.risk + ")" : "") }),
+      el("td", { "data-l": "Model", text: p.model_label || (p.runs_on === "you" ? (plan.you && plan.you.label) || (p.your_model && p.your_model.label) || "your model" : p.model || "") }),
       el("td", { class: "t", "data-l": "Time", text: secs(p.seconds) }),
       el("td", { "data-l": "Tokens", text: "~" + tok(p.tokens) + (p.runs_on === "you" ? " of your plan" : " kept") }),
       el("td", { class: "c", "data-l": "Cost", text: p.runs_on === "you" ? "in your plan" : p.runs_on === "codex" ? "in your ChatGPT plan" : usd(p.cost_usd) }),

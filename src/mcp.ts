@@ -38,6 +38,7 @@ const TOOLS = [
         folder: { type: "string", description: "The folder relative paths start from. By default, the folder the MCP client started Leanfare in (in Claude Code, the project)." },
         split: { type: "string", enum: ["auto", "rules"], description: "auto (the default): a model the user ticked splits it. rules: Leanfare splits it by rules, with no model call." },
         private: { type: "boolean", description: "true keeps the whole plan on the user's computer: the split and every Leanfare part go only to models there (Ollama), and a part none of them can take stays with you. Use it for anything sensitive or personal, or when the user asks." },
+        your_model: { type: "string", description: "The model you run on, as your own instructions name it (for example claude-opus-5-5). Leanfare names it for the work that stays with you, and the report shows it as the prompt's main model." },
       },
       required: ["task"],
       additionalProperties: false,
@@ -137,6 +138,7 @@ const TOOLS = [
         speed: { type: "string", description: "At the same quality: \"cheapest\" (however long it takes), \"fastest\" (whatever it costs), or a number of seconds to answer within, like \"30\". Default: the user's choice in Leanfare." },
         private: { type: "boolean", description: "true keeps this task on the user's computer: only models there (Ollama) take it, and its check too. Use it for anything sensitive or personal, or when the user asks." },
         max_tokens: { type: "integer", minimum: 1, maximum: 64000, description: "The longest answer to allow, in tokens (default 8,192)." },
+        your_model: { type: "string", description: "The model you run on, as your own instructions name it (for example claude-opus-5-5). Leanfare names it for the work that stays with you, and the report shows it as the prompt's main model." },
       },
       additionalProperties: false,
     },
@@ -431,7 +433,7 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
     if (typeof args?.task !== "string" || !args.task.trim()) return failure("plan needs a task.");
     const files = sizesForPlan(args.files, args.folder);
     if (typeof files === "string") return failure(files);
-    const { j } = await call("/api/plan", { method: "POST", json: { task: args.task, files, manager: client, split: args.split === "rules" ? "rules" : "auto", ...(args.private === true ? { private: true } : {}) } }, signal);
+    const { j } = await call("/api/plan", { method: "POST", json: { task: args.task, files, manager: client, split: args.split === "rules" ? "rules" : "auto", ...(args.private === true ? { private: true } : {}), ...(typeof args.your_model === "string" ? { your_model: args.your_model } : {}) } }, signal);
     const note = j.split?.note ? `\n\n(${j.split.note})` : j.split?.model ? `\n\n(Split by ${j.split.model.label}${typeof j.split.cost === "number" ? `, ${usd(j.split.cost)}` : ""}.)` : "";
     const folder = sharedFolder(args.folder);
     const saved = folder ? writeShared(folder, j.id, { "plan.md": `# Plan ${j.id}\n\n${args.task.trim()}\n\n${j.table}\n\n${j.next}\n` }) : null;
@@ -442,7 +444,7 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
         your_model: p.use ?? null, // a part that stays with you: the model to pick for it in your app (alias: Claude Code's name for it)
         seconds: p.seconds, tokens: p.tokens, cost_usd: p.cost,
         files: p.files.slice(0, 50), more_files: Math.max(0, p.files.length - 50), task: p.task })),
-      totals: j.totals, split: j.split, limits: j.limits, local: j.local ?? null,
+      totals: j.totals, split: j.split, limits: j.limits, local: j.local ?? null, you: j.you ?? null,
     });
   }
   if (name === "ask") {
@@ -469,7 +471,8 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
       if (typeof args?.task !== "string" || !args.task.trim()) return failure("delegate needs a task, or the id of one still working.");
       const files = readForDelegate(args.files, args.folder);
       if (typeof files === "string") return failure(files);
-      const body = { task: args.task, files, kind: args.kind ?? null, effort: args.effort ?? "medium", check: args.check ?? "auto", wait, ...(args.max_tokens !== undefined ? { max_tokens: args.max_tokens } : {}), ...(args.speed !== undefined ? { speed: args.speed } : {}), ...(args.private === true ? { private: true } : {}) };
+      const body = { task: args.task, files, kind: args.kind ?? null, effort: args.effort ?? "medium", check: args.check ?? "auto", wait, ...(args.max_tokens !== undefined ? { max_tokens: args.max_tokens } : {}), ...(args.speed !== undefined ? { speed: args.speed } : {}), ...(args.private === true ? { private: true } : {}),
+        ...(client ? { app: client } : {}), ...(typeof args.your_model === "string" ? { your_model: args.your_model } : {}) };
       ({ j } = await call("/api/delegate", { method: "POST", json: body }, signal));
     }
     if (j.running) return text(`Still working in Leanfare (${j.seconds} seconds so far). Call delegate again with id "${j.id}" and nothing else to get the answer.`, { running: true, id: j.id, seconds: j.seconds });

@@ -464,6 +464,12 @@
   const PLAN_APPS = [["Claude Code", "Claude Code"], ["Claude", "Claude Desktop or Cowork"], ["Codex", "Codex"], ["Gemini CLI", "Gemini CLI"], ["Cursor", "Cursor"], ["you", "No app (just you)"]];
   let planTimer = null;
   const RUNS_ON = { you: "you", local: "Leanfare, on this computer", free: "Leanfare, free model", paid: "Leanfare, pay per use", codex: "Leanfare, through Codex" };
+  // Who a part that stays with you runs on: "you (Claude, on your Claude Max plan)" (planner.ts: youText).
+  const youText = (P) => {
+    const plan = P.you && P.you.plan ? `on your ${P.you.plan.replace(/ plan$/i, "")} plan` : null;
+    const app = P.manager === "you" ? null : P.manager;
+    return app || plan ? `you (${[app, plan].filter(Boolean).join(", ")})` : "you";
+  };
   const STATUS = { waiting: "waiting", running: "running…", done: "done", failed: "failed", stopped: "stopped", yours: "yours to do", after_yours: "after yours", blocked: "waits for a part that is not done", asks: "paid: waits for a yes" };
   function renderPlan() {
     const el = $("#tab-plan");
@@ -519,8 +525,8 @@
         td("#", { text: String(p.n) }),
         h("td", { "data-label": "Part", class: "part" }, h("b", { text: p.title }), h("div", { class: "fine", text: p.why })),
         td("Kind", { text: `${p.kind}, ${p.effort}` }),
-        td("Runs on", {}, p.where === "you" ? (P.manager === "you" ? "you" : `you (${P.manager})`) : RUNS_ON[p.where], p.risk ? h("span", { class: "chip warn", title: "A free tier: what is sent there may be read or kept by its company. Make the plan private to keep it on this computer.", text: p.risk }) : null),
-        td("Model", { text: p.model?.label ?? p.use?.label ?? "your model" }),
+        td("Runs on", {}, p.where === "you" ? youText(P) : RUNS_ON[p.where], p.risk ? h("span", { class: "chip warn", title: "A free tier: what is sent there may be read or kept by its company. Make the plan private to keep it on this computer.", text: p.risk }) : null),
+        td("Model", { text: p.model?.label ?? ((/claude code/i.test(P.manager) ? p.use?.label : null) ?? P.you?.label ?? p.use?.label ?? "your model") }),
         td("Time", { text: p.seconds === null ? "—" : secsShort(p.seconds) }),
         td("Tokens", { text: p.where === "you" ? `~${tokShort(p.tokens)} of your plan` : `~${tokShort(p.tokens)} kept` }),
         td("Cost", { text: p.where === "you" ? "in your plan" : p.where === "codex" ? "in your ChatGPT plan" : p.cost === null ? "not known" : money(p.cost) }),
