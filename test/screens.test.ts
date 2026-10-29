@@ -247,6 +247,9 @@ describe("Connect OpenRouter", () => {
     win.open = (u: string) => { opened.push(u); return null; };
     return { doc, opened };
   }
+  // The page opens OpenRouter's link once Leanfare has answered: wait for it, as long as a busy computer needs
+  // (29 Oct: on his Mac, a fixed 0.4 s was not enough).
+  async function opening(opened: string[], n = 1) { for (let i = 0; i < 200 && opened.length < n; i++) await Bun.sleep(50); }
   // The browser's side: open OpenRouter's link, press Authorize, land on Leanfare's callback page.
   async function authorizeInBrowser(link: string) {
     const r = await fetch(link, { redirect: "manual" });
@@ -259,7 +262,7 @@ describe("Connect OpenRouter", () => {
     expect(welcomeCard(doc).textContent).toContain("no key to copy");
     expect(welcomeCard(doc).textContent).toContain("or paste a key");
     connectBtn(doc).click();
-    await Bun.sleep(400);
+    await opening(opened);
     expect(opened).toHaveLength(1);
     expect(new URL(opened[0]).searchParams.get("code_challenge_method")).toBe("S256");
     expect(connectBtn(doc).textContent).toBe("Stop"); // the start button is its Stop
@@ -275,9 +278,10 @@ describe("Connect OpenRouter", () => {
     await reset();
     const { doc, opened } = await openWithOpener();
     connectBtn(doc).click();
+    await opening(opened);
     await Bun.sleep(700); // past the half second a double click is ignored
     connectBtn(doc).click(); // Stop
-    await Bun.sleep(400);
+    for (let i = 0; i < 100 && connectBtn(doc)?.textContent !== "Connect OpenRouter"; i++) await Bun.sleep(50);
     expect(doc.querySelector(".start button.primary")).toBeTruthy();
     expect(connectBtn(doc).textContent).toBe("Connect OpenRouter");
     const res = await authorizeInBrowser(opened[0]);
@@ -297,6 +301,8 @@ describe("Connect OpenRouter", () => {
     b.click(); // a second click inside the first half second is ignored too
     await Bun.sleep(300);
     expect(connectBtn(doc).textContent).toBe("Stop");
+    await opening(opened);
+    await Bun.sleep(300); // time for a second one, if it were wrongly opened
     expect(opened).toHaveLength(1);
     connectBtn(doc).click(); await Bun.sleep(700); connectBtn(doc).click(); await Bun.sleep(300); // clean up: Stop
   }, 20000);
@@ -306,7 +312,7 @@ describe("Connect OpenRouter", () => {
     fakeOr.oauth.failExchange = 403;
     const { doc, opened } = await openWithOpener();
     connectBtn(doc).click();
-    await Bun.sleep(400);
+    await opening(opened);
     expect((await authorizeInBrowser(opened[0])).status).toBe(400);
     for (let i = 0; i < 40 && !toasts(doc).includes("did not accept the code"); i++) await Bun.sleep(200);
     expect(toasts(doc)).toContain("did not accept the code");
@@ -325,7 +331,7 @@ describe("Connect OpenRouter", () => {
     expect([...body().querySelectorAll("button")].map((b: any) => b.textContent)).toContain("Connect OpenRouter");
     expect(body().textContent).not.toContain("expire unused credits"); // no key yet
     [...body().querySelectorAll("button")].find((b: any) => b.textContent === "Connect OpenRouter").click();
-    await Bun.sleep(400);
+    await opening(opened);
     await authorizeInBrowser(opened[0]);
     for (let i = 0; i < 40 && ![...doc.querySelectorAll(".prov.open button")].some((b: any) => b.textContent === "Connect again"); i++) await Bun.sleep(200);
     expect([...body().querySelectorAll("button")].map((b: any) => b.textContent)).toContain("Connect again");
