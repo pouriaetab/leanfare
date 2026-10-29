@@ -1,4 +1,4 @@
 [test]
 preload = ["./test/setup.ts"]
-timeout = 20000
+# the time each test may take is set in test/setup.ts: Bun ignores a timeout here
 root = "./test"

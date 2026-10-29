@@ -1,10 +1,14 @@
 // Runs before every test file (bunfig.toml). Tests never touch your real
 // ~/.leanfare, your keychain, your keys or the internet.
+import { setDefaultTimeout } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startFake } from "./fake";
 
+// Each test may take 20 seconds: a busy computer is slower than a quiet one. Bun 1.4 ignores bunfig.toml's
+// [test] timeout, so the limit is set here (29 Oct: on his Mac, two tests failed at Bun's own 5 seconds).
+setDefaultTimeout(20_000);
 process.env.TZ = "UTC";
 process.env.LEANFARE_DATA_DIR = mkdtempSync(join(tmpdir(), "leanfare-test-"));
 // Your plans reads Claude Code's and Codex's log files: tests look only in their own folders, never your real ones.
