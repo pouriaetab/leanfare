@@ -58,7 +58,7 @@ describe("the protocol", () => {
     const unknown = await rpc("initialize", { protocolVersion: "2019-01-01", capabilities: {} });
     expect(unknown.result.protocolVersion).toBe("2025-11-25");
     const list = await rpc("tools/list", {});
-    expect(list.result.tools.map((t: any) => t.name)).toEqual(["plan", "plan_run", "plan_stop", "plan_status", "grade", "ask", "delegate", "spend", "models", "estimate", "trial", "local_model"]);
+    expect(list.result.tools.map((t: any) => t.name)).toEqual(["plan", "plan_run", "plan_stop", "plan_status", "grade", "ask", "delegate", "spend", "report", "models", "estimate", "trial", "local_model"]);
     expect(list.result.resultType).toBeUndefined();
   });
 
@@ -68,7 +68,7 @@ describe("the protocol", () => {
     expect(d.result._meta["io.modelcontextprotocol/serverInfo"].name).toBe("leanfare");
     const list = await rpc("tools/list", modern());
     expect(list.result.resultType).toBe("complete");
-    expect(list.result.tools).toHaveLength(12);
+    expect(list.result.tools).toHaveLength(13);
     for (const t of list.result.tools) expect(t.inputSchema.type).toBe("object");
   });
 
@@ -92,7 +92,8 @@ describe("the plan's page (an MCP App)", () => {
     const tools = (await rpc("tools/list", {})).result.tools;
     expect(tools.find((t: any) => t.name === "plan")._meta).toEqual({ ui: { resourceUri: "ui://leanfare/plan" }, "ui/resourceUri": "ui://leanfare/plan" });
     const list = await rpc("resources/list", {});
-    expect(list.result.resources).toEqual([expect.objectContaining({ uri: "ui://leanfare/plan", mimeType: "text/html;profile=mcp-app" })]);
+    expect(list.result.resources).toEqual([expect.objectContaining({ uri: "ui://leanfare/plan", mimeType: "text/html;profile=mcp-app" }), expect.objectContaining({ uri: "ui://leanfare/report", mimeType: "text/html;profile=mcp-app" })]);
+    expect(tools.find((t: any) => t.name === "report")._meta).toEqual({ ui: { resourceUri: "ui://leanfare/report" }, "ui/resourceUri": "ui://leanfare/report" });
     const read = await rpc("resources/read", { uri: "ui://leanfare/plan" });
     const c = read.result.contents[0];
     expect(c.mimeType).toBe("text/html;profile=mcp-app");
@@ -305,6 +306,27 @@ describe("the tools", () => {
     expect(off.result.content[0].text).not.toContain("Show who wrote what");
   });
 
+  test("report: the text for apps without pages, the card's data, and the card itself", async () => {
+    db.query("INSERT INTO delegations(ts, month, day, task, kind, effort, model, cost, files, file_tokens, answer_tokens, status, chance, app, app_model, grade) VALUES ('2026-10-21T11:00:00Z', '2026-10', '2026-10-21', 'longer_query', 'read', 'low', 'google/gemini-3.8-flash', 0, 1, 20000, 300, 'ok', 0, 'Claude', 'claude-opus-5-5', 'good')").run();
+    const r = await rpc("tools/call", modern({ name: "report", arguments: { range: "today" } }));
+    const t = r.result.content[0].text;
+    expect(t).toStartWith("Leanfare's report, today: 20k tokens kept out of your plans.");
+    expect(t).toContain("Your apps' own use: Claude: not known.");
+    expect(t).toContain("Quality: 100% good (0 partly, 0 wrong; 0 judged blind).");
+    expect(t).toContain("Last prompts:\n- 2026-10-21 11:00 UTC, Claude (Claude Opus 5.5): Gemini 3.8 Flash, 20k kept out, good");
+    expect(t).toMatch(/The full report: Leanfare, Savings \(http:\/\/127\.0\.0\.1:\d+\/#report\)\.$/);
+    expect(r.result.structuredContent).toMatchObject({ range: "today", prompts: [{ app: "Claude", model: "Claude Opus 5.5", parts: ["Gemini 3.8 Flash"], kept: 20000, grade: "good" }] });
+    expect(r.result.structuredContent.open_url).toMatch(/\/#report$/);
+    const list = await rpc("resources/list", {});
+    expect(list.result.resources.map((x: any) => x.uri)).toEqual(["ui://leanfare/plan", "ui://leanfare/report"]);
+    const page = await rpc("resources/read", { uri: "ui://leanfare/report" });
+    expect(page.result.contents[0]).toMatchObject({ uri: "ui://leanfare/report", mimeType: "text/html;profile=mcp-app" });
+    expect(page.result.contents[0].text).toContain("<title>Leanfare report</title>");
+    const none = await rpc("tools/call", { name: "report", arguments: { range: "1h", app: "Codex" } });
+    expect(none.result.content[0].text).toBe("Leanfare's report, the last hour: nothing handed to Leanfare yet in this span.");
+    expect(none.result.structuredContent).toMatchObject({ range: "1h", app: "Codex", prompts: [] }); // the card asks again for the same app
+  });
+
   test("works while Leanfare is locked (the door uses the control token)", async () => {
     await keys("openai");
     await fetch(`${url}/api/lock`, { method: "POST", headers: { "x-leanfare": "1", "content-type": "application/json" }, body: JSON.stringify({ on: true }) });
@@ -328,6 +350,6 @@ describe("the end of the input", () => {
     expect((await run('{"jsonrpc":"2.0","id":1,"method":"ping"}')).map((m) => m.id)).toEqual([1]);
     const two = await run('{"jsonrpc":"2.0","id":1,"method":"ping"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}');
     expect(two.map((m) => m.id)).toEqual([1, 2]);
-    expect(two[1].result.tools).toHaveLength(12);
+    expect(two[1].result.tools).toHaveLength(13);
   }, 20000);
 });

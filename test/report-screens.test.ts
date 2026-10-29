@@ -96,6 +96,13 @@ describe("the report", () => {
     expect(lines[2]).toContain("DeepSeek V4 Flash,paid,10000,900");
   });
 
+  test("the report tool's link (#report) opens Savings at the report, whatever screen was open last", async () => {
+    const doc = await open(url, { screen: "plan", hash: "#report" });
+    await waitFor(() => !!doc.querySelector("#reportCard .rp-tiles"));
+    expect(doc.querySelector('.tabs button[data-tab="savings"]').getAttribute("aria-selected")).toBe("true");
+    expect(doc.querySelector("#reportCard .rp-tile").textContent).toContain("Kept out of your plans");
+  });
+
   test("a project's name that starts like a formula stays text in the CSV", async () => {
     const path = join(process.env.CLAUDE_CONFIG_DIR!, "projects", "-Users-you-x", "s-csv.jsonl");
     mkdirSync(dirname(path), { recursive: true });
