@@ -2,6 +2,7 @@
 // graded it; Settings lists how the models did for you and gives a moved down model another chance.
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { addGrade, movedDown, standings } from "../src/grades";
+import { db } from "../src/db";
 import { forgetPlans, gradePart } from "../src/planner";
 import { ALL_TICKED, boot, fake, keys, outgoing, reset } from "./app";
 import { closeApp, openApp as open } from "./dom";
@@ -79,5 +80,19 @@ describe("Settings: how the models did for you", () => {
     expect(card(doc).textContent).not.toContain("GPT-5 mini");
     expect(movedDown("openai/gpt-5-mini", "write")).toBe(false);
     expect(toasts(doc)).toContain("GPT-5 mini is picked again for drafting.");
+  }, 20000);
+  test("side by side's results: as good as the top model in how many, against which, judged by which, on a line of their own", async () => {
+    const add = db.query("INSERT INTO comparisons(ts, month, day, kind, effort, model, top_model, judge, shown_first, verdict, top_cost, judge_cost) VALUES ('2026-10-21T11:00:00Z', '2026-10', '2026-10-21', 'read', 'low', 'deepseek/deepseek-v4-flash', 'google/gemini-3.8-flash', 'xai/grok-4.20-beta', 'model', ?, 0.004, 0.001)");
+    for (const v of ["same", "better", "worse"]) add.run(v);
+    const doc = await open(url);
+    await goSettings(doc, "Side by side with the top model");
+    const row = card(doc).querySelector(".side-results .lrow.side");
+    expect(row.querySelector(".nm").textContent).toBe("DeepSeek V4 Flash · reading");
+    expect(row.querySelector(".facts").textContent).toBe("as good in 2 of 3, better in 1");
+    expect(row.querySelector(".vs").textContent).toBe("against Gemini 3.8 Flash · judged by Grok 4.20 Beta");
+    await waitFor(() => !!doc.querySelector("#sideCard")?.textContent.includes("This month:"));
+    expect(doc.querySelector("#sideCard").textContent).toContain("This month: 3 compared, as good as the top model in 2; $0.015 of your $1.00.");
+    const parts = [...doc.querySelector("#sideCard .row").children].map((e: any) => e.textContent || e.tagName);
+    expect(parts.slice(1)).toEqual(["at most", "$", "a month", "Save"]); // the limit, then Save
   }, 20000);
 });
