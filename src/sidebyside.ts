@@ -10,6 +10,7 @@ import { getModel, isRetired, type Model } from "./data";
 import { db } from "./db";
 import { runChat, usableModels } from "./engine";
 import { companyOf, masked } from "./judge";
+import { resting } from "./rest";
 import { rating, type Guess, type Msg } from "./router";
 import { settings } from "./settings";
 import { localDay, localMonth, now } from "./util";
@@ -63,7 +64,7 @@ export function sideBySidePick(x: SideInput): { top: Model; judge: Model; cost: 
   const task = x.guess.task;
   const r0 = rating(x.doer, task);
   const chars = x.messages.reduce((n, m) => n + String(m.content).length, 0) + x.system.length;
-  const ready = (m: Model) => m.id !== x.doer.id && m.id !== CODEX_ID && !isRetired(m, day) && x.allowed(m);
+  const ready = (m: Model) => m.id !== x.doer.id && m.id !== CODEX_ID && !isRetired(m, day) && x.allowed(m) && !resting(m.id); // not one resting after failing (rest.ts)
   const best = (ms: Model[]) => ms.sort((a, b) => (rating(b, task) ?? 0) - (rating(a, task) ?? 0))[0] ?? null;
   const above = (m: Model) => { const r = rating(m, task); return r !== null && (r0 === null || r > r0); }; // an unrated model (most local ones): any rated one
   const top = best(usableModels((m) => ready(m) && fits(m, chars, x.maxOut) && above(m)));

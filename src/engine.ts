@@ -9,10 +9,11 @@ import { db } from "./db";
 import { getKey } from "./keys";
 import { MODES, saveSettings, settings, type Mode } from "./settings";
 import { estimateFor, expectedOutput, guessTask, ledgerWhy, pickModel, resolveModel, type Candidate, type Guess, type Msg } from "./router";
-import { forgetSpeeds, parseSpeed, secondsFor, type SpeedChoice } from "./speed";
+import { forgetSpeeds, parseSpeed, secondsFor, speedOf, type SpeedChoice } from "./speed";
 import { successor } from "./retire";
 import { addSpent, budgetState, release, tryReserve, wouldFit } from "./budget";
 import { failOfStatus, failOfText, type FailKind } from "./fails";
+import { noteFailure, restOf, restText } from "./rest";
 import { AnthropicStreamTranslator, UserError, anthropicDefaultMax, anthropicToOpenAI, effortFor, headersFor, networkError, ollamaChunks, ollamaPlain, ollamaToOpenAI, openaiBody, plainError, thinkRoom, toAnthropic, toOllama } from "./upstream";
 import { SSEParser, dollars, localDay, localMonth, median, now, providerMessage, randomId, redact, usd8 } from "./util";
 import { takesImages, takesPdfs } from "./files";
@@ -128,6 +129,19 @@ export function stopRunning(id?: string) {
   for (const r of running.values()) if (!id || r.id === id) r.ac.abort();
 }
 export const idle = () => running.size === 0;
+
+// How long a try may take to start answering (its first word, or its thinking), before Leanfare gives up on it and
+// Auto passes the work on: six times its usual wait here, from its own answers, at least 30 seconds and at most 4
+// minutes. A model not timed yet: a minute, or 3 for one that thinks first or runs on this computer (it may load
+// first). Once it has started, it may go quiet for at most 90 seconds between two pieces. (Tests set start, in ms.)
+export const ANSWER_TIME = { start: 0, idle: 90_000 };
+export function startWait(m: Model, effort: string | null): number {
+  if (ANSWER_TIME.start) return ANSWER_TIME.start;
+  const s = speedOf(m, effort);
+  if (s.measured) return Math.round(Math.min(240_000, Math.max(30_000, s.latency * 6000)));
+  return m.local || m.skills.includes("reasoning") ? 180_000 : 60_000;
+}
+const waitWords = (ms: number) => { const n = ms < 1000 ? ms : ms < 90_000 ? Math.round(ms / 1000) : Math.round(ms / 60_000); return `${n} ${ms < 1000 ? "ms" : ms < 90_000 ? `second${n === 1 ? "" : "s"}` : "minutes"}`; };
 
 // One controller per request, aborted by the client going away or by Stop.
 function linked(signal: AbortSignal): AbortController {
@@ -271,7 +285,10 @@ export async function plan(input: PlanInput): Promise<Plan> {
   let choices: Plan["choices"] = null;
   let inMargin: Model[] = []; // Auto: the models at the same quality, cheapest first, for when the pick would pass the budget
   if (amode) {
-    const usable = usableModels(only);
+    const all = usableModels(only);
+    // A model resting after failing too often is left out while another can take it (rest.ts).
+    const awake = all.filter((m) => !restOf(m.id));
+    const usable = awake.length ? awake : all;
     if (!usable.length && extra && usableModels(base).length) throw new UserError(400, input.onlyWhy ?? "None of the models you ticked can take this request.", "no_model_fits");
     if (!usable.length && usableModels(base).length) {
       throw new UserError(400, plainAsk
@@ -289,8 +306,15 @@ export async function plan(input: PlanInput): Promise<Plan> {
           : `No model is ready yet. Open Leanfare at http://127.0.0.1:${runtime.port}, add a key and tick a model, or start Ollama.`, "no_model_ready");
     }
     const effortAsked = input.effort ?? null;
-    const p = pickModel(input.messages, usable, amode, (t, mid) => outputHistory(t, mid, effortAsked && mid ? effortFor(getModel(mid)!, effortAsked) : null, group), input.system, input.guess,
+    const pick = (list: Model[]) => pickModel(input.messages, list, amode, (t, mid) => outputHistory(t, mid, effortAsked && mid ? effortFor(getModel(mid)!, effortAsked) : null, group), input.system, input.guess,
       speed, (m, out) => secondsFor(m, out, effortAsked ? effortFor(m, effortAsked) : null), input.tokens);
+    const p = pick(usable);
+    // Say so when a resting model would have been the pick, or when all of them rest and Auto tries them anyway.
+    if (p && awake.length && awake.length < all.length) {
+      const would = pick(all);
+      const r = would && would.model.id !== p.model.id ? restOf(would.model.id) : null;
+      if (r) notes.push(`${restText(r)}, so Auto picked ${p.model.label}.`);
+    } else if (p && !awake.length) notes.push("Every model you ticked for this is resting after failing too often lately, so Auto tries them anyway.");
     if (p) {
       model = p.model; guess = p.guess; reason = p.reason;
       candidates = p.candidates.map((c) => c.model);
@@ -432,6 +456,7 @@ export function record(p: Plan, m: Model, source: string, usage: Usage | null, o
   ];
   unwritten.push(row);
   if (!retryTimer) writeRows();
+  if (o.status === "error" && !unwritten.length) noteFailure(m.id); // too many failures lately: it rests (rest.ts)
   forgetSpeeds(m.id); // this answer's time counts in the next estimate
   if (unwritten.length && !retryTimer) retryTimer = setTimeout(writeRows, 1000);
   if (unwritten.length === 1 && retryTimer) console.error("leanfare: the database is busy; the cost ledger will be written when it is free.");
@@ -930,13 +955,19 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
   const body = { messages: withSystem(messages, opts.system) };
 
   // One try: send, then read the stream into text and thinking.
-  interface Try { text: string; thinking: string; usage: Usage | null; reported: number | null; firstMs: number | null; failed: string | null; ended: boolean; finish: string | null; model: Model; t0: number; answered: boolean }
+  // timedOut: "start", no first word in time (a failed try of its own: Auto passes it on); "idle", it went quiet part
+  // way (cut off: asked again).
+  interface Try { text: string; thinking: string; usage: Usage | null; reported: number | null; firstMs: number | null; failed: string | null; ended: boolean; finish: string | null; model: Model; t0: number; answered: boolean; timedOut: "start" | "idle" | null }
   const attempt = async (cap: number | null): Promise<Try> => {
-    const t: Try = { text: "", thinking: "", usage: null, reported: null, firstMs: null, failed: null, ended: false, finish: null, model: p.model, t0: performance.now(), answered: false };
+    const t: Try = { text: "", thinking: "", usage: null, reported: null, firstMs: null, failed: null, ended: false, finish: null, model: p.model, t0: performance.now(), answered: false, timedOut: null };
     const notesBefore = p.notes.length;
     p.capOverride = cap;
+    const tc = linked(ac.signal); // this try's own stop: Stop, or its time running out
+    const wait = startWait(p.model, effortFor(p.model, p.effortAsked));
+    let timer = setTimeout(() => { t.timedOut = "start"; tc.abort(); }, wait);
+    const quiet = () => { clearTimeout(timer); timer = setTimeout(() => { t.timedOut = "idle"; tc.abort(); }, ANSWER_TIME.idle); };
     try {
-      const sent = await sendWithFallback(p, source, body, true, ac.signal);
+      const sent = await sendWithFallback(p, source, body, true, tc.signal);
       t.model = sent.model; t.t0 = sent.t0; t.answered = true;
       if (p.notes.length > notesBefore) emit({ type: "meta", plan: planView(p) }); // Auto passed it on: say so
       for await (const { j, data } of openaiChunks(sent.res, t.model, t.model.apiId)) {
@@ -947,13 +978,16 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
         if (c.cost !== null) t.reported = c.cost;
         if (c.error) { t.failed = c.error; break; }
         if ((c.text || c.thinking) && t.firstMs === null) t.firstMs = performance.now() - t.t0;
+        if (t.firstMs !== null) quiet(); // started: from now on, only a long silence ends it
         if (c.thinking) { t.thinking += c.thinking; emit({ type: "thinking", text: c.thinking }); }
         if (c.text) { t.text += c.text; emit({ type: "delta", text: c.text }); }
       }
       if (!t.ended && !t.failed && !ac.signal.aborted) t.failed = incomplete(t.model);
     } catch (e: any) {
       if (!ac.signal.aborted) t.failed = e instanceof UserError ? e.message : String(e?.message ?? e);
-    }
+    } finally { clearTimeout(timer); }
+    if (t.timedOut === "start") { t.model = p.model; t.failed = `${t.model.label} did not start answering within ${waitWords(wait)}.`; }
+    else if (t.timedOut === "idle" && !ac.signal.aborted) t.failed = `${t.model.label} stopped sending for ${waitWords(ANSWER_TIME.idle)}.`;
     return t;
   };
   // The answer limit a try had: Leanfare's own, or the one Claude is always sent.
@@ -975,12 +1009,26 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
   // (29 Oct, Gemini through its OpenAI address). Cut off like that, it is thinking, not an answer: it is asked again
   // with more room, as one that wrote nothing.
   const leaked = (x: Try) => { if (x.finish === "length" && /^\s*thought\s*\n/i.test(x.text)) { x.thinking += x.text; x.text = ""; } return x; };
+  // A try that did not start answering in time failed (timed out): it is kept as such, and Auto passes the work to its
+  // next pick, at most twice; a model you named is not swapped.
+  const recordStart = (x: Try) => record(p, x.model, source, null, { status: "error", error: x.failed ?? "timed out", ms: performance.now() - x.t0, fail: "timeout" });
   let t = leaked(await attempt(opts.maxOut ?? null));
+  const passedOver = new Set<string>();
+  for (let pass = 0; t.timedOut === "start" && p.auto && !ac.signal.aborted && pass < 2; pass++) {
+    passedOver.add(t.model.id);
+    const next = p.candidates.find((m) => !passedOver.has(m.id));
+    if (!next || !reserveAgain(p, next, p.maxOut)) break;
+    recordStart(t);
+    p.notes.push(`${t.failed!.replace(/\.$/, "")}, so Auto passed the request to its next pick.`);
+    p.model = next; p.candidates = p.candidates.filter((m) => !passedOver.has(m.id));
+    emit({ type: "meta", plan: planView(p) });
+    t = leaked(await attempt(opts.maxOut ?? null));
+  }
   let retried = false;
   let written: ReturnType<typeof recordTry> | undefined; // the first try, when it was not asked again (already in the ledger)
   let firstSpent: number | null = 0; // a first try that was asked again: charged in the ledger too
   // An answer that came back empty, or was cut off on the way, is asked once more (noted on the answer).
-  if (t.answered && !ac.signal.aborted) {
+  if (t.answered && !ac.signal.aborted && t.timedOut !== "start") {
     let why: { note: string; ledger: string; cap: number | null } | null = null;
     const name = t.model.label;
     if (t.failed) why = { note: t.text ? `The first answer was cut off after about ${words(t.text).toLocaleString("en-US")} words, so Leanfare asked again.` : `The first try stopped before ${name} answered, so Leanfare asked again.`, ledger: `cut off: ${t.failed}`, cap: null };
@@ -1016,7 +1064,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
   const status: "ok" | "stopped" | "error" = ac.signal.aborted ? "stopped" : failed ? "error" : "ok";
   release(p.reservation);
   running.delete(rid);
-  const r = written !== undefined ? written : recordTry(t, status, failed ?? undefined);
+  const r = written !== undefined ? written : t.timedOut === "start" && !ac.signal.aborted ? recordStart(t) : recordTry(t, status, failed ?? undefined);
   const cat = store.catalog;
   const meta = {
     ...planView(p),
