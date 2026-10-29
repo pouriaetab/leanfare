@@ -53,6 +53,17 @@ describe("token counts in every provider's shape", () => {
   test("thinking tokens left out of completion_tokens but in the total are billed as output", () => {
     expect(fromOpenAIUsage({ prompt_tokens: 100, completion_tokens: 20, total_tokens: 420 })!.output).toBe(320);
   });
+  test("the thinking, where the provider says: reasoning_tokens, or the part of the total that completion_tokens left out", () => {
+    // OpenAI, OpenRouter, xAI, DeepSeek: completion_tokens_details.reasoning_tokens, inside completion_tokens.
+    expect(fromOpenAIUsage({ prompt_tokens: 100, completion_tokens: 500, completion_tokens_details: { reasoning_tokens: 300 } })).toMatchObject({ output: 500, thinking: 300 });
+    expect(fromOpenAIUsage({ input_tokens: 100, output_tokens: 50, output_tokens_details: { reasoning_tokens: 0 } })).toMatchObject({ output: 50, thinking: 0 });
+    // Left out of completion_tokens but in the total: that part is the thinking, said once even when also said as reasoning_tokens.
+    expect(fromOpenAIUsage({ prompt_tokens: 100, completion_tokens: 20, total_tokens: 420 })).toMatchObject({ output: 320, thinking: 300 });
+    expect(fromOpenAIUsage({ prompt_tokens: 100, completion_tokens: 20, total_tokens: 420, completion_tokens_details: { reasoning_tokens: 300 } })).toMatchObject({ output: 320, thinking: 300 });
+    // Not said: not known (no field at all), and never more than the output.
+    expect("thinking" in fromOpenAIUsage({ prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 })!).toBe(false);
+    expect(fromOpenAIUsage({ prompt_tokens: 100, completion_tokens: 20, completion_tokens_details: { reasoning_tokens: 90 } })!.thinking).toBe(20);
+  });
   test("Anthropic: input_tokens excludes cache reads and writes", () => {
     expect(fromAnthropicUsage({ input_tokens: 500, cache_read_input_tokens: 1500, cache_creation_input_tokens: 200, output_tokens: 50 })).toEqual({ uncached: 500, cacheRead: 1500, cacheWrite: 200, cacheWrite1h: 0, output: 50 });
   });

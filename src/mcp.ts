@@ -234,6 +234,12 @@ const SPAN: Record<string, string> = { "1h": "the last hour", "6h": "the last 6 
 const tokShort = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(Math.round(n)));
 const pctOf = (x: number | null | undefined) => (x === null || x === undefined ? "not known" : `${Math.round(x * 100)}%`);
 const planShort = (name: string | null) => (name ? name.replace(/^(Claude|ChatGPT)\s+/i, "") : null);
+// What the outside models used for a part or a prompt, measured: read, thinking (where known) and written.
+export function usedText(u: any): string | null {
+  if (!u) return null;
+  return u.thought === null ? `${tokShort(u.read)} read, ${tokShort(u.wrote)} written (thinking not split)`
+    : `${tokShort(u.read)} read, ${tokShort(u.thought)} thinking${u.estimated ? " (partly from its text)" : ""}, ${tokShort(u.wrote)} written`;
+}
 export function reportLines(r: any, range: string): string {
   const t = r.tiles;
   if (!r.prompts.length) return `Leanfare's report, ${SPAN[range] ?? range}: nothing handed to Leanfare yet in this span.`;
@@ -242,6 +248,7 @@ export function reportLines(r: any, range: string): string {
     `Leanfare's report, ${SPAN[range] ?? range}: ${tokShort(t.kept.tokens)} tokens kept out of your plans${t.kept.share !== null ? ` (${pctOf(t.kept.share)} of ${t.kept.measuredIn ?? "your apps"}'s use${t.kept.share === 0 ? ": nothing handed off there" : ""})` : ""}${t.kept.value !== null ? `; about ${usd(t.kept.value)} at ${t.kept.valueModel}'s prices` : ""}.`,
     `Your apps' own use: ${own}${t.own.cached ? `; ${tokShort(t.own.cached)} more read again from the cache` : ""}.`,
     `Cost of the hand offs: ${usd(t.cost.usd)}; ${pctOf(t.cost.freeShare)} of parts free or on this computer; ${t.cost.parts} parts in ${t.cost.prompts} prompts.`,
+    t.outside?.measured ? `What the outside models used (measured): ${usedText(t.outside)}, in ${t.outside.calls} call${t.outside.calls === 1 ? "" : "s"}${t.outside.failed ? ` (${t.outside.failed} failed)` : ""}${t.outside.notMeasured ? `; ${t.outside.notMeasured} older part${t.outside.notMeasured === 1 ? "" : "s"} not measured` : ""}.` : "",
     `Quality: ${t.quality.graded ? `${pctOf(t.quality.goodShare)} good (${t.quality.partly} partly, ${t.quality.wrong} wrong; ${t.quality.blind} judged blind)` : "not graded yet"}.`,
     r.byModel.length ? `Work by model: ${r.byModel.slice(0, 6).map((m: any) => `${m.label} ${tokShort(m.read)} tokens, ${m.parts} part${m.parts === 1 ? "" : "s"}${m.goodShare !== null ? `, ${pctOf(m.goodShare)} good` : ""}`).join("; ")}.` : "",
     `Last prompts:\n${r.prompts.slice(0, 6).map((p: any) => `- ${p.id ? `${p.id}, ` : ""}${new Date(p.ts).toISOString().slice(0, 16).replace("T", " ")} UTC, ${p.app}${p.model ? ` (${p.model.label}${p.plan ? `, ${planShort(p.plan)}` : ""})` : ""}: ${p.parts.length ? `${[...new Set(p.parts.map((x: any) => x.label))].join(", ")}, ${tokShort(p.kept)} kept out${p.saved !== null ? `, ${pctOf(p.saved)} saved` : ""}` : "nothing handed off"}${p.grade ? `, ${p.grade}` : ""}`).join("\n")}`,
@@ -258,8 +265,8 @@ export function promptLines(r: any): string {
   const when = new Date(p.ts).toISOString().slice(0, 16).replace("T", " ");
   const head = `Prompt ${p.id}: ${when} UTC, ${p.app}${p.model ? ` (${p.model.label}${p.plan ? `, ${planShort(p.plan)}` : ""})` : ""}.`;
   const own = p.own ? `Its own work: ${tokShort(p.own.fresh)} new tokens (measured)${p.own.cached ? `, ${tokShort(p.own.cached)} more read again from the cache` : ""}.` : "Its own work: not known (this app does not share it).";
-  const sum = p.parts.length ? `Kept out: ${tokShort(p.kept)} tokens${p.saved !== null ? ` (${pctOf(p.saved)} of its use)` : ""}; cost ${usd(p.cost)}${p.grade ? `; lowest grade ${p.grade}` : ""}.` : "Nothing handed off.";
-  const parts = p.parts.map((x: any) => `- ${x.ref ?? `#${x.id}`} ${KIND_WORD[x.kind] ?? x.kind ?? "part"}: ${x.label}, ${tokShort(x.read)} read, ${tokShort(x.back)} back, ${x.where === "paid" ? usd(x.cost) : WHERE_WORD[x.where]}${x.ms ? `, ${Math.max(1, Math.round(x.ms / 1000))} s` : ""}${x.grade ? `, ${x.grade}${x.gradedBy === "check" ? ` (checked blind${x.checker ? ` by ${x.checker}` : ""})` : " (by your app)"}` : ""}${x.side ? `, side by side: ${x.side === "same" ? "as good as the top model's" : x.side === "better" ? "better than the top model's" : "the top model's was better"}` : ""} (hand off ${x.id})`);
+  const sum = p.parts.length ? `Kept out: ${tokShort(p.kept)} tokens${p.saved !== null ? ` (${pctOf(p.saved)} of its use)` : ""}; cost ${usd(p.cost)}${p.grade ? `; lowest grade ${p.grade}` : ""}.${p.used ? ` The outside models used ${usedText(p.used)} (measured).` : ""}` : "Nothing handed off.";
+  const parts = p.parts.map((x: any) => `- ${x.ref ?? `#${x.id}`} ${KIND_WORD[x.kind] ?? x.kind ?? "part"}: ${x.label}, ${tokShort(x.read)} read, ${tokShort(x.back)} back${x.used ? ` (the outside models used ${usedText(x.used)})` : ""}, ${x.where === "paid" ? usd(x.cost) : WHERE_WORD[x.where]}${x.ms ? `, ${Math.max(1, Math.round(x.ms / 1000))} s` : ""}${x.grade ? `, ${x.grade}${x.gradedBy === "check" ? ` (checked blind${x.checker ? ` by ${x.checker}` : ""})` : " (by your app)"}` : ""}${x.side ? `, side by side: ${x.side === "same" ? "as good as the top model's" : x.side === "better" ? "better than the top model's" : "the top model's was better"}` : ""} (hand off ${x.id})`);
   return [head, own, sum, parts.length ? `Parts:\n${parts.join("\n")}` : "", `The full report: Leanfare, Savings (${where().base}/#report).`].filter(Boolean).join("\n");
 }
 function compactReport(r: any, range: string, app: string | null = null) {
@@ -267,7 +274,7 @@ function compactReport(r: any, range: string, app: string | null = null) {
     range, app, from: r.from, to: r.to, step: r.step, tiles: r.tiles, series: r.series,
     byModel: r.byModel.slice(0, 6).map((m: any) => ({ label: m.label, where: m.where, read: m.read, parts: m.parts, cost: m.cost, goodShare: m.goodShare })),
     byKind: r.byKind,
-    prompts: r.prompts.slice(0, 6).map((p: any) => ({ id: p.id, ts: p.ts, app: p.app, model: p.model?.label ?? null, plan: planShort(p.plan), parts: [...new Set(p.parts.map((x: any) => x.label))], kept: p.kept, saved: p.saved, grade: p.grade })),
+    prompts: r.prompts.slice(0, 6).map((p: any) => ({ id: p.id, ts: p.ts, app: p.app, model: p.model?.label ?? null, plan: planShort(p.plan), parts: [...new Set(p.parts.map((x: any) => x.label))], kept: p.kept, saved: p.saved, grade: p.grade, used: p.used ? { read: p.used.read, thought: p.used.thought, wrote: p.used.wrote } : null })),
     open_url: `${where().base}/#report`,
   };
 }

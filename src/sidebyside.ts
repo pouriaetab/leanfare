@@ -35,6 +35,7 @@ export function sideVerdictOf(text: string): "A" | "B" | "same" | null {
 export interface SideInput {
   handoff: number; kind: string; effort: string; guess: Guess; messages: Msg[]; system: string; maxOut: number;
   task: string; block: string; doer: Model; answer: string; allowed: (m: Model) => boolean;
+  job?: string; // the hand off's mark: the top model's answer and the judge's are its calls too (ledger.job)
 }
 
 const running = new Set<{ ac: AbortController; done: Promise<void> }>();
@@ -98,13 +99,13 @@ async function compare(x: SideInput, top: Model, judge: Model, signal: AbortSign
     db.query("INSERT INTO comparisons(ts, month, day, handoff, kind, effort, model, top_model, judge, shown_first, verdict, top_cost, judge_cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(d.toISOString(), localMonth(d), localDay(d), x.handoff, x.kind, x.effort, x.doer.id, top.id, judgeId, first, verdict, topCost, judgeCost);
   };
-  const t = await runChat(x.messages, top.id, signal, () => {}, "Side by side", { system: x.system, source: "sidebyside", guess: x.guess, only: (m) => m.id === top.id, maxOut: x.maxOut, optional: true });
+  const t = await runChat(x.messages, top.id, signal, () => {}, "Side by side", { system: x.system, source: "sidebyside", guess: x.guess, only: (m) => m.id === top.id, maxOut: x.maxOut, optional: true, job: x.job });
   if (t.status !== "ok") { write("failed", null, charged(t), null, null); return; }
   // A random order, so the judge cannot favour the first answer or the second.
   const modelFirst = draw.next() < 0.5;
   const [a, b] = modelFirst ? [x.answer, t.text] : [t.text, x.answer];
   const prompt = `The task:\n${x.task}${x.block ? `\n\n${x.block}` : ""}\n\nAnswer A:\n${masked(a)}\n\nAnswer B:\n${masked(b)}`;
-  const j = await runChat([{ role: "user", content: prompt }], judge.id, signal, () => {}, "Side by side, judged", { system: JUDGE_SYSTEM, source: "sidebyside", guess: x.guess, only: (m) => m.id === judge.id, maxOut: JUDGE_MAX_OUT, optional: true });
+  const j = await runChat([{ role: "user", content: prompt }], judge.id, signal, () => {}, "Side by side, judged", { system: JUDGE_SYSTEM, source: "sidebyside", guess: x.guess, only: (m) => m.id === judge.id, maxOut: JUDGE_MAX_OUT, optional: true, job: x.job });
   const first = modelFirst ? "model" : "top";
   if (j.status !== "ok") { write("failed", first, charged(t), charged(j), judge.id); return; }
   const v = sideVerdictOf(j.text);

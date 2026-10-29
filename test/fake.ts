@@ -9,6 +9,8 @@
 //   [cached 1500]           of the input, 1,500 came from the cache
 //   [write1h 1000]          of the input, 1,000 were written to Claude's cache for an hour
 //   [nousage]               report no token counts at all
+//   [reasoning 300]         of the output, 300 were thinking: said as OpenAI does (completion_tokens_details.reasoning_tokens)
+//   [hidden 300]            300 thinking tokens left out of completion_tokens but in total_tokens (as some providers do)
 //   [slow 3000]             wait 3 seconds before answering
 //   [chunks 40]             stream the answer in 40 pieces, 50 ms apart
 //   [fail 429]              answer with this HTTP status ([fail@xai 400]: only that provider; [slow@...] too)
@@ -356,7 +358,8 @@ export function startFake() {
       }
       if (url.pathname.endsWith("/chat/completions")) {
         // OpenRouter reports its cost as a number; Perplexity as an object with its search fee in it.
-        const usage = { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok, prompt_tokens_details: { cached_tokens: cached }, ...(provider === "openrouter" ? { cost: 0.00042 } : {}), ...(provider === "perplexity" ? { search_context_size: "low", cost: { input_tokens_cost: 0.0001, output_tokens_cost: 0.0001, request_cost: 0.005, total_cost: 0.0052 } } : {}) };
+        const reasoning = directive(text, "reasoning")?.[0], hidden = directive(text, "hidden")?.[0] ?? 0;
+        const usage = { prompt_tokens: inTok, completion_tokens: outTok, total_tokens: inTok + outTok + hidden, prompt_tokens_details: { cached_tokens: cached }, ...(reasoning !== undefined ? { completion_tokens_details: { reasoning_tokens: reasoning } } : {}), ...(provider === "openrouter" ? { cost: 0.00042 } : {}), ...(provider === "perplexity" ? { search_context_size: "low", cost: { input_tokens_cost: 0.0001, output_tokens_cost: 0.0001, request_cost: 0.005, total_cost: 0.0052 } } : {}) };
         if (!body.stream) {
           return Response.json({ id: "chatcmpl-fake", object: "chat.completion", created: 1, model: body.model, choices: [{ index: 0, message: { role: "assistant", content: answer, ...(think ? { reasoning_content: think } : {}) }, finish_reason: finishReason }], ...(nousage ? {} : { usage }) });
         }

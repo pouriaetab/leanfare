@@ -121,6 +121,11 @@ const ADDED: [table: string, column: string, type: string][] = [
   ["delegations", "app", "TEXT"], // the app that asked, by the name it gives Leanfare's door ("Claude Code", "Claude")
   ["delegations", "app_model", "TEXT"], // the model that app runs on, as it says (claude-opus-5-5): the prompt's main model
   ["delegations", "ms", "INTEGER"], // how long it took, checks included (the report shows it)
+  // 0.10: each hand off's own calls, so the report can sum what the outside models used for it.
+  ["delegations", "job", "TEXT"], // the hand off's own mark, also on every call made for it (ledger.job)
+  ["ledger", "job", "TEXT"], // the hand off a call was made for: its answer, a second try, its check, side by side
+  ["ledger", "think_tokens", "INTEGER"], // of out_tokens, the thinking: as the provider said, else from its text; null: not known
+  ["ledger", "think_source", "TEXT"], // reported (by the provider), text (about four characters a token), none (a model that does not think)
 ];
 
 function addColumns(d: Database) {
@@ -134,6 +139,7 @@ function configure(d: Database) {
   d.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=250; PRAGMA foreign_keys=ON;");
   d.exec(SCHEMA);
   addColumns(d);
+  d.exec("CREATE INDEX IF NOT EXISTS ledger_job ON ledger(job)"); // after its column, which an older file gets just above
 }
 
 const backupsOf = (path: string) => {

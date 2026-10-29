@@ -1891,6 +1891,11 @@
       }));
   }
 
+  // What the outside models used for a part, measured: read, thinking (where known) and written.
+  function usedText(u) {
+    return u.thought === null ? `${tokShort(u.read)} read, ${tokShort(u.wrote)} written (thinking not split)`
+      : `${tokShort(u.read)} read, ${tokShort(u.thought)} thinking${u.estimated ? " (partly from its text)" : ""}, ${tokShort(u.wrote)} written`;
+  }
   function gradeChip(g, blind) { return g ? h("span", { class: `chip ${g === "good" ? "good" : g === "wrong" ? "bad" : "warn"}`, title: blind ? "judged blind by another model" : "graded by your app", text: RP_GRADE[g] }) : h("span", { class: "none", text: "—" }); }
   function reportPromptsEl(d) {
     const long = Date.parse(d.to) - Date.parse(d.from) > 86_400_000;
@@ -1918,7 +1923,7 @@
         h("td", { class: "nw", text: (RP_KIND[x.kind] ?? x.kind ?? "part").toLowerCase() }),
         h("td", { text: x.label }),
         h("td", { class: "num", text: `${tokShort(x.read)} read → ${tokShort(x.back)}` }),
-        h("td", { class: "muted", text: `${RP_WHERE[x.where]}${secs(x.ms)}${x.side ? ` · side by side: ${x.side === "worse" ? "the top model's was better" : x.side === "better" ? "better than the top model's" : "as good as the top model's"}` : ""}` }),
+        h("td", { class: "muted", text: `${RP_WHERE[x.where]}${secs(x.ms)}${x.side ? ` · side by side: ${x.side === "worse" ? "the top model's was better" : x.side === "better" ? "better than the top model's" : "as good as the top model's"}` : ""}${x.used ? ` · the outside models used ${usedText(x.used)}` : ""}` }),
         h("td", { class: "num", text: tokShort(x.read) }), h("td", {}),
         h("td", { class: "num", text: money(x.cost) }),
         h("td", {}, gradeChip(x.grade, x.gradedBy === "check")))));
@@ -1941,12 +1946,14 @@
   function reportCsv(d) {
     // A text that starts like a formula (=, +, -, @) is kept as text, so a spreadsheet never runs it.
     const cell = (v) => { let s = v === null || v === undefined ? "" : String(v); if (typeof v === "string" && /^[=+\-@\t\r]/.test(s)) s = "'" + s; return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    const head = ["prompt_id", "time", "app", "thread", "project", "main_model", "plan", "prompt_tokens", "own_new_tokens", "own_cache_reads", "part_id", "handoff", "kind", "model", "where", "tokens_read", "tokens_back", "kept_out", "saved", "cost_usd", "grade", "graded_by", "side_by_side"];
+    const head = ["prompt_id", "time", "app", "thread", "project", "main_model", "plan", "prompt_tokens", "own_new_tokens", "own_cache_reads", "part_id", "handoff", "kind", "model", "where", "tokens_read", "tokens_back", "kept_out", "saved", "cost_usd", "grade", "graded_by", "side_by_side",
+      "outside_read", "outside_thinking", "outside_written"]; // what the outside models used, measured (empty: not measured; thinking empty: not known)
+    const used = (u) => (u ? [u.read, u.thought, u.wrote] : ["", "", ""]);
     const lines = [head.join(",")];
     for (const p of d.prompts) {
       const base = [p.id, p.ts, p.app, p.thread, p.project, p.model?.label, p.plan, p.prompt, p.own?.fresh, p.own?.cached];
-      lines.push([...base, "", "", "", "", "", "", "", p.kept, p.saved === null ? "" : p.saved.toFixed(4), p.cost.toFixed(6), p.grade, "", ""].map(cell).join(","));
-      p.parts.forEach((x, i) => lines.push([...base, x.ref ?? i + 1, x.id, x.kind, x.label, x.where, x.read, x.back, x.read, "", x.cost === null ? "" : x.cost.toFixed(6), x.grade, x.gradedBy, x.side].map(cell).join(",")));
+      lines.push([...base, "", "", "", "", "", "", "", p.kept, p.saved === null ? "" : p.saved.toFixed(4), p.cost.toFixed(6), p.grade, "", "", ...used(p.used)].map(cell).join(","));
+      p.parts.forEach((x, i) => lines.push([...base, x.ref ?? i + 1, x.id, x.kind, x.label, x.where, x.read, x.back, x.read, "", x.cost === null ? "" : x.cost.toFixed(6), x.grade, x.gradedBy, x.side, ...used(x.used)].map(cell).join(",")));
     }
     return lines.join("\n") + "\n";
   }

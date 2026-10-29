@@ -220,15 +220,15 @@ const add = (...v: (number | null | undefined)[]) => (v.some((x) => x === null) 
 // Tokens as Leanfare estimates them everywhere (about four characters each).
 const tokensOf = (chars: number) => Math.ceil(chars / 4);
 
-const INSERT = `INSERT INTO delegations(ts, month, day, task, kind, effort, model, cost, files, file_tokens, answer_tokens, status, chance, checker, verdict, check_cost, rerun, rerun_cost, plan, task_tokens, app, app_model, ms)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const INSERT = `INSERT INTO delegations(ts, month, day, task, kind, effort, model, cost, files, file_tokens, answer_tokens, status, chance, checker, verdict, check_cost, rerun, rerun_cost, plan, task_tokens, app, app_model, ms, job)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 // taskTokens: a plan part's own text, which Leanfare wrote from the plan (the part, what the earlier parts
 // found, the task it belongs to): the app that asked never read it. A hand off's task the app wrote itself: 0.
-function writeRow(row: { task: string; kind: string | null; effort: Effort; model: string | null; cost: number | null; files: number; fileTokens: number; answerTokens: number; status: string; chance: number; checker: string | null; verdict: string | null; checkCost: number | null; rerun: string | null; rerunCost: number | null; plan?: string | null; taskTokens?: number; app?: string | null; appModel?: string | null; ms?: number | null }): number | null {
+function writeRow(row: { task: string; kind: string | null; effort: Effort; model: string | null; cost: number | null; files: number; fileTokens: number; answerTokens: number; status: string; chance: number; checker: string | null; verdict: string | null; checkCost: number | null; rerun: string | null; rerunCost: number | null; plan?: string | null; taskTokens?: number; app?: string | null; appModel?: string | null; ms?: number | null; job?: string | null }): number | null {
   const d = now();
   try {
-    const r = db.query(INSERT).run(d.toISOString(), localMonth(d), localDay(d), row.task, row.kind, row.effort, row.model, row.cost, row.files, row.fileTokens, row.answerTokens, row.status, row.chance, row.checker, row.verdict, row.checkCost, row.rerun, row.rerunCost, row.plan ?? null, row.taskTokens ?? 0, row.app ?? null, row.appModel ?? null, row.ms ?? null);
+    const r = db.query(INSERT).run(d.toISOString(), localMonth(d), localDay(d), row.task, row.kind, row.effort, row.model, row.cost, row.files, row.fileTokens, row.answerTokens, row.status, row.chance, row.checker, row.verdict, row.checkCost, row.rerun, row.rerunCost, row.plan ?? null, row.taskTokens ?? 0, row.app ?? null, row.appModel ?? null, row.ms ?? null, row.job ?? null);
     return Number(r.lastInsertRowid);
   } catch (e) { console.error("leanfare: could not write the delegate's row:", String(e)); return null; } // the answer matters more than the row
 }
@@ -323,7 +323,10 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     return { ...r, cost: charged(r), error };
   };
   const gone = () => signal.aborted; // the caller went away: there is nobody to answer
-  const row = { task: guess.task, kind: input.kind, effort: input.effort, files: input.files.length, fileTokens, plan: input.plan ?? null, taskTokens: input.plan ? tokensOf(input.task.length) : 0, app: input.app ?? null, appModel: input.appModel ?? null };
+  // The hand off's own mark: every call made for it carries it in the ledger (its answer, a second try, its check, side
+  // by side), so the report can sum what the outside models used for it. The trial's questions keep no row.
+  const job = input.trial ? undefined : randomId();
+  const row = { task: guess.task, kind: input.kind, effort: input.effort, files: input.files.length, fileTokens, plan: input.plan ?? null, taskTokens: input.plan ? tokensOf(input.task.length) : 0, app: input.app ?? null, appModel: input.appModel ?? null, job: job ?? null };
   const source = input.trial ? "trial" : "delegate";
   const write = (r: Parameters<typeof writeRow>[0]) => (input.trial ? null : writeRow(r));
   const none = { checker: null, verdict: null, checkCost: null, rerun: null, rerunCost: null };
@@ -357,7 +360,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     if (usableModels((m) => doFit.ok(m) && (!limit || limit(m))).length)
       throw Object.assign(new UserError(409, "The models that could take it are on platforms turned off for plans and the delegate (Settings, Where Leanfare may send work). Turn one on there, or do it yourself.", "platform_off"), { spent: 0 });
   }
-  const opts: ChatOptions = { system, source, guess, only: within(doFit.ok), onlyWhy: tooMuch(doFit.need), effort: input.effort, maxOut: input.maxOut, speed: input.speed };
+  const opts: ChatOptions = { system, source, guess, only: within(doFit.ok), onlyWhy: tooMuch(doFit.need), effort: input.effort, maxOut: input.maxOut, speed: input.speed, job };
   // Reading at low or medium effort goes first to a model on this computer that passed its test here
   // (localpass.ts), when nothing is named and Auto is to be the cheapest: it is free.
   const local = !input.model && !input.trial && input.kind === "read" && input.effort !== "high" && (input.speed ?? settings().speed) === "cheapest" ? passedLocal(within(doFit.ok)) : null;
@@ -412,7 +415,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
       check.verdict = "skipped";
       check.why = `the models rated above ${doer!.label} cannot take the check's text (about ${num(ckFit.need)} tokens)`;
     } else {
-      const c = await run([{ role: "user", content: checkPrompt }], "auto-best", "Delegate check", { system: CHECKER_SYSTEM, source: input.trial ? "trial" : "check", guess, only: stronger, onlyWhy: tooMuch(ckFit.need), maxOut: CHECK_MAX_OUT, optional: true, speed: input.speed });
+      const c = await run([{ role: "user", content: checkPrompt }], "auto-best", "Delegate check", { system: CHECKER_SYSTEM, source: input.trial ? "trial" : "check", guess, only: stronger, onlyWhy: tooMuch(ckFit.need), maxOut: CHECK_MAX_OUT, optional: true, speed: input.speed, job });
       check.cost = c.cost;
       spent.push(c.cost);
       if (c.status === "stopped" && gone()) throw stopped();
@@ -429,7 +432,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
           const up = UP[TIER[input.effort]];
           const note = `\n\nA checker found a problem with an earlier answer to this task: ${(v.why || "it was judged wrong").replace(/[.!]?$/, ".")} Avoid it.`;
           const againFit = fit(prompt.length + note.length + system.length, input.maxOut);
-          const again = await run([{ role: "user", content: prompt + note }], up ? `auto-${up}` : checker.id, "Delegate, asked again", { system, source, guess, only: within((m) => above0(m) && againFit.ok(m)), onlyWhy: tooMuch(againFit.need), effort: input.effort, maxOut: input.maxOut, optional: true, speed: input.speed });
+          const again = await run([{ role: "user", content: prompt + note }], up ? `auto-${up}` : checker.id, "Delegate, asked again", { system, source, guess, only: within((m) => above0(m) && againFit.ok(m)), onlyWhy: tooMuch(againFit.need), effort: input.effort, maxOut: input.maxOut, optional: true, speed: input.speed, job });
           rerunCost = again.cost;
           spent.push(again.cost);
           if (again.status === "stopped" && gone()) throw stopped();
@@ -466,7 +469,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   // In the background: this answer goes back now. Not for a private task, nor a plan's part kept to free or local
   // models, nor an answer a failed check replaced (the check judged it).
   if (result.row !== null && doer && input.kind && !input.private && !limit && !firstUsed)
-    startSideBySide({ handoff: result.row, kind: input.kind, effort: input.effort, guess, messages, system, maxOut: input.maxOut, task: input.task, block, doer, answer: final.text, allowed: kept(() => true) });
+    startSideBySide({ handoff: result.row, kind: input.kind, effort: input.effort, guess, messages, system, maxOut: input.maxOut, task: input.task, block, doer, answer: final.text, allowed: kept(() => true), job });
   return { ...result, receipt: receiptOf(result, input.maxOut) };
 }
 
