@@ -490,18 +490,21 @@ export async function refreshOpenRouter(signal?: AbortSignal): Promise<SourceSta
   return st;
 }
 
-// How much context each local model takes, as Ollama says (/api/show), kept per model file.
-const contexts = new Map<string, number | null>();
-async function contextOf(host: string, t: any, signal?: AbortSignal): Promise<number | null> {
+// How much context each local model takes, and whether it thinks before it answers, as Ollama says
+// (/api/show: its context length, and "thinking" among its capabilities), kept per model file.
+const shown = new Map<string, { ctx: number | null; thinks: boolean }>();
+async function showOf(host: string, t: any, signal?: AbortSignal): Promise<{ ctx: number | null; thinks: boolean }> {
   const key = `${t?.name}@${t?.digest ?? ""}`;
-  if (contexts.has(key)) return contexts.get(key)!;
+  if (shown.has(key)) return shown.get(key)!;
   let ctx: number | null = null;
   try {
     const j = await getJson(`${host}/api/show`, 3_000, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: t.name, name: t.name }), signal });
     for (const [k, v] of Object.entries<any>(j?.model_info ?? {})) if (k.endsWith(".context_length") && typeof v === "number" && v > 0) { ctx = v; break; }
-    contexts.set(key, ctx);
+    const facts = { ctx, thinks: Array.isArray(j?.capabilities) && j.capabilities.includes("thinking") };
+    shown.set(key, facts);
+    return facts;
   } catch {} // not kept: asked again next time
-  return ctx;
+  return { ctx, thinks: false };
 }
 
 export async function refreshOllama(signal?: AbortSignal): Promise<SourceStatus> {
@@ -514,7 +517,11 @@ export async function refreshOllama(signal?: AbortSignal): Promise<SourceStatus>
     const tags = await getJson(url, 3_000, { signal });
     const models = ollamaModels(tags);
     const list: any[] = Array.isArray(tags?.models) ? tags.models : [];
-    await Promise.all(models.map(async (m) => { m.context = Math.min((await contextOf(host, list.find((t) => t?.name === m.apiId), signal)) ?? LOCAL_UNKNOWN, LOCAL_CONTEXT); }));
+    await Promise.all(models.map(async (m) => {
+      const facts = await showOf(host, list.find((t) => t?.name === m.apiId), signal);
+      m.context = Math.min(facts.ctx ?? LOCAL_UNKNOWN, LOCAL_CONTEXT);
+      if (facts.thinks) m.skills = [...m.skills, "reasoning"]; // it thinks first (upstream.ts gives it room, or asks it not to)
+    }));
     store.ollama = models;
     store.ollamaFound = true;
     Object.assign(st, { state: "ok", error: null });

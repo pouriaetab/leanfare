@@ -221,10 +221,21 @@ export function ollamaPlain(body: any): boolean {
 }
 const plainText = (c: any): string => (typeof c === "string" ? c : c.map((p: any) => p.text).join(""));
 const posInt = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : null);
-export function toOllama(body: any, m: Model, stream: boolean, cap: number | null): any {
+// A model that thinks before it answers (Ollama lists "thinking" among its capabilities) counts its
+// thinking toward the answer's limit, so a short limit can go all on thinking and the answer comes back
+// cut or empty (28 Oct: qwen3.5 4B and 9B missed 6 and 5 of the 8 questions of the test that way, at
+// 1,024 tokens). At low effort it is asked to answer without thinking; otherwise it gets this much room
+// for its thinking on top of the answer.
+export const LOCAL_THINK_ROOM = 4096;
+const QUICK = new Set(["none", "minimal", "low"]);
+export function toOllama(body: any, m: Model, stream: boolean, cap: number | null, effortAsked: string | null = null): any {
   const messages = body.messages.map((msg: any) => ({ role: msg.role, content: plainText(msg.content) }));
+  const thinks = m.skills.includes("reasoning");
+  const level = effortAsked ?? (typeof body.reasoning_effort === "string" ? body.reasoning_effort : null);
+  const quick = thinks && level !== null && QUICK.has(level);
   // The answer's limit: the one asked for, or the budget's; none otherwise (Ollama then writes until it is done).
-  const out = posInt(body.max_completion_tokens) ?? posInt(body.max_tokens) ?? cap ?? null;
+  const asked = posInt(body.max_completion_tokens) ?? posInt(body.max_tokens) ?? cap ?? null;
+  const out = asked !== null && thinks && !quick ? asked + LOCAL_THINK_ROOM : asked;
   const most = Math.min(m.context ?? LOCAL_CONTEXT, LOCAL_CONTEXT);
   const want = localNeed(promptChars(messages), out); // as Auto counts it (data.ts)
   const options: Record<string, unknown> = { num_ctx: Math.min(most, Math.max(4096, Math.ceil(want / 1024) * 1024)) };
@@ -233,7 +244,7 @@ export function toOllama(body: any, m: Model, stream: boolean, cap: number | nul
   if (typeof body.top_p === "number") options.top_p = body.top_p;
   if (typeof body.seed === "number") options.seed = body.seed;
   if (typeof body.stop === "string" || Array.isArray(body.stop)) options.stop = Array.isArray(body.stop) ? body.stop : [body.stop];
-  return { model: m.apiId, messages, stream, options };
+  return { model: m.apiId, messages, stream, options, ...(quick ? { think: false } : {}) };
 }
 const ollamaUsage = (j: any) => (typeof j?.prompt_eval_count === "number" || typeof j?.eval_count === "number"
   ? { prompt_tokens: j.prompt_eval_count ?? 0, completion_tokens: j.eval_count ?? 0, total_tokens: (j.prompt_eval_count ?? 0) + (j.eval_count ?? 0) } : null);
