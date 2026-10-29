@@ -16,6 +16,7 @@
 //   [empty] [empty1]        answer nothing (always, or only the first time this prompt is seen)
 //   [cut1]                  the first time: stop sending after one piece, with no end marker
 //   [thinkall1]             the first time: only think, and stop at the answer limit
+//   [thought1]              the first time: hand back thinking as the answer, under a first line "thought", cut at the limit
 //   [filter]                decline (finish_reason content_filter), with no text
 //   [reply@xai FAIL: x]     answer with this text, only when the request goes to that provider
 //                           ([reply PASS] for any provider; the one for the provider wins)
@@ -279,7 +280,9 @@ export function startFake() {
       const empty = text.includes("[empty]") || (text.includes("[empty1]") && firstTime) || thinkAll || filtered;
       const cut = text.includes("[cut1]") && firstTime;
       if (thinkAll) capped = true; // it stopped at the limit
-      const answer = empty ? "" : hooks.answer?.(text, provider, String(body?.model ?? "")) ?? replyFor(text, provider) ?? (text.includes("[md]") ? MARKDOWN : `Hello from ${body?.model ?? "?"}.`);
+      const thought = text.includes("[thought1]") && firstTime;
+      if (thought) capped = true;
+      const answer = thought ? "thought\nWait. Let me look at the files again before I answer." : empty ? "" : hooks.answer?.(text, provider, String(body?.model ?? "")) ?? replyFor(text, provider) ?? (text.includes("[md]") ? MARKDOWN : `Hello from ${body?.model ?? "?"}.`);
       const stopReason = filtered ? "refusal" : capped ? "max_tokens" : "end_turn";
       const finishReason = filtered ? "content_filter" : capped ? "length" : "stop";
       const think = text.includes("[think]") || thinkAll ? "Let me think." : "";
