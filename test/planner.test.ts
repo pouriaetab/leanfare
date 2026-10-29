@@ -179,7 +179,9 @@ describe("where each part runs", () => {
     const t = tableOf({ task: "x", manager: "Claude Code", parts, totals: { parts: 2, out: 1, later: 0, kept: SIZE_TOKENS.large, used: 5000, seconds: 40, after: null, cost: 0 }, split: { by: "rules", model: null, cost: null, note: null }, limits: null });
     expect(t).toContain("| 1 | Read / the logs | read, low | Leanfare, on this computer | Qwen | ~40 s | ~150k kept | $0 | now |");
     expect(t).toContain("| 2 | Fix it | code, high | you (Claude Code) | Claude Sonnet 4.6 |  | ~5k of your plan | in your plan | after 1 |"); // the model to pick in your app
-    expect(t).toContain("1 of 2 parts go to Leanfare, keeping about 150k tokens out of your plan (97% of this task); about 5k stay in it.");
+    expect(t).toContain("1 of 2 parts go to Leanfare. If they run, about 150k tokens stay out of your plan (97% of the parts' tokens) and about 5k stay in it: an estimate until they run.");
+    const g = tableOf({ task: "x", manager: "Claude Code", parts, totals: { parts: 2, out: 1, later: 0, kept: SIZE_TOKENS.large, used: 5000, seconds: 40, after: null, cost: 0, guessed: true }, split: { by: "rules", model: null, cost: null, note: null }, limits: null });
+    expect(g).toContain("stay in it: a guess, as no files were named for the reading.");
   });
 
   test("POST /api/plan: checked, then planned", async () => {
