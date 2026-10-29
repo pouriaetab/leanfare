@@ -57,10 +57,11 @@ describe("the report", () => {
     expect([...doc.querySelectorAll("#reportCard .rp-bar .nm span")].map((e: any) => e.textContent)).toEqual(["Gemini 3.8 Flash", "DeepSeek V4 Flash"]);
     expect([...doc.querySelectorAll("#reportCard .rp-kind .nm b")].map((e: any) => e.textContent)).toEqual(["Reading", "Drafting"]);
     const rows = [...doc.querySelectorAll("#reportCard tr.pr")].map((r: any) => [...r.querySelectorAll("td")].map((td: any) => td.textContent.trim()));
-    expect(rows.map((r) => [r[1], r[2], r[3], r[5], r[6], r[8]])).toEqual([
-      ["Claude", "Claude Opus 5.5", "not known", "10k", "—", "× wrong"],
-      ["Claude Code", "Claude Opus 5.5", "100 → 1k", "30k", "91%", "✓ good"],
+    expect(rows.map((r) => [r[0], r[2], r[3], r[4], r[6], r[7], r[9]])).toEqual([
+      ["▸PRM-2", "Claude", "Claude Opus 5.5", "not known", "10k", "—", "× wrong"],
+      ["▸PRM-1", "Claude Code", "Claude Opus 5.5", "100 → 1k", "30k", "91%", "✓ good"],
     ]);
+    expect([...doc.querySelectorAll("#reportCard thead th")].map((th: any) => th.textContent).slice(0, 3)).toEqual(["ID", "When", "App"]);
     expect(bad(doc)).toBe(false);
   });
 
@@ -70,7 +71,8 @@ describe("the report", () => {
     ([...doc.querySelectorAll("#reportCard tr.pr")] as any[])[1].click();
     await waitFor(() => doc.querySelectorAll("#reportCard tr.part").length === 2);
     const parts = [...doc.querySelectorAll("#reportCard tr.part")].map((r: any) => r.textContent);
-    expect(parts[0]).toContain("1 · reading");
+    expect(doc.querySelector("#reportCard tr.part td.pid").textContent).toBe("PRM-1.1");
+    expect(parts[0]).toContain("reading");
     expect(parts[0]).toContain("30k read → 500");
     expect(parts[0]).toContain("free · 6 s");
     expect(parts[1]).toContain("prompt 100, its own work 3k new tokens (measured), 40k more read again from the cache");
@@ -91,8 +93,9 @@ describe("the report", () => {
     ([...doc.querySelectorAll("#reportCard button")] as any[]).find((b) => b.textContent === "Export CSV").click();
     expect(saved[0].name).toMatch(/^leanfare-report-\d{4}-\d{2}-\d{2}\.csv$/);
     const lines = saved[0].text.trim().split("\n");
-    expect(lines[0]).toStartWith("time,app,thread,project,main_model,plan,prompt_tokens");
-    expect(lines.slice(1).map((l: string) => l.split(",").slice(1, 2)[0])).toEqual(["Claude", "Claude"]); // the prompt, then its part
+    expect(lines[0]).toStartWith("prompt_id,time,app,thread,project,main_model,plan,prompt_tokens");
+    expect(lines.slice(1).map((l: string) => l.split(",").slice(0, 3).filter((_, i) => i !== 1))).toEqual([["PRM-2", "Claude"], ["PRM-2", "Claude"]]); // the prompt, then its part
+    expect(lines[2]).toMatch(/,PRM-2\.1,\d+,write,/); // the part's id and its hand off number
     expect(lines[2]).toContain("DeepSeek V4 Flash,paid,10000,900");
   });
 
