@@ -247,7 +247,8 @@ export function speedLine(rows: any[] | undefined): string {
   if (!rows?.length) return "";
   return `Speed by model: ${rows.slice(0, 5).map((m: any) => {
     const failed = m.failed ? `${m.failed} of ${m.calls} calls failed (${FAIL_KINDS.filter((k) => m.fails?.[k]).map((k) => `${m.fails[k]} ${FAIL_WORD[k]}`).join(", ")})` : `${m.calls} call${m.calls === 1 ? "" : "s"}, none failed`;
-    return `${m.label} ${m.whole ? `${sec(m.whole.mid)} an answer${m.first ? ` (first word ${sec(m.first.mid)})` : ""}` : "no answer yet"}, ${failed}`;
+    const rest = m.rest ? `, resting until ${new Date(m.rest.until).toISOString().slice(11, 16)} UTC (${m.rest.why})` : "";
+    return `${m.label} ${m.whole ? `${sec(m.whole.mid)} an answer${m.first ? ` (first word ${sec(m.first.mid)})` : ""}` : "no answer yet"}, ${failed}${rest}`;
   }).join("; ")}.`;
 }
 export function reportLines(r: any, range: string): string {
@@ -285,7 +286,7 @@ function compactReport(r: any, range: string, app: string | null = null) {
     range, app, from: r.from, to: r.to, step: r.step, tiles: r.tiles, series: r.series,
     byModel: r.byModel.slice(0, 6).map((m: any) => ({ label: m.label, where: m.where, read: m.read, parts: m.parts, cost: m.cost, goodShare: m.goodShare })),
     byKind: r.byKind,
-    speed: (r.speed ?? []).slice(0, 6).map((m: any) => ({ label: m.label, where: m.where, calls: m.calls, failed: m.failed, fails: m.fails, first: m.first, whole: m.whole, goodShare: m.goodShare })),
+    speed: (r.speed ?? []).slice(0, 6).map((m: any) => ({ label: m.label, where: m.where, calls: m.calls, failed: m.failed, fails: m.fails, first: m.first, whole: m.whole, goodShare: m.goodShare, rest: m.rest })),
     prompts: r.prompts.slice(0, 6).map((p: any) => ({ id: p.id, ts: p.ts, app: p.app, model: p.model?.label ?? null, plan: planShort(p.plan), parts: [...new Set(p.parts.map((x: any) => x.label))], kept: p.kept, saved: p.saved, grade: p.grade, used: p.used ? { read: p.used.read, thought: p.used.thought, wrote: p.used.wrote } : null })),
     open_url: `${where().base}/#report`,
   };
