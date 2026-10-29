@@ -269,7 +269,7 @@ describe("handing a task over", () => {
     const r = await delegate({ task: "Summarize the log. [reply@google PASS]", files: [LOG], kind: "read" });
     expect(r.json.answer).toBe("Hello from grok-4.20-beta.");
     expect(r.json.check).toMatchObject({ picked: true, verdict: "pass", why: "", checker: { id: "google/gemini-3.8-flash", label: "Gemini 3.8 Flash" } });
-    expect(r.json.receipt).toContain(`Checked by Gemini 3.8 Flash: passed ($${r.json.check.cost.toPrecision(2)}).`);
+    expect(r.json.receipt).toContain(`Checked blind by Gemini 3.8 Flash (another company): passed ($${r.json.check.cost.toPrecision(2)}).`);
     expect(r.json.total).toBeCloseTo(r.json.cost + r.json.check.cost, 12);
     const ck = sent("google").at(-1)!;
     expect(ck.body.messages[0].content).toContain("You check another model's work.");
@@ -350,7 +350,7 @@ describe("handing a task over", () => {
     draw.next = () => 0.01;
     const unclear = await delegate({ task: "Summarize the log. [reply@google I think it is mostly right]", files: [LOG], kind: "read" });
     expect(unclear.json.check).toMatchObject({ verdict: "unclear", checker: { id: "google/gemini-3.8-flash" } });
-    expect(unclear.json.receipt).toContain("Checked by Gemini 3.8 Flash: no clear verdict");
+    expect(unclear.json.receipt).toContain("Checked blind by Gemini 3.8 Flash (another company): no clear verdict");
     expect(unclear.json.first).toBeNull();
   });
 
