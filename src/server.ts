@@ -357,7 +357,7 @@ function handOff(job: Awaited<ReturnType<typeof waitDelegate>>): Response {
   if (!job) return fail(404, "No hand off with that id: Leanfare was restarted, or it is more than 2 hours old.");
   if (!job.done) return json({ id: job.id, running: true, seconds: Math.round((Date.now() - job.started) / 1000) });
   if (job.error) return fail(job.error.status, job.error.message);
-  return json({ ...job.result, id: job.id, running: false });
+  return json({ ...job.result, id: job.id, running: false, whoWrote: settings().whoWrote });
 }
 
 async function readBody(req: Request): Promise<any> {
@@ -612,7 +612,7 @@ async function api(req: Request, url: URL): Promise<Response> {
     const v = checkDelegate(b);
     if (typeof v === "string") return fail(400, v);
     const wait = waitOf(b?.wait);
-    if (wait === null) return json(await runDelegate(v, req.signal));
+    if (wait === null) return json({ ...(await runDelegate(v, req.signal)), whoWrote: settings().whoWrote });
     return handOff(await waitDelegate(startDelegate(v).id, wait, req.signal));
   }
   if (p === "/api/delegate" && m === "GET") return handOff(await waitDelegate(url.searchParams.get("id") ?? "", waitOf(url.searchParams.get("wait")) ?? 0, req.signal));
@@ -624,8 +624,8 @@ async function api(req: Request, url: URL): Promise<Response> {
     if (typeof v === "string") return fail(400, v);
     return json(await makePlan({ ...v, signal: req.signal }));
   }
-  if (p === "/api/plan/run" && m === "POST") { if (offForApps(req)) return fail(409, OFF_TEXT); const b = await readBody(req); return json(startRun(String(b?.id ?? ""), { paid: b?.paid === true || b?.paid === "yes" })); }
-  if (p === "/api/plan/run" && m === "GET") { const v = runView(url.searchParams.get("id") ?? ""); return v ? json(v) : fail(404, "No run of that plan."); }
+  if (p === "/api/plan/run" && m === "POST") { if (offForApps(req)) return fail(409, OFF_TEXT); const b = await readBody(req); return json({ ...startRun(String(b?.id ?? ""), { paid: b?.paid === true || b?.paid === "yes" }), whoWrote: settings().whoWrote }); }
+  if (p === "/api/plan/run" && m === "GET") { const v = runView(url.searchParams.get("id") ?? ""); return v ? json({ ...v, whoWrote: settings().whoWrote }) : fail(404, "No run of that plan."); }
   if (p === "/api/plan/stop" && m === "POST") { const b = await readBody(req); const v = stopRun(String(b?.id ?? "")); return v ? json(v) : fail(404, "No run of that plan."); }
   // The delegate trial (trial.ts): its estimate and last report, start, stop.
   if (p === "/api/trial" && m === "GET") return json(await trialView(req.signal));

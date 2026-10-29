@@ -2478,6 +2478,14 @@
           h("span", { class: "note", text: `against ${x.tops.join(", ")}` }))))));
   }
 
+  // A test (mcp.ts: markedBy): answers handed back to your apps mark which model wrote each paragraph.
+  function whoWroteSettingEl(s) {
+    return h("div", { class: "setting" }, h("h3", { text: "Show who wrote what (a test)" }),
+      h("label", { class: "check" }, h("input", { type: "checkbox", checked: !!s.whoWrote, onchange: (e) => patchSettings({ whoWrote: e.target.checked }, e.target.checked ? "Answers Leanfare hands back now mark which model wrote each paragraph." : "Answers no longer carry the marks.") }),
+        "Mark which model wrote each paragraph of the answers Leanfare hands back to your apps"),
+      h("p", { text: "For a test: each paragraph of a hand off's or a plan part's answer starts with the model's name in a small mark, and your app is asked to keep the marks and to mark the paragraphs it writes itself, so its reply shows who wrote what. It adds a few words to each paragraph, and works as far as your app follows it. Off at first." }));
+  }
+
   // Side by side (sidebyside.ts): how often the top model answers a hand off too, and the most it may spend a month.
   function sideBySideSettingEl(s) {
     const box = moneyInput(s.sideBySideCap ?? 1, "Side by side, at most a month");
@@ -2613,7 +2621,7 @@
         h("div", { class: "seg", role: "group", "aria-label": "Thinking effort" }, ...[["auto", "Model's default"], ["low", "Low"], ["medium", "Medium"], ["high", "High"]].map(([k, label]) =>
           h("button", { type: "button", "aria-pressed": String((s.effort ?? "auto") === k), text: label, onclick: () => patchSettings({ effort: k }, k === "auto" ? "Thinking models think as they do by default." : `Thinking effort: ${label.toLowerCase()}.`) }))),
         h("p", { text: "For models that think before they answer, at the levels each one takes. Thinking is billed as output, so a higher effort costs more and takes longer; the estimate learns from your answers at each level." })),
-      planCapSettingEl(s), platformsSettingEl(), codexSettingEl(s), gradesSettingEl(), sideBySideSettingEl(s),
+      planCapSettingEl(s), platformsSettingEl(), codexSettingEl(s), gradesSettingEl(), sideBySideSettingEl(s), whoWroteSettingEl(s),
       h("div", { class: "setting" }, h("h3", { text: "Your usual model" }), usualSel,
         h("p", { text: "The model you would use without Leanfare. Savings are measured against it." })),
       h("div", { class: "setting", id: "budgetSetting" }, h("h3", { text: "Monthly budget" }),
