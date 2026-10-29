@@ -24,8 +24,8 @@
 import { homedir } from "node:os";
 import { dirname, relative, sep } from "node:path";
 import { CODEX_ID, CODEX_LABEL, codexFor, runCodex } from "./codex";
-import { DEFAULT_MAX_OUT, TIER, gradeRow, notePart, runDelegate, taskFor, type Effort, type Kind } from "./delegate";
-import { LOCAL_CONTEXT, allModels, fitsText, localNeed, type Model } from "./data";
+import { DEFAULT_MAX_OUT, TIER, gradeRow, nameOf, notePart, runDelegate, taskFor, type Effort, type Kind } from "./delegate";
+import { LOCAL_CONTEXT, allModels, fitsText, getModel, localNeed, type Model } from "./data";
 import { chargeOf, plan as route, runChat, usableModels } from "./engine";
 import { addGrade, movedDown, standing, standingText, type GradedKind, type Verdict } from "./grades";
 import { gb, suggestLocal } from "./local";
@@ -87,6 +87,7 @@ export interface PlanResult {
   local?: { name: string; size: number; like: string; rating: number; fit: string } | null; // a local model to download that would run reading and drafting free
   codex?: string | null; // why Codex took no part, when it is turned on in Settings and could not
   private?: boolean; // stays on this computer: its parts go only to models here, or stay with you
+  you?: { model: string | null; label: string | null; plan: string | null }; // the app's own model, as it said, and your plan for it
   table: string; // the table as markdown
   next: string; // what to do now
 }
@@ -385,10 +386,21 @@ export function timeLine(t: { seconds: number | null; after: number | null }): s
   return now || after ? `${now}${after}. ` : "";
 }
 
+// The model a part that stays with you runs on. Claude Code can run a part on another of its models in a
+// subagent, so its plan names the one to use; the other apps run one model a chat, the one they said.
+export const picksPerPart = (manager: string) => /claude code/i.test(manager);
+const yourModelFor = (p: Pick<Part, "use">, r: Pick<PlanResult, "manager" | "you">) =>
+  (picksPerPart(r.manager) ? p.use?.label : null) ?? r.you?.label ?? p.use?.label ?? "your model";
+// Who a part that stays with you runs on: "you (Claude, on your Claude Max plan)".
+const youText = (r: Pick<PlanResult, "manager" | "you">) => {
+  const plan = r.you?.plan ? `on your ${r.you.plan} plan`.replace(/ plan plan$/i, " plan") : null;
+  const app = r.manager === "you" ? null : r.manager;
+  return app || plan ? `you (${[app, plan].filter(Boolean).join(", ")})` : "you";
+};
 export function tableOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
   const rows = r.parts.map((p) => [
-    String(p.n), p.title, `${LABEL_KIND[p.kind]}, ${p.effort}`, p.where === "you" ? r.manager === "you" ? "you" : `you (${r.manager})` : `${RUNS[p.where]}${p.risk ? ` (${p.risk})` : ""}`,
-    p.model?.label ?? p.use?.label ?? "your model", p.seconds === null ? "" : secondsText(p.seconds).replace(/^about /, "~"),
+    String(p.n), p.title, `${LABEL_KIND[p.kind]}, ${p.effort}`, p.where === "you" ? youText(r) : `${RUNS[p.where]}${p.risk ? ` (${p.risk})` : ""}`,
+    p.model?.label ?? yourModelFor(p, r), p.seconds === null ? "" : secondsText(p.seconds).replace(/^about /, "~"),
     p.where === "you" ? `~${tokText(p.tokens)} of your plan` : `~${tokText(p.tokens)} kept`, p.where === "you" ? "in your plan" : p.where === "codex" ? "in your ChatGPT plan" : usd(p.cost),
     p.needs.length ? `after ${p.needs.join(", ")}` : "now",
   ].map(cell).join(" | "));
@@ -428,9 +440,9 @@ function nextOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
   if (later.length) s.push(`Then ${list(later.map((p) => p.n))}, each once the parts it needs are back, with their answers in its task.`);
   if (out.some((p) => p.kind === "search")) s.push("A search part goes to ask with the model in the table.");
   if (mine.length) {
-    const on = mine.map((p) => `part ${p.n} on ${p.use?.label ?? "your strongest model"}`);
+    const on = mine.map((p) => `part ${p.n}${picksPerPart(r.manager) || !r.you?.label ? ` on ${p.use?.label ?? "your strongest model"}` : ""}`);
     // Claude Code runs a part on another model with a subagent (its Agent tool takes model: opus, sonnet, haiku or fable).
-    const how = mine.some((p) => p.use?.alias) && /claude/i.test(r.manager) ? " For a part on another model than the one you run on, use a subagent with that model (model: opus, sonnet or haiku)." : "";
+    const how = mine.some((p) => p.use?.alias) && picksPerPart(r.manager) ? " For a part on another model than the one you run on, use a subagent with that model (model: opus, sonnet or haiku)." : "";
     s.push(`Do these yourself: ${on.join(", ")}.${how}`);
   }
   if (yoursFirst.size) s.push(`${list([...yoursFirst]).replace(/^p/, "P")} wait${yoursFirst.size === 1 ? "s" : ""} for yours: once yours are done, run ${yoursFirst.size === 1 ? "it" : "them"} with delegate, with the answers ${yoursFirst.size === 1 ? "it needs" : "they need"} in the task (plan_run does not run ${yoursFirst.size === 1 ? "it" : "them"}).`);
@@ -439,7 +451,28 @@ function nextOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
 
 // ---- the plan ------------------------------------------------------------------------------------
 
-export interface PlanInput { task: string; files: PlanFile[]; manager: string | null; split?: "auto" | "rules"; private?: boolean; signal: AbortSignal }
+export interface PlanInput { task: string; files: PlanFile[]; manager: string | null; split?: "auto" | "rules"; private?: boolean; yourModel?: string | null; signal: AbortSignal }
+
+// The name of a model an app says it runs on: the price list's when it has the model, else made from the id
+// (claude-opus-5-5: Claude Opus 5.5; gpt-5.4: GPT-5.4; a date at the end is dropped).
+export function modelName(id: string): string {
+  const m = getModel(id) ?? getModel(`anthropic/${id}`) ?? getModel(`openai/${id}`) ?? getModel(`google/${id}`);
+  if (m) return m.label;
+  const words = id.replace(/^[^/]+\//, "").replace(/-\d{8}$/, "").split(/[-_ ]+/).filter(Boolean);
+  const out: string[] = [];
+  for (const w of words) {
+    if (/^\d+$/.test(w) && out.length && /^\d+(\.\d+)*$/.test(out[out.length - 1])) out[out.length - 1] += "." + w; // 5-5: 5.5
+    else out.push(/^gpt$/i.test(w) ? "GPT" : w.charAt(0).toUpperCase() + w.slice(1));
+  }
+  return out.join(" ").replace(/^GPT (\d)/, "GPT-$1");
+}
+// Your plan for the app's maker, as Settings names it (Your subscriptions): Claude's for Claude's apps, ChatGPT's for Codex.
+export function planFor(manager: string): string | null {
+  const p = settings().plans ?? {};
+  if (/codex|chatgpt/i.test(manager)) return p.chatgpt?.name ?? null;
+  if (/claude/i.test(manager)) return p.claude?.name ?? null;
+  return null;
+}
 const FULL_PATH = /^(~|\/|[A-Za-z]:[\\/]|\\\\)/; // ~/..., /..., C:\..., \\server
 
 // The request body of POST /api/plan, checked: the input, or one sentence saying what is wrong.
@@ -471,7 +504,9 @@ export function checkPlan(b: any, trusted = false): Omit<PlanInput, "signal"> | 
   const manager = typeof b.manager === "string" && b.manager.trim() ? plainText(b.manager, 60) : null;
   const split = b.split === "rules" ? "rules" : "auto";
   if (b.private !== undefined && typeof b.private !== "boolean") return "private must be true or false.";
-  return { task: b.task.trim(), files, manager, split, ...(b.private ? { private: true } : {}) };
+  const yourModel = nameOf(b.your_model ?? b.yourModel);
+  if (yourModel === false) return "your_model must be a model's name, like claude-opus-5-5.";
+  return { task: b.task.trim(), files, manager, split, ...(b.private ? { private: true } : {}), ...(yourModel ? { yourModel } : {}) };
 }
 
 // The plan whose limits count: Codex spends a ChatGPT plan, the others a Claude plan when they are Claude's.
@@ -536,13 +571,17 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
   const wantsLocal = placed.some((p) => DELEGATE_KIND[p.kind] && localTakes(p) && (p.where === "paid" || (p.where === "you" && p.why.startsWith("Leanfare has no model"))));
   const sg = wantsLocal ? suggestLocal().suggestion : null;
   const local = sg ? { name: sg.name, size: sg.size, like: sg.like, rating: sg.rating, fit: sg.fit } : null;
-  const base = { task: input.task, manager, parts: placed, totals, split, limits: known ? limits : null, local, codex: codex.why, ...(input.private ? { private: true } : {}) };
+  const you = { model: input.yourModel ?? null, label: input.yourModel ? modelName(input.yourModel) : null, plan: planFor(manager) };
+  const base = { task: input.task, manager, parts: placed, totals, split, limits: known ? limits : null, local, codex: codex.why, ...(input.private ? { private: true } : {}), you };
   const result: PlanResult = { id: randomId(), ...base, table: tableOf(base), next: nextOf(base) };
   keep(result, new Map(input.files.filter((f) => f.path).map((f) => [f.name, { path: f.path!, size: f.size }])));
   return result;
 }
 
 // ---- running a plan ---------------------------------------------------------------------------------
+
+// The app a plan came from and the model it runs on, kept with each part's row (the report shows them).
+const appOf = (plan: PlanResult) => ({ app: plan.manager === "you" ? null : plan.manager, appModel: plan.you?.model ?? null });
 // The parts Leanfare runs, run at once where they can, each as soon as the parts it needs are back,
 // with their answers handed on in its task. The parts that stay with the person are theirs, and so is a
 // part that needs one of those (after_yours: they hand it over once theirs is done); a part that needs
@@ -691,14 +730,14 @@ async function runPart(p: Part, plan: PlanResult, at: (n: number) => RunPart, si
     const folder = commonFolder(paths);
     const r = await runCodex({ n: p.n, title: p.title, task, folder, files: folder ? paths.map((x) => relative(folder, x)) : paths, effort: p.effort }, signal);
     const bytes = p.files.reduce((n, f) => n + (known.get(f)?.size ?? 0), 0);
-    notePart({ kind: p.kind, effort: p.effort, model: CODEX_ID, cost: 0, files: paths.length, fileTokens: Math.ceil(bytes / 4), task, answer: r.answer, plan: `${plan.id}:${p.n}` });
+    notePart({ kind: p.kind, effort: p.effort, model: CODEX_ID, cost: 0, files: paths.length, fileTokens: Math.ceil(bytes / 4), task, answer: r.answer, plan: `${plan.id}:${p.n}`, ...appOf(plan) });
     return { status: "done", answer: r.answer, receipt: `${CODEX_LABEL}, read only, ${secondsText(r.seconds)}. It counts in your ChatGPT plan's Codex use; nothing to pay here.`, model: CODEX_LABEL, modelId: CODEX_ID, cost: 0, seconds: r.seconds };
   }
   if (plan.private && p.where !== "local") throw Object.assign(new UserError(409, "This plan is to stay on this computer, and this part was not placed here. Make the plan again.", "private_part"), { spent: 0 });
   if (p.kind === "search" && p.model) {
     const r = await runChat([{ role: "user", content: task }], p.model.id, signal, () => {}, `Plan part ${p.n}`, { source: "plan", maxOut: 4096 });
     if (r.status !== "ok") return { status: r.status === "stopped" ? "stopped" : "failed", error: String(r.meta?.error ?? "It failed."), cost: r.meta?.spent ?? r.meta?.cost ?? null, model: r.meta?.model?.label ?? null };
-    notePart({ kind: "search", effort: p.effort, model: r.meta.model.id, cost: r.meta.spent ?? r.meta.cost ?? null, files: 0, fileTokens: 0, task, answer: r.text, plan: `${plan.id}:${p.n}` });
+    notePart({ kind: "search", effort: p.effort, model: r.meta.model.id, cost: r.meta.spent ?? r.meta.cost ?? null, files: 0, fileTokens: 0, task, answer: r.text, plan: `${plan.id}:${p.n}`, ...appOf(plan) });
     return { status: "done", answer: r.text, receipt: `${r.meta.model.label}, ${usd(r.meta.cost ?? null)}.`, model: r.meta.model.label, modelId: r.meta.model.id, cost: r.meta.spent ?? r.meta.cost ?? null, seconds: (r.meta.ms ?? 0) / 1000 };
   }
   // Its files, as many as one hand off takes, in the plan's order; one that cannot be read is left out and named.
@@ -713,7 +752,7 @@ async function runPart(p: Part, plan: PlanResult, at: (n: number) => RunPart, si
   if (mine.length && !files.length) throw Object.assign(new UserError(400, `None of its files could be handed over${skipped.length ? `: ${skipped.slice(0, 3).join("; ")}` : ""}.`, "plan_files"), { spent: 0 });
   // A free part stays on free models, its check too; a paid part within the cap goes unchecked (the estimate holds no check).
   const free = p.where === "local" || p.where === "free";
-  const d = await runDelegate({ task, files, kind: DELEGATE_KIND[p.kind] ?? null, effort: p.effort, check: free || yes ? "auto" : "never", maxOut: DEFAULT_MAX_OUT, ...(free ? { only: isFree } : {}), ...(p.model ? { model: p.model.id } : {}), plan: `${plan.id}:${p.n}`, ...(plan.private ? { private: true } : {}) }, signal);
+  const d = await runDelegate({ task, files, kind: DELEGATE_KIND[p.kind] ?? null, effort: p.effort, check: free || yes ? "auto" : "never", maxOut: DEFAULT_MAX_OUT, ...(free ? { only: isFree } : {}), ...(p.model ? { model: p.model.id } : {}), plan: `${plan.id}:${p.n}`, ...(plan.private ? { private: true } : {}), ...appOf(plan) }, signal);
   const notes = [
     mine.length > files.length + skipped.length ? `Handed over ${files.length} of its ${mine.length} files (the most one hand off takes is ${DELEGATE_LIMITS.count} files, ${DELEGATE_LIMITS.total / 1048576} MB).` : "",
     skipped.length ? `Left out: ${skipped.slice(0, 3).join("; ")}${skipped.length > 3 ? `, and ${skipped.length - 3} more` : ""}.` : "",
