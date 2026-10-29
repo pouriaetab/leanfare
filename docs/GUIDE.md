@@ -125,6 +125,7 @@ Claude stays in charge and hands pieces of work to Leanfare: searching or summar
 ```
 
 - **Effort.** `low` takes the cheapest model rated within 80 points of the best you ticked (Save more), `medium` within 40 (Balanced), `high` within 15 (Best quality). It is also the thinking effort for models that think.
+- **Models that think.** A cloud model that thinks before it answers (Gemini, GPT-5, Grok and others) counts its thinking toward the answer's limit, so Leanfare gives it room for its thinking on top of the limit it asks: 2,048 tokens at low effort, 8,192 at medium, 24,576 at high. One that still runs out while thinking, and hands back its thinking or nothing, is asked again with twice the room. An app's own limit is sent as the app set it.
 - **Kind.** `read` (find, pull out, summarize), `write` (draft text or code) or `reason` (work something out) decides which Arena rating counts.
 - **Speed.** `cheapest`, `fastest` or a number of seconds, as in [Speed](#speed); by default your choice in Settings.
 - **Checks.** A model rated above the one that answered checks every high effort answer, 1 in 4 medium ones and 1 in 10 low ones. A failed answer is asked again one tier up, with the checker's reason. Neither a check nor a second try goes past your budget.
