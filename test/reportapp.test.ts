@@ -35,7 +35,7 @@ const REPORT = (range = "7d", kept = 1_420_000) => ({
   series: Array.from({ length: 8 }, (_, i) => ({ at: new Date(Date.parse("2026-10-14T00:00:00Z") + i * 86_400_000).toISOString(), kept: 100_000 * i, used: 300_000 + 50_000 * i })),
   byModel: [{ label: "Gemini 3.5 Flash-Lite", where: "free", read: 820_000, parts: 23, cost: 0, goodShare: 0.91 }, { label: "DeepSeek V4 Flash", where: "paid", read: 72_000, parts: 4, cost: 0.38, goodShare: 0.75 }],
   byKind: [],
-  prompts: [{ ts: "2026-10-21T11:41:00Z", app: "Claude", model: "Claude Opus 5.5", plan: "Max", parts: ["Gemini 3.5 Flash-Lite", "qwen3.5:9b"], kept: 158_000, saved: null, grade: "good" }],
+  prompts: [{ id: "PRM-12", ts: "2026-10-21T11:41:00Z", app: "Claude", model: "Claude Opus 5.5", plan: "Max", parts: ["Gemini 3.5 Flash-Lite", "qwen3.5:9b"], kept: 158_000, saved: null, grade: "good" }],
   open_url: "http://127.0.0.1:4747/#report",
 });
 
@@ -51,7 +51,7 @@ describe("the report inside the chat (an MCP App)", () => {
     expect(doc.querySelectorAll(".chart path.l1, .chart path.l2")).toHaveLength(2);
     expect([...doc.querySelectorAll(".bar .n")].map((e: any) => e.textContent)).toEqual(["Gemini 3.5 Flash-Litefree", "DeepSeek V4 Flash$0.38"]);
     expect(doc.querySelector(".p").textContent).toContain("Claude · Claude Opus 5.5 · Max → Gemini 3.5 Flash-Lite, qwen3.5:9b158k kept✓ good");
-    expect(doc.querySelector(".p .w").textContent).toMatch(/Oct 21/); // 7 days: a prompt's day too, not only its time
+    expect(doc.querySelector(".p .w").textContent).toMatch(/^PRM-12 Oct 21/); // its id, and in 7 days its day too, not only its time
     expect(doc.querySelector(".chips button.on").textContent).toBe("7 days");
     expect(sent.some((m) => m.method === "ui/notifications/size-changed")).toBe(true);
   });

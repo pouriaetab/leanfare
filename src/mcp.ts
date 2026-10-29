@@ -155,12 +155,13 @@ const TOOLS = [
   {
     name: "report",
     title: "Leanfare's report",
-    description: "What Leanfare did for the user's apps over a span of time: the tokens its models read so the apps did not (kept out of their plans), the apps' own use where it is known (Claude Code's, from its own files), the cost, the quality (the apps' grades and the blind checks), tokens over time, the work by model, and the last prompts with what each handed off. Use it when the user asks what Leanfare saved, how the models did, or for a report. Apps that show MCP Apps draw it as a card with spans to pick.",
+    description: "What Leanfare did for the user's apps over a span of time: the tokens its models read so the apps did not (kept out of their plans), the apps' own use where it is known (Claude Code's, from its own files), the cost, the quality (the apps' grades and the blind checks), tokens over time, the work by model, and the last prompts with what each handed off. Each prompt has an id (PRM-41), kept for good; give prompt for one prompt and its parts. Use it when the user asks what Leanfare saved, how the models did, or for a report. Apps that show MCP Apps draw it as a card with spans to pick.",
     inputSchema: {
       type: "object",
       properties: {
         range: { type: "string", enum: ["1h", "6h", "today", "7d", "30d", "year"], description: "The span: the last hour, 6 hours, today, the last 7 or 30 days, or the last year. Default 7d." },
         app: { type: "string", description: "Only the prompts of this app, as Leanfare names it (Claude Code, Claude, Codex)." },
+        prompt: { type: "string", description: "One prompt's id from a report, like PRM-41: that prompt and each of its parts (PRM-41.1, PRM-41.2). range and app are then left out." },
       },
       additionalProperties: false,
     },
@@ -243,17 +244,30 @@ export function reportLines(r: any, range: string): string {
     `Cost of the hand offs: ${usd(t.cost.usd)}; ${pctOf(t.cost.freeShare)} of parts free or on this computer; ${t.cost.parts} parts in ${t.cost.prompts} prompts.`,
     `Quality: ${t.quality.graded ? `${pctOf(t.quality.goodShare)} good (${t.quality.partly} partly, ${t.quality.wrong} wrong; ${t.quality.blind} judged blind)` : "not graded yet"}.`,
     r.byModel.length ? `Work by model: ${r.byModel.slice(0, 6).map((m: any) => `${m.label} ${tokShort(m.read)} tokens, ${m.parts} part${m.parts === 1 ? "" : "s"}${m.goodShare !== null ? `, ${pctOf(m.goodShare)} good` : ""}`).join("; ")}.` : "",
-    `Last prompts:\n${r.prompts.slice(0, 6).map((p: any) => `- ${new Date(p.ts).toISOString().slice(0, 16).replace("T", " ")} UTC, ${p.app}${p.model ? ` (${p.model.label}${p.plan ? `, ${planShort(p.plan)}` : ""})` : ""}: ${p.parts.length ? `${[...new Set(p.parts.map((x: any) => x.label))].join(", ")}, ${tokShort(p.kept)} kept out${p.saved !== null ? `, ${pctOf(p.saved)} saved` : ""}` : "nothing handed off"}${p.grade ? `, ${p.grade}` : ""}`).join("\n")}`,
+    `Last prompts:\n${r.prompts.slice(0, 6).map((p: any) => `- ${p.id ? `${p.id}, ` : ""}${new Date(p.ts).toISOString().slice(0, 16).replace("T", " ")} UTC, ${p.app}${p.model ? ` (${p.model.label}${p.plan ? `, ${planShort(p.plan)}` : ""})` : ""}: ${p.parts.length ? `${[...new Set(p.parts.map((x: any) => x.label))].join(", ")}, ${tokShort(p.kept)} kept out${p.saved !== null ? `, ${pctOf(p.saved)} saved` : ""}` : "nothing handed off"}${p.grade ? `, ${p.grade}` : ""}`).join("\n")}`,
     `The full report: Leanfare, Savings (${where().base}/#report).`,
   ];
   return lines.filter(Boolean).join("\n");
+}
+// One prompt and its parts, by its id (report with prompt).
+const KIND_WORD: Record<string, string> = { read: "reading", write: "drafting", reason: "working out", search: "search" };
+const WHERE_WORD: Record<string, string> = { local: "on this computer", free: "free", plan: "on your ChatGPT plan", paid: "paid" };
+export function promptLines(r: any): string {
+  const p = r.prompts[0];
+  if (!p) return "Leanfare's report: no such prompt in the report.";
+  const when = new Date(p.ts).toISOString().slice(0, 16).replace("T", " ");
+  const head = `Prompt ${p.id}: ${when} UTC, ${p.app}${p.model ? ` (${p.model.label}${p.plan ? `, ${planShort(p.plan)}` : ""})` : ""}.`;
+  const own = p.own ? `Its own work: ${tokShort(p.own.fresh)} new tokens (measured)${p.own.cached ? `, ${tokShort(p.own.cached)} more read again from the cache` : ""}.` : "Its own work: not known (this app does not share it).";
+  const sum = p.parts.length ? `Kept out: ${tokShort(p.kept)} tokens${p.saved !== null ? ` (${pctOf(p.saved)} of its use)` : ""}; cost ${usd(p.cost)}${p.grade ? `; lowest grade ${p.grade}` : ""}.` : "Nothing handed off.";
+  const parts = p.parts.map((x: any) => `- ${x.ref ?? `#${x.id}`} ${KIND_WORD[x.kind] ?? x.kind ?? "part"}: ${x.label}, ${tokShort(x.read)} read, ${tokShort(x.back)} back, ${x.where === "paid" ? usd(x.cost) : WHERE_WORD[x.where]}${x.ms ? `, ${Math.max(1, Math.round(x.ms / 1000))} s` : ""}${x.grade ? `, ${x.grade}${x.gradedBy === "check" ? ` (checked blind${x.checker ? ` by ${x.checker}` : ""})` : " (by your app)"}` : ""}${x.side ? `, side by side: ${x.side === "same" ? "as good as the top model's" : x.side === "better" ? "better than the top model's" : "the top model's was better"}` : ""} (hand off ${x.id})`);
+  return [head, own, sum, parts.length ? `Parts:\n${parts.join("\n")}` : "", `The full report: Leanfare, Savings (${where().base}/#report).`].filter(Boolean).join("\n");
 }
 function compactReport(r: any, range: string, app: string | null = null) {
   return {
     range, app, from: r.from, to: r.to, step: r.step, tiles: r.tiles, series: r.series,
     byModel: r.byModel.slice(0, 6).map((m: any) => ({ label: m.label, where: m.where, read: m.read, parts: m.parts, cost: m.cost, goodShare: m.goodShare })),
     byKind: r.byKind,
-    prompts: r.prompts.slice(0, 6).map((p: any) => ({ ts: p.ts, app: p.app, model: p.model?.label ?? null, plan: planShort(p.plan), parts: [...new Set(p.parts.map((x: any) => x.label))], kept: p.kept, saved: p.saved, grade: p.grade })),
+    prompts: r.prompts.slice(0, 6).map((p: any) => ({ id: p.id, ts: p.ts, app: p.app, model: p.model?.label ?? null, plan: planShort(p.plan), parts: [...new Set(p.parts.map((x: any) => x.label))], kept: p.kept, saved: p.saved, grade: p.grade })),
     open_url: `${where().base}/#report`,
   };
 }
@@ -568,6 +582,10 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
     return text(reportText(r, "mcp"), { running: false, status: r.status, lowest_passing: r.lowest, claude_line: r.claudeLine, arms: r.arms.map((a: any) => ({ effort: a.effort, right: a.right, answered: a.answered, verdict: a.verdict, cost_usd: a.cost })), share_url: r.share.url });
   }
   if (name === "report") {
+    if (typeof args?.prompt === "string" && args.prompt.trim()) {
+      const { j: r } = await call(`/api/report?prompt=${encodeURIComponent(args.prompt.trim().slice(0, 20))}`, {}, signal);
+      return text(promptLines(r), compactReport(r, "prompt"));
+    }
     const range = ["1h", "6h", "today", "7d", "30d", "year"].includes(args?.range) ? args.range : "7d";
     const app = typeof args?.app === "string" && args.app.trim() ? args.app.trim().slice(0, 60) : null;
     const { j: r } = await call(`/api/report?range=${range}${app ? `&app=${encodeURIComponent(app)}` : ""}`, {}, signal);

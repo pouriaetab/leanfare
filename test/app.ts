@@ -41,7 +41,7 @@ export async function reset(patch: Partial<Settings> = {}) {
   setPaused(false);
   setNow("2026-10-21T12:00:00Z");
   await stopTrial();
-  db.exec("DELETE FROM ledger; DELETE FROM messages; DELETE FROM chats; DELETE FROM settings; DELETE FROM files; DELETE FROM delegations; DELETE FROM trials; DELETE FROM grades; DELETE FROM comparisons;");
+  db.exec("DELETE FROM ledger; DELETE FROM messages; DELETE FROM chats; DELETE FROM settings; DELETE FROM files; DELETE FROM delegations; DELETE FROM trials; DELETE FROM grades; DELETE FROM comparisons; DELETE FROM prompts;");
   forgetGrades();
   resetSettingsCache();
   resetBudget();

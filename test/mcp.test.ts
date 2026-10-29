@@ -313,9 +313,9 @@ describe("the tools", () => {
     expect(t).toStartWith("Leanfare's report, today: 20k tokens kept out of your plans.");
     expect(t).toContain("Your apps' own use: Claude: not known.");
     expect(t).toContain("Quality: 100% good (0 partly, 0 wrong; 0 judged blind).");
-    expect(t).toContain("Last prompts:\n- 2026-10-21 11:00 UTC, Claude (Claude Opus 5.5): Gemini 3.8 Flash, 20k kept out, good");
+    expect(t).toContain("Last prompts:\n- PRM-1, 2026-10-21 11:00 UTC, Claude (Claude Opus 5.5): Gemini 3.8 Flash, 20k kept out, good");
     expect(t).toMatch(/The full report: Leanfare, Savings \(http:\/\/127\.0\.0\.1:\d+\/#report\)\.$/);
-    expect(r.result.structuredContent).toMatchObject({ range: "today", prompts: [{ app: "Claude", model: "Claude Opus 5.5", parts: ["Gemini 3.8 Flash"], kept: 20000, grade: "good" }] });
+    expect(r.result.structuredContent).toMatchObject({ range: "today", prompts: [{ id: "PRM-1", app: "Claude", model: "Claude Opus 5.5", parts: ["Gemini 3.8 Flash"], kept: 20000, grade: "good" }] });
     expect(r.result.structuredContent.open_url).toMatch(/\/#report$/);
     const list = await rpc("resources/list", {});
     expect(list.result.resources.map((x: any) => x.uri)).toEqual(["ui://leanfare/plan", "ui://leanfare/report"]);
@@ -325,6 +325,11 @@ describe("the tools", () => {
     const none = await rpc("tools/call", { name: "report", arguments: { range: "1h", app: "Codex" } });
     expect(none.result.content[0].text).toBe("Leanfare's report, the last hour: nothing handed to Leanfare yet in this span.");
     expect(none.result.structuredContent).toMatchObject({ range: "1h", app: "Codex", prompts: [] }); // the card asks again for the same app
+    const one = await rpc("tools/call", { name: "report", arguments: { prompt: "prm-1" } }); // one prompt by its id, with its parts
+    expect(one.result.content[0].text).toMatch(/^Prompt PRM-1: 2026-10-21 11:00 UTC, Claude \(Claude Opus 5\.5\)\.\nIts own work: not known \(this app does not share it\)\.\nKept out: 20k tokens; cost \$0; lowest grade good\.\nParts:\n- PRM-1\.1 reading: Gemini 3\.8 Flash, 20k read, 300 back, free, good \(by your app\) \(hand off \d+\)\n/);
+    expect(one.result.structuredContent).toMatchObject({ range: "prompt", prompts: [{ id: "PRM-1" }] });
+    const unknown = await rpc("tools/call", { name: "report", arguments: { prompt: "PRM-9" } });
+    expect([unknown.result.isError, unknown.result.content[0].text]).toEqual([true, "No prompt PRM-9 yet: an id the report gave, like PRM-41."]);
   });
 
   test("works while Leanfare is locked (the door uses the control token)", async () => {

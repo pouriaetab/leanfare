@@ -343,7 +343,9 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
 .rp-kind .stack .none { background: var(--line); }
 .rp-kind .meta { grid-area: meta; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; color: var(--muted); font-size: 12.5px; }
 .rp-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; padding-right: 10px; }
-.rp-table th:nth-child(n+6):not(:last-child) { text-align: right; padding-right: 10px; }
+.rp-table th:nth-child(n+7):not(:last-child) { text-align: right; padding-right: 10px; }
+.rp-table td.pid { white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 600; }
+.rp-table tr.part td.pid { font-weight: 500; }
 .rp-table tr.pr { cursor: pointer; }
 .rp-table tr.pr:hover td { background: var(--panel-2); }
 .rp-table tr.part td { background: var(--panel-2); font-size: 12.5px; }

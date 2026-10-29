@@ -92,6 +92,45 @@ describe("each prompt", () => {
   });
 });
 
+describe("prompt ids", () => {
+  test("PRM and a number, one count for every app, given once and kept, oldest first; each part numbered under its prompt", async () => {
+    const r = await report(day());
+    expect(r.prompts.map((p: any) => [p.ts.slice(11, 16), p.app, p.id])).toEqual([["11:30", "Claude", "PRM-4"], ["11:00", "Claude", "PRM-3"], ["10:30", "Claude Code", "PRM-2"], ["10:00", "Claude Code", "PRM-1"]]);
+    expect(r.prompts[3].parts.map((x: any) => x.ref)).toEqual(["PRM-1.1", "PRM-1.2"]);
+    expect(r.prompts[1].parts.map((x: any) => x.ref)).toEqual(["PRM-3.1", "PRM-3.2"]);
+    const ds = await report(day({ provider: "deepseek" })); // a filter shows the same ids
+    expect([ds.prompts[0].id, ds.prompts[0].parts[0].ref]).toEqual(["PRM-1", "PRM-1.2"]);
+    const both = await Promise.all([report(day()), report(day({ app: "Claude" }))]); // asked twice at once: the same ids
+    expect(both[1].prompts.map((p: any) => p.id)).toEqual(["PRM-4", "PRM-3"]);
+    hand("2026-10-21T11:50:00Z", { app: "Claude", app_model: "claude-opus-5-5", file_tokens: 500 }); // a new prompt: the next number
+    expect((await report(day())).prompts.map((p: any) => p.id)).toEqual(["PRM-5", "PRM-4", "PRM-3", "PRM-2", "PRM-1"]);
+    expect(db.query("SELECT COUNT(*) AS n FROM prompts").get()).toEqual({ n: 5 });
+  });
+
+  test("the first report numbers every prompt it can find, oldest first, whatever span it shows", async () => {
+    db.exec("DELETE FROM prompts");
+    hand("2026-10-10T08:00:00Z", { app: "Claude", app_model: "claude-opus-5-5", file_tokens: 900 }); // 11 days before the span asked
+    hand("2026-10-12T08:00:00Z", { app: "Zed Editor", file_tokens: 900 });
+    const r = await report(day());
+    expect(r.prompts.filter((p: any) => p.app === "Claude").map((p: any) => p.id)).toEqual(["PRM-6", "PRM-5"]);
+    expect((await report(checkReport(new URLSearchParams({ range: "30d" })) as any)).prompts.slice(-2).map((p: any) => [p.app, p.id])).toEqual([["Zed Editor", "PRM-2"], ["Claude", "PRM-1"]]);
+  });
+
+  test("one prompt by its id: that prompt and its parts, from its start, whatever the range", async () => {
+    await report(day());
+    const q = checkReport(new URLSearchParams({ prompt: "prm-1", range: "1h" })) as any;
+    expect([q.from, q.prompt]).toEqual([Date.parse("2026-10-21T10:00:00Z"), "PRM-1"]);
+    const r = await report(q);
+    expect(r.prompts.map((p: any) => [p.id, p.parts.length, p.kept])).toEqual([["PRM-1", 2, 46000]]);
+    expect(checkReport(new URLSearchParams({ prompt: "PRM-99" }))).toBe("No prompt PRM-99 yet: an id the report gave, like PRM-41.");
+    expect(checkReport(new URLSearchParams({ prompt: "CC-1" }))).toBe("prompt must be an id from the report, like PRM-41.");
+    expect(checkReport(new URLSearchParams({ prompt: "the nightly job" }))).toBe("prompt must be an id from the report, like PRM-41.");
+    const g = await ui(url, "/api/report?prompt=PRM-3");
+    expect([g.status, g.json.prompts.map((p: any) => [p.app, p.id])]).toEqual([200, [["Claude", "PRM-3"]]]);
+    expect((await ui(url, "/api/report?prompt=PRM-77")).status).toBe(400);
+  });
+});
+
 describe("the tiles, the chart and the breakdowns", () => {
   test("kept out, its share where the apps' use is known, the apps' own use, the cost and the quality", async () => {
     const r = await report(day());
