@@ -220,15 +220,15 @@ const add = (...v: (number | null | undefined)[]) => (v.some((x) => x === null) 
 // Tokens as Leanfare estimates them everywhere (about four characters each).
 const tokensOf = (chars: number) => Math.ceil(chars / 4);
 
-const INSERT = `INSERT INTO delegations(ts, month, day, task, kind, effort, model, cost, files, file_tokens, answer_tokens, status, chance, checker, verdict, check_cost, rerun, rerun_cost, plan, task_tokens, app, app_model)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const INSERT = `INSERT INTO delegations(ts, month, day, task, kind, effort, model, cost, files, file_tokens, answer_tokens, status, chance, checker, verdict, check_cost, rerun, rerun_cost, plan, task_tokens, app, app_model, ms)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 // taskTokens: a plan part's own text, which Leanfare wrote from the plan (the part, what the earlier parts
 // found, the task it belongs to): the app that asked never read it. A hand off's task the app wrote itself: 0.
-function writeRow(row: { task: string; kind: string | null; effort: Effort; model: string | null; cost: number | null; files: number; fileTokens: number; answerTokens: number; status: string; chance: number; checker: string | null; verdict: string | null; checkCost: number | null; rerun: string | null; rerunCost: number | null; plan?: string | null; taskTokens?: number; app?: string | null; appModel?: string | null }): number | null {
+function writeRow(row: { task: string; kind: string | null; effort: Effort; model: string | null; cost: number | null; files: number; fileTokens: number; answerTokens: number; status: string; chance: number; checker: string | null; verdict: string | null; checkCost: number | null; rerun: string | null; rerunCost: number | null; plan?: string | null; taskTokens?: number; app?: string | null; appModel?: string | null; ms?: number | null }): number | null {
   const d = now();
   try {
-    const r = db.query(INSERT).run(d.toISOString(), localMonth(d), localDay(d), row.task, row.kind, row.effort, row.model, row.cost, row.files, row.fileTokens, row.answerTokens, row.status, row.chance, row.checker, row.verdict, row.checkCost, row.rerun, row.rerunCost, row.plan ?? null, row.taskTokens ?? 0, row.app ?? null, row.appModel ?? null);
+    const r = db.query(INSERT).run(d.toISOString(), localMonth(d), localDay(d), row.task, row.kind, row.effort, row.model, row.cost, row.files, row.fileTokens, row.answerTokens, row.status, row.chance, row.checker, row.verdict, row.checkCost, row.rerun, row.rerunCost, row.plan ?? null, row.taskTokens ?? 0, row.app ?? null, row.appModel ?? null, row.ms ?? null);
     return Number(r.lastInsertRowid);
   } catch (e) { console.error("leanfare: could not write the delegate's row:", String(e)); return null; } // the answer matters more than the row
 }
@@ -236,9 +236,9 @@ function writeRow(row: { task: string; kind: string | null; effort: Effort; mode
 // A plan part that ran without the delegate (a web search, or Codex on the user's ChatGPT plan), kept with the
 // hand offs so Savings shows all of Leanfare's work for an app. No words: its kind, model, sizes and cost.
 const KIND_TASK: Record<string, string> = { read: "longer_query", write: "instruction_following", reason: "hard_prompts" };
-export function notePart(p: { kind: string; effort: Effort; model: string; cost: number | null; files: number; fileTokens: number; task: string; answer: string; plan: string; app?: string | null; appModel?: string | null }): number | null {
+export function notePart(p: { kind: string; effort: Effort; model: string; cost: number | null; files: number; fileTokens: number; task: string; answer: string; plan: string; app?: string | null; appModel?: string | null; ms?: number | null }): number | null {
   return writeRow({ task: KIND_TASK[p.kind] ?? "overall", kind: p.kind, effort: p.effort, model: p.model, cost: p.cost, files: p.files, fileTokens: p.fileTokens, answerTokens: tokensOf(p.answer.length),
-    status: "ok", chance: 0, checker: null, verdict: null, checkCost: null, rerun: null, rerunCost: null, plan: p.plan, taskTokens: tokensOf(p.task.length), app: p.app ?? null, appModel: p.appModel ?? null });
+    status: "ok", chance: 0, checker: null, verdict: null, checkCost: null, rerun: null, rerunCost: null, plan: p.plan, taskTokens: tokensOf(p.task.length), app: p.app ?? null, appModel: p.appModel ?? null, ms: p.ms ?? null });
 }
 
 // How the app that asked graded a hand off's answer, kept with its row: the hand off's row when the app
@@ -461,7 +461,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     cut: final.meta.finish === "length",
     seconds: (performance.now() - started) / 1000,
   };
-  result.row = write({ ...row, model: first.meta.model.id, cost: first.cost, answerTokens, status: "ok", chance, checker: check.checker?.id ?? null, verdict: picked ? check.verdict : null, checkCost: check.cost, rerun: firstUsed ? model.id : null, rerunCost });
+  result.row = write({ ...row, model: first.meta.model.id, cost: first.cost, answerTokens, status: "ok", chance, checker: check.checker?.id ?? null, verdict: picked ? check.verdict : null, checkCost: check.cost, rerun: firstUsed ? model.id : null, rerunCost, ms: Math.round(result.seconds * 1000) });
   // Now and then the top model answers it too, and a judge of a third company compares the two blind (sidebyside.ts).
   // In the background: this answer goes back now. Not for a private task, nor a plan's part kept to free or local
   // models, nor an answer a failed check replaced (the check judged it).

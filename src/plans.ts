@@ -144,8 +144,10 @@ export function limitsOf(rl: any, at: number): Limits | null {
 }
 
 // What else a log file says besides the answers: the project folder it ran in (only the folder's own
-// name is kept, never the path above it) and, for Codex, how much of the plan each message had used.
-export interface FileMeta { project: string | null; snaps: Limits[] }
+// name is kept, never the path above it), for Codex how much of the plan each message had used, and for Claude Code
+// when each of your prompts began and how long it was (its length in characters only, never its words).
+export interface PromptStart { ts: number; chars: number }
+export interface FileMeta { project: string | null; snaps: Limits[]; prompts?: PromptStart[] }
 export const folderName = (cwd: unknown): string | null => (typeof cwd === "string" && cwd.trim() ? cwd.trim().replace(/[\\/]+$/, "").split(/[\\/]/).pop() || null : null);
 
 export async function readCodex(path: string, onLimits?: (l: Limits) => void, meta?: FileMeta): Promise<Entry[]> {
@@ -190,10 +192,25 @@ export async function readClaude(path: string, meta?: FileMeta): Promise<Entry[]
   for await (const line of linesOf(path)) {
     // The folder the session ran in: from the first line that names it (only the folder's own name is kept).
     if (meta && !meta.project && line.includes('"cwd"')) { try { meta.project = folderName(JSON.parse(line)?.cwd); } catch {} }
+    if (meta) { const p = claudePrompt(line); if (p) (meta.prompts ??= []).push(p); }
     const e = claudeEntry(line);
     if (e) out.push(e);
   }
   return out;
+}
+
+// A prompt you typed in Claude Code: a user line that is not a tool's result, not Claude Code's own note
+// (isMeta), not a subagent's (isSidechain) and not a summary after compacting. Kept: its time and length.
+export function claudePrompt(line: string): PromptStart | null {
+  if (!line.includes('"user"')) return null;
+  let o: any;
+  try { o = JSON.parse(line); } catch { return null; }
+  if (o?.type !== "user" || o.isMeta || o.isSidechain || o.isCompactSummary || o.message?.role !== "user") return null;
+  const c = o.message.content;
+  const chars = typeof c === "string" ? c.length
+    : Array.isArray(c) && !c.some((b: any) => b?.type === "tool_result") ? c.reduce((n: number, b: any) => n + (b?.type === "text" && typeof b.text === "string" ? b.text.length : 0), 0) : -1;
+  const ts = Date.parse(o.timestamp);
+  return chars > 0 && Number.isFinite(ts) ? { ts, chars } : null;
 }
 
 // What is already read: a file is read again only when its size or time changed.
@@ -205,7 +222,7 @@ async function entriesOf(f: LogFile, provider: PlanProvider): Promise<Read> {
   const hit = fileCache.get(f.path);
   if (hit && hit.mtime === f.mtime && hit.size === f.size) return hit;
   let entries: Entry[] = [], limits: Limits | null = null;
-  const meta: FileMeta = { project: null, snaps: [] };
+  const meta: FileMeta = { project: null, snaps: [], prompts: [] };
   try { entries = provider === "claude" ? await readClaude(f.path, meta) : await readCodex(f.path, (l) => { limits = l; }, meta); } catch {} // a file that vanished or cannot be read counts as empty
   const got: Read = { mtime: f.mtime, size: f.size, entries, limits, meta };
   fileCache.set(f.path, got);
@@ -235,6 +252,18 @@ export async function recentEntries(provider: PlanProvider, since: number): Prom
   }
   snaps.sort((a, b) => a.at - b.at);
   return { entries: [...merged.values(), ...loose].sort((a, b) => a.ts - b.ts), snaps, found: dirs.length > 0 };
+}
+
+// For the report (report.ts): Claude Code's prompts since a time, each with its session (the file) and project.
+export interface PromptEntry { ts: number; chars: number; file: string; project: string | null }
+export async function recentPrompts(since: number): Promise<PromptEntry[]> {
+  const { files } = listFiles(claudeDirs(), logMatch("claude"), since - 36 * 3600_000);
+  const out: PromptEntry[] = [];
+  for (const f of files) {
+    const got = await entriesOf(f, "claude");
+    for (const p of got.meta.prompts ?? []) if (p.ts >= since) out.push({ ...p, file: f.path, project: got.meta.project });
+  }
+  return out.sort((a, b) => a.ts - b.ts);
 }
 
 // ---- the month's numbers ----------------------------------------------------------------------------

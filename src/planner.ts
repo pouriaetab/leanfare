@@ -761,14 +761,14 @@ async function runPart(p: Part, plan: PlanResult, at: (n: number) => RunPart, si
     const folder = commonFolder(paths);
     const r = await runCodex({ n: p.n, title: p.title, task, folder, files: folder ? paths.map((x) => relative(folder, x)) : paths, effort: p.effort }, signal);
     const bytes = p.files.reduce((n, f) => n + (known.get(f)?.size ?? 0), 0);
-    notePart({ kind: p.kind, effort: p.effort, model: CODEX_ID, cost: 0, files: paths.length, fileTokens: Math.ceil(bytes / 4), task, answer: r.answer, plan: `${plan.id}:${p.n}`, ...appOf(plan) });
+    notePart({ kind: p.kind, effort: p.effort, model: CODEX_ID, cost: 0, files: paths.length, fileTokens: Math.ceil(bytes / 4), task, answer: r.answer, plan: `${plan.id}:${p.n}`, ...appOf(plan), ms: Math.round(r.seconds * 1000) });
     return { status: "done", answer: r.answer, receipt: `${CODEX_LABEL}, read only, ${secondsText(r.seconds)}. It counts in your ChatGPT plan's Codex use; nothing to pay here.`, model: CODEX_LABEL, modelId: CODEX_ID, cost: 0, seconds: r.seconds };
   }
   if (plan.private && p.where !== "local") throw Object.assign(new UserError(409, "This plan is to stay on this computer, and this part was not placed here. Make the plan again.", "private_part"), { spent: 0 });
   if (p.kind === "search" && p.model) {
     const r = await runChat([{ role: "user", content: task }], p.model.id, signal, () => {}, `Plan part ${p.n}`, { source: "plan", maxOut: 4096 });
     if (r.status !== "ok") return { status: r.status === "stopped" ? "stopped" : "failed", error: String(r.meta?.error ?? "It failed."), cost: r.meta?.spent ?? r.meta?.cost ?? null, model: r.meta?.model?.label ?? null };
-    notePart({ kind: "search", effort: p.effort, model: r.meta.model.id, cost: r.meta.spent ?? r.meta.cost ?? null, files: 0, fileTokens: 0, task, answer: r.text, plan: `${plan.id}:${p.n}`, ...appOf(plan) });
+    notePart({ kind: "search", effort: p.effort, model: r.meta.model.id, cost: r.meta.spent ?? r.meta.cost ?? null, files: 0, fileTokens: 0, task, answer: r.text, plan: `${plan.id}:${p.n}`, ...appOf(plan), ms: r.meta.ms ?? null });
     return { status: "done", answer: r.text, receipt: `${r.meta.model.label}, ${usd(r.meta.cost ?? null)}.`, model: r.meta.model.label, modelId: r.meta.model.id, cost: r.meta.spent ?? r.meta.cost ?? null, seconds: (r.meta.ms ?? 0) / 1000 };
   }
   // Its files, as many as one hand off takes, in the plan's order; one that cannot be read is left out and named.
