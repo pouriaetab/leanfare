@@ -83,6 +83,15 @@ function anthropicContent(content: unknown): any[] | string {
 const THINK_BUDGET: Record<string, number> = { minimal: 1024, low: 2048, medium: 6000, high: 16000, xhigh: 24000 };
 const THINK_ROOM: Record<string, number> = { minimal: 8192, low: 8192, medium: 16000, high: 32000, xhigh: 48000, max: 64000 };
 
+// A cloud model that thinks counts its thinking toward the answer's limit (OpenAI's max_completion_tokens, Gemini's
+// max_tokens), so a short limit at high effort can come back cut, or as its thinking alone. Leanfare's own requests
+// (the chat, hand offs, plans, checks) give it room for its thinking on top of the limit they ask; an app's own limit
+// is sent as the app set it. Claude has its own (THINK_ROOM) and models on this computer theirs (LOCAL_THINK_ROOM).
+// 29 Oct: a hand off to Gemini 3.8 Flash at high effort with 4,000 tokens came back as 120 tokens of its thinking.
+export const CLOUD_THINK_ROOM: Record<string, number> = { none: 0, minimal: 1024, low: 2048, medium: 8192, high: 24576, xhigh: 32768, max: 32768 };
+export const thinkRoom = (m: Model, effort: string | null): number =>
+  m.skills.includes("reasoning") && m.provider !== "ollama" && provider(m.provider)?.kind !== "anthropic" ? CLOUD_THINK_ROOM[effort ?? "medium"] ?? CLOUD_THINK_ROOM.medium : 0;
+
 // The answer limit Claude is sent when the request has none of its own.
 export const anthropicDefaultMax = (effort: string | null) => Math.max(8192, effort ? THINK_ROOM[effort] ?? 16000 : 0);
 

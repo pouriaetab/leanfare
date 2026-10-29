@@ -12,7 +12,7 @@ import { estimateFor, expectedOutput, guessTask, ledgerWhy, pickModel, resolveMo
 import { forgetSpeeds, parseSpeed, secondsFor, type SpeedChoice } from "./speed";
 import { successor } from "./retire";
 import { addSpent, budgetState, release, tryReserve, wouldFit } from "./budget";
-import { AnthropicStreamTranslator, UserError, anthropicDefaultMax, anthropicToOpenAI, effortFor, headersFor, networkError, ollamaChunks, ollamaPlain, ollamaToOpenAI, openaiBody, plainError, toAnthropic, toOllama } from "./upstream";
+import { AnthropicStreamTranslator, UserError, anthropicDefaultMax, anthropicToOpenAI, effortFor, headersFor, networkError, ollamaChunks, ollamaPlain, ollamaToOpenAI, openaiBody, plainError, thinkRoom, toAnthropic, toOllama } from "./upstream";
 import { SSEParser, dollars, localDay, localMonth, median, now, providerMessage, randomId, redact, usd8 } from "./util";
 import { takesImages, takesPdfs } from "./files";
 
@@ -450,8 +450,9 @@ function send(m: Model, body: any, stream: boolean, signal: AbortSignal, native:
   } else {
     url = `${base}/chat/completions`;
     payload = openaiBody(m, body, stream, effort);
-    // OpenAI's newer models take only max_completion_tokens; the others take max_tokens.
-    if (cap && payload.max_tokens == null && payload.max_completion_tokens == null) payload[m.provider === "openai" ? "max_completion_tokens" : "max_tokens"] = cap;
+    // OpenAI's newer models take only max_completion_tokens; the others take max_tokens. Leanfare's own limit (not an
+    // app's) has room for a thinking model's thinking on top (upstream.ts: thinkRoom).
+    if (cap && payload.max_tokens == null && payload.max_completion_tokens == null) payload[m.provider === "openai" ? "max_completion_tokens" : "max_tokens"] = Math.min(cap + thinkRoom(m, effort ?? effortAsked), Math.max(cap, 64000));
   }
   const sig = stream ? signal : AbortSignal.any([signal, AbortSignal.timeout(15 * 60_000)]);
   const sent = fetch(url, { method: "POST", headers: { ...headersFor(def, getKey(m.provider)), ...extraHeaders }, body: JSON.stringify(payload), signal: sig });
@@ -941,7 +942,13 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
     return t;
   };
   // The answer limit a try had: Leanfare's own, or the one Claude is always sent.
-  const limitOf = (m: Model): number | null => p.capOverride ?? (p.capped ? outCap(m) : provider(m.provider)!.kind === "anthropic" ? anthropicDefaultMax(effortFor(m, p.effortAsked)) : null);
+  // A cloud thinking model's room for thinking on top of Leanfare's own limit (send adds it; upstream.ts: thinkRoom).
+  const room = (m: Model) => (m.provider === "ollama" || provider(m.provider)!.kind === "anthropic" ? 0 : thinkRoom(m, effortFor(m, p.effortAsked) ?? p.effortAsked));
+  const limitOf = (m: Model): number | null => {
+    const own = p.capOverride ?? (p.capped ? outCap(m) : null);
+    if (own !== null) return Math.min(own + room(m), Math.max(own, 64000));
+    return provider(m.provider)!.kind === "anthropic" ? anthropicDefaultMax(effortFor(m, p.effortAsked)) : null;
+  };
   const words = (s: string) => (s.trim() ? s.trim().split(/\s+/).length : 0);
   // A try that failed before the provider answered was written down where it failed (sendWithFallback).
   const recordTry = (t: Try, status: "ok" | "stopped" | "error", error?: string) =>
@@ -949,7 +956,11 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
       ? record(p, t.model, source, t.usage ?? estimatedUsage(p, t.text.length + t.thinking.length), { status, error, ms: performance.now() - t.t0, firstMs: t.firstMs, reportedCost: t.reported, estimated: !t.usage })
       : null;
 
-  let t = await attempt(opts.maxOut ?? null);
+  // A model that ran out of room while thinking can hand its thinking back as the answer, under a first line "thought"
+  // (29 Oct, Gemini through its OpenAI address). Cut off like that, it is thinking, not an answer: it is asked again
+  // with more room, as one that wrote nothing.
+  const leaked = (x: Try) => { if (x.finish === "length" && /^\s*thought\s*\n/i.test(x.text)) { x.thinking += x.text; x.text = ""; } return x; };
+  let t = leaked(await attempt(opts.maxOut ?? null));
   let retried = false;
   let written: ReturnType<typeof recordTry> | undefined; // the first try, when it was not asked again (already in the ledger)
   let firstSpent: number | null = 0; // a first try that was asked again: charged in the ledger too
@@ -960,7 +971,8 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
     if (t.failed) why = { note: t.text ? `The first answer was cut off after about ${words(t.text).toLocaleString("en-US")} words, so Leanfare asked again.` : `The first try stopped before ${name} answered, so Leanfare asked again.`, ledger: `cut off: ${t.failed}`, cap: null };
     else if (!t.text.trim() && t.finish === "length") {
       const limit = limitOf(t.model);
-      if (limit) why = { note: `${name} spent its whole ${limit.toLocaleString("en-US")}-token answer limit thinking and wrote nothing, so Leanfare asked again with ${Math.min(2 * limit, 64000).toLocaleString("en-US")}.`, ledger: "spent the answer limit thinking", cap: Math.min(2 * limit, 64000) };
+      const next = limit ? Math.min(2 * limit, 64000) : 0;
+      if (limit) why = { note: `${name} spent its whole ${limit.toLocaleString("en-US")}-token answer limit thinking and wrote nothing, so Leanfare asked again with ${next.toLocaleString("en-US")}.`, ledger: "spent the answer limit thinking", cap: Math.max(1, next - room(t.model)) };
     } else if (!t.text.trim() && t.finish !== "content_filter") why = { note: `The first try came back empty, so Leanfare asked ${name} once more.`, ledger: "came back empty", cap: null };
     if (why) {
       const first = recordTry(t, "error", why.ledger);
@@ -971,7 +983,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
         emit({ type: "retry", message: why.note });
         emit({ type: "meta", plan: planView(p) });
         retried = true;
-        t = await attempt(why.cap ?? opts.maxOut ?? null);
+        t = leaked(await attempt(why.cap ?? opts.maxOut ?? null));
       } else {
         p.notes.push(`${why.note.replace(/, so Leanfare .*$/, ".")} The budget does not leave room to ask again.`);
         written = first;
