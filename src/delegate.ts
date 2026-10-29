@@ -25,6 +25,7 @@ import { mayTake, modelOn, readRisk } from "./platforms";
 import { movedDown } from "./grades";
 import { fromAnotherCompany, masked } from "./judge";
 import { restOf, restText } from "./rest";
+import { fitsFree } from "./freeplans";
 import { startSideBySide } from "./sidebyside";
 import { plan, runChat, usableModels, type ChatOptions } from "./engine";
 import { DELEGATE_LIMITS, type DelegateFile } from "./readfiles";
@@ -310,7 +311,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   // A model whose context holds the request: its text at three characters a token (code
   // packs tighter than prose), plus the answer limit. A model with no known context is let through.
   // need: what the message says; a model in Ollama keeps less room for the answer (data.ts: fitsText).
-  const fit = (chars: number, out: number) => ({ need: Math.ceil(chars / 3) + out, ok: (m: Model) => fitsText(m, chars, out) });
+  const fit = (chars: number, out: number) => ({ need: Math.ceil(chars / 3) + out, ok: (m: Model) => fitsText(m, chars, out) && fitsFree(m, chars, out) }); // a free plan's tokens a minute too
   const tooMuch = (need: number) => `None of the models you ticked can take this much text (about ${num(need)} tokens with the answer). Hand over fewer or shorter files, or tick a model with a longer context.`;
   // Rated above the model that answered, for this task.
   const ratedAbove = (doer: Model) => {
