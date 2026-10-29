@@ -21,16 +21,20 @@ const HOUR = 3600_000, DAY = 24 * HOUR;
 const GAP = 10 * 60_000; // hand offs of an app without its own files: a new prompt after 10 minutes without one
 const ATTACH = 6 * HOUR; // a Claude Code hand off belongs to its last prompt begun at most this long before
 
-export interface ReportQuery { from: number; to: number; app?: string | null; provider?: string | null; model?: string | null; kind?: string | null; thread?: string | null }
+export interface ReportQuery { from: number; to: number; app?: string | null; provider?: string | null; model?: string | null; kind?: string | null; thread?: string | null; prompt?: string | null }
 export type Grade = "good" | "partly" | "wrong";
 export interface ReportPart {
-  id: number; ts: string; kind: string | null; model: string; label: string; provider: string; where: "local" | "free" | "plan" | "paid";
+  id: number; // the hand off's number, as its receipt and the grade tool give it
+  ref: string | null; // its id in the report: its prompt's id and its place there (PRM-41.2)
+  ts: string; kind: string | null; model: string; label: string; provider: string; where: "local" | "free" | "plan" | "paid";
   read: number; back: number; cost: number | null; ms: number | null;
   grade: Grade | null; gradedBy: "app" | "check" | null; check: "pass" | "fail" | null; checker: string | null; side: "same" | "better" | "worse" | null; plan: string | null;
 }
 export interface Own { fresh: number; cached: number; input: number; output: number }
 export interface ReportPrompt {
-  key: string; ts: string; app: string; thread: string | null; project: string | null;
+  key: string; // what the id is kept under: the session's file and the prompt's time, or a group's first hand off
+  id: string | null; // PRM-41: given once and kept (prompts); null only when the database could not be written
+  ts: string; app: string; thread: string | null; project: string | null;
   model: { id: string; label: string } | null; plan: string | null;
   prompt: number | null; // the prompt's own tokens (Claude Code), about four characters each
   own: Own | null; // null: the app does not say
@@ -84,7 +88,7 @@ function partsIn(from: number, to: number): (ReportPart & { app: string | null; 
     const grade: Grade | null = ["good", "partly", "wrong"].includes(r.grade) ? r.grade : r.verdict === "pass" ? "good" : r.verdict === "fail" ? "wrong" : null;
     const parts = [r.cost, r.check_cost, r.rerun_cost].filter((v) => v !== null && v !== undefined) as number[];
     return {
-      id: r.id, ts: r.ts, at: Date.parse(r.ts), kind: r.kind, model, label: labelOf(model), provider: providerOf(model), where: whereOf(model, r.cost),
+      id: r.id, ref: null, ts: r.ts, at: Date.parse(r.ts), kind: r.kind, model, label: labelOf(model), provider: providerOf(model), where: whereOf(model, r.cost),
       read: (r.file_tokens ?? 0) + (r.task_tokens ?? 0), back: r.answer_tokens ?? 0,
       cost: r.cost === null && !parts.length ? null : parts.reduce((a, b) => a + b, 0) + (r.side_cost ?? 0), ms: r.ms ?? null,
       grade, gradedBy: grade === null ? null : ["good", "partly", "wrong"].includes(r.grade) ? "app" : "check",
@@ -97,7 +101,9 @@ function partsIn(from: number, to: number): (ReportPart & { app: string | null; 
 const KIND_ORDER = ["read", "write", "reason", "search", "other"];
 const worst = (gs: (Grade | null)[]): Grade | null => (gs.includes("wrong") ? "wrong" : gs.includes("partly") ? "partly" : gs.includes("good") ? "good" : null);
 
-export async function report(q: ReportQuery) {
+export async function report(q: ReportQuery, inner = false): Promise<Report> {
+  // The first report numbers every prompt it can find, oldest first, so the ids follow time from the start.
+  if (!inner && noIdsYet()) await report({ from: q.to - 400 * DAY, to: q.to }, true);
   const span = Math.max(1, q.to - q.from);
   // Claude Code: its prompts (with a day before, for one begun earlier that still ran) and its answers' tokens.
   const prompts = await recentPrompts(q.from - DAY);
@@ -109,7 +115,7 @@ export async function report(q: ReportQuery) {
   const cc: (ReportPrompt & { start: number; end: number; models: Map<string, number> })[] = [];
   for (const [file, ps] of bySession) {
     ps.forEach((p, i) => cc.push({
-      key: `cc:${basename(file)}:${p.ts}`, ts: new Date(p.ts).toISOString(), app: "Claude Code", thread: sessionOf(file), project: p.project,
+      key: `cc:${basename(file)}:${p.ts}`, id: null, ts: new Date(p.ts).toISOString(), app: "Claude Code", thread: sessionOf(file), project: p.project,
       model: null, plan: ccPlan, prompt: Math.ceil(p.chars / 4), own: { fresh: 0, cached: 0, input: 0, output: 0 }, parts: [], kept: 0, back: 0, cost: 0, saved: null, grade: null,
       start: p.ts, end: ps[i + 1]?.ts ?? Infinity, models: new Map(),
     }));
@@ -143,7 +149,7 @@ export async function report(q: ReportQuery) {
     const app = part.app ?? "Your app";
     const samePlan = open && part.plan && open.parts.some((x) => x.plan === part.plan);
     if (!open || open.app !== app || (!samePlan && part.at - open.last > GAP)) {
-      open = { key: `h:${part.id}`, ts: part.ts, app, thread: null, project: null, model: part.appModel ? { id: part.appModel, label: modelName(part.appModel) } : null,
+      open = { key: `h:${part.id}`, id: null, ts: part.ts, app, thread: null, project: null, model: part.appModel ? { id: part.appModel, label: modelName(part.appModel) } : null,
         plan: planFor(app), prompt: null, own: null, parts: [], kept: 0, back: 0, cost: 0, saved: null, grade: null, last: part.at, appModel: part.appModel };
       others.push(open);
     }
@@ -153,6 +159,8 @@ export async function report(q: ReportQuery) {
 
   // Every prompt that began in the span, then the filters.
   const all: ReportPrompt[] = [...cc, ...others].filter((p) => { const t = Date.parse(p.ts); return t >= q.from && t < q.to; });
+  const ids = idsFor(all);
+  for (const p of all) { p.id = ids.get(p.key) ?? null; p.parts.forEach((x, i) => { x.ref = p.id ? `${p.id}.${i + 1}` : null; }); }
   const options = {
     apps: [...new Set(all.map((p) => p.app))].sort(),
     providers: [...new Set(all.flatMap((p) => p.parts.map((x) => x.provider)))].sort(),
@@ -164,12 +172,12 @@ export async function report(q: ReportQuery) {
   const partFilter = q.provider || q.model || q.kind;
   const keepPart = (x: ReportPart) => (!q.provider || x.provider === q.provider) && (!q.model || x.model === q.model) && (!q.kind || x.kind === q.kind);
   const shown = all
-    .filter((p) => (!q.app || p.app === q.app) && (!q.thread || p.thread === q.thread))
+    .filter((p) => (!q.app || p.app === q.app) && (!q.thread || p.thread === q.thread) && (!q.prompt || p.id === q.prompt))
     .map((p) => ({ ...p, parts: p.parts.filter(keepPart) }))
     .filter((p) => !partFilter || p.parts.length)
     .map((p) => {
       const kept = p.parts.reduce((n, x) => n + x.read, 0), back = p.parts.reduce((n, x) => n + x.back, 0);
-      const out: ReportPrompt = { key: p.key, ts: p.ts, app: p.app, thread: p.thread, project: p.project, model: p.model, plan: p.plan, prompt: p.prompt, own: p.own, parts: p.parts,
+      const out: ReportPrompt = { key: p.key, id: p.id, ts: p.ts, app: p.app, thread: p.thread, project: p.project, model: p.model, plan: p.plan, prompt: p.prompt, own: p.own, parts: p.parts,
         kept, back, cost: p.parts.reduce((n, x) => n + (x.cost ?? 0), 0), saved: p.own ? (kept + p.own.fresh > 0 ? kept / (kept + p.own.fresh) : null) : null, grade: worst(p.parts.map((x) => x.grade)) };
       return out;
     })
@@ -233,6 +241,38 @@ export async function report(q: ReportQuery) {
   return { from: new Date(q.from).toISOString(), to: new Date(q.to).toISOString(), step, tiles, series, byModel, byKind, prompts: shown.slice(0, 200), more: Math.max(0, shown.length - 200), options };
 }
 
+export type Report = { from: string; to: string; step: number; tiles: any; series: { at: string; kept: number; used: number }[]; byModel: any[]; byKind: any[]; prompts: ReportPrompt[]; more: number; options: any };
+
+// Prompt ids: PRM and a number (PRM-1042), one count for every app, in the order of the prompts' times. Each is given
+// once and kept (the prompts table), so a prompt has the same id in every span and filter, and two prompts alike in
+// time, app and model are still told apart. The app, the models, the providers and the kinds of work are its tags: the
+// report's columns and filters.
+export const ID_SHAPE = /^PRM-\d{1,9}$/;
+const idOf = (n: number) => `PRM-${n}`;
+const noIdsYet = () => { try { return !db.query("SELECT 1 FROM prompts LIMIT 1").get(); } catch { return false; } };
+function idsFor(ps: { key: string; ts: string }[]): Map<string, string> {
+  const out = new Map<string, string>();
+  try {
+    db.transaction(() => { // one step, so two reports at once cannot give one number twice
+      for (const r of db.query("SELECT n, key FROM prompts").all() as { n: number; key: string }[]) out.set(r.key, idOf(r.n));
+      const fresh = ps.filter((p) => !out.has(p.key)).sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.key < b.key ? -1 : 1));
+      if (!fresh.length) return;
+      let n = (db.query("SELECT MAX(n) AS n FROM prompts").get() as { n: number | null }).n ?? 0;
+      const add = db.query("INSERT INTO prompts(n, key, ts) VALUES (?, ?, ?)");
+      for (const p of fresh) {
+        if (out.has(p.key)) continue;
+        add.run(++n, p.key, p.ts); out.set(p.key, idOf(n));
+      }
+    })();
+  } catch { return new Map(); } // the database busy: the report shows no ids this time
+  return out;
+}
+// Where a prompt starts, by its id: its time, for a report of that one prompt.
+export function promptStart(id: string): number | null {
+  if (!ID_SHAPE.test(id)) return null;
+  try { const r = db.query("SELECT ts FROM prompts WHERE n = ?").get(Number(id.slice(4))) as { ts: string } | null; return r ? Date.parse(r.ts) : null; } catch { return null; }
+}
+
 // The model your apps ran on most in these prompts: what kept tokens would have cost there.
 function mainModel(ps: ReportPrompt[]): string | null {
   const n = new Map<string, number>();
@@ -244,6 +284,13 @@ function mainModel(ps: ReportPrompt[]): string | null {
 export function checkReport(p: URLSearchParams, at = now().getTime()): ReportQuery | string {
   const range = p.get("range") ?? "7d";
   let from: number, to: number;
+  const one = p.get("prompt")?.trim().toUpperCase();
+  if (one) { // one prompt by its id: from its start to now, whatever the range
+    if (!ID_SHAPE.test(one)) return "prompt must be an id from the report, like PRM-41.";
+    const start = promptStart(one);
+    if (start === null) return `No prompt ${one} yet: an id the report gave, like PRM-41.`;
+    return { from: start, to: Math.max(at, start + 1), prompt: one };
+  }
   if (range === "custom") {
     from = Date.parse(p.get("from") ?? ""); to = Date.parse(p.get("to") ?? "");
     if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) return "A custom range needs from and to, dates with from before to.";

@@ -104,6 +104,10 @@ CREATE INDEX IF NOT EXISTS grades_model_kind ON grades(model, kind);
 -- the costs. No words.
 CREATE TABLE IF NOT EXISTS comparisons(id INTEGER PRIMARY KEY, ts TEXT NOT NULL, month TEXT NOT NULL, day TEXT NOT NULL, handoff INTEGER, kind TEXT NOT NULL, effort TEXT, model TEXT NOT NULL, top_model TEXT NOT NULL, judge TEXT, shown_first TEXT, verdict TEXT NOT NULL, top_cost REAL, judge_cost REAL);
 CREATE INDEX IF NOT EXISTS comparisons_month ON comparisons(month);
+-- The report's prompt ids (report.ts): PRM-1042 is the 1042nd prompt Leanfare numbered, oldest first. Given once and kept,
+-- so a prompt keeps its id whatever span or filter shows it. Its number, its key (the session's file and the prompt's
+-- time, or the first hand off of a group) and its time. No words.
+CREATE TABLE IF NOT EXISTS prompts(n INTEGER PRIMARY KEY, key TEXT NOT NULL UNIQUE, ts TEXT NOT NULL);
 `;
 
 // Columns added after 0.1: an older file gets them on its first start.
