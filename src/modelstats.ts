@@ -8,6 +8,7 @@ import { db } from "./db";
 import { chargeOf } from "./engine";
 import { FAIL_KINDS, FAIL_WORD, failOfText, type FailKind } from "./fails";
 import { GRADED_KINDS, movedDown } from "./grades";
+import { restOf, restsNow, restWhy } from "./rest";
 
 export { FAIL_KINDS, FAIL_WORD, type FailKind };
 
@@ -23,6 +24,7 @@ export interface ModelStat {
   perSecond: number | null; // how fast it wrote once it started, tokens a second (the middle answer)
   cost: number; costPerCall: number | null; // what its answers cost, and the middle answer's cost
   movedDown: string[]; // the kinds of work its grades moved it down for (grades.ts)
+  rest: { until: string; why: string } | null; // resting now after failing too often (rest.ts): until when, and why
 }
 
 export interface StatsQuery { from: number; to: number; provider?: string | null; model?: string | null }
@@ -61,9 +63,18 @@ export function modelStats(q: StatsQuery, limit = 12): ModelStat[] {
       perSecond: rates.length ? Math.round(mid(rates)!) : null,
       cost, costPerCall: costs.length ? mid(costs) : null,
       movedDown: GRADED_KINDS.filter((k) => movedDown(id, k)),
+      rest: (() => { const r = restOf(id); return r ? { until: r.until, why: restWhy(r) } : null; })(),
     });
   }
-  return out.sort((a, b) => b.calls - a.calls || a.label.localeCompare(b.label)).slice(0, limit);
+  out.sort((a, b) => b.calls - a.calls || a.label.localeCompare(b.label));
+  // Resting ones first: they are what changed. One resting now with no call in the span still shows.
+  for (const r of restsNow()) if (!by.has(r.model) && (!q.model || q.model === r.model)) {
+    const m = getModel(r.model);
+    if (q.provider && (m?.local ? "local" : m?.provider) !== q.provider) continue;
+    out.push({ id: r.model, label: m?.label ?? r.model, provider: m?.local ? "local" : m?.provider ?? r.model.split("/")[0], where: m?.local ? "local" : m && chargeOf(m, 1).cost === 0 ? "free" : "paid",
+      calls: 0, ok: 0, failed: 0, stopped: 0, fails: {}, first: null, whole: null, perSecond: null, cost: 0, costPerCall: null, movedDown: GRADED_KINDS.filter((k) => movedDown(r.model, k)), rest: { until: r.until, why: restWhy(r) } });
+  }
+  return [...out.filter((m) => m.rest), ...out.filter((m) => !m.rest)].slice(0, limit);
 }
 
 // One line of what failed, for a person: "7 busy, 2 timed out".

@@ -1777,7 +1777,8 @@
       d?.prompts?.length ? h("button", { class: "btn small", type: "button", text: "Export CSV", onclick: () => download(`leanfare-report-${new Date().toISOString().slice(0, 10)}.csv`, reportCsv(d), "text/csv") }) : null);
     const body = S.report.error ? h("div", { class: "empty", text: `The report could not be read: ${S.report.error}` })
       : !d ? h("div", { class: "empty", text: "Reading the report…" })
-      : !d.prompts.length ? h("div", { class: "empty", text: "Nothing in this span yet. Hand offs and plan parts from your apps, and Claude Code's prompts, show here." })
+      : !d.prompts.length && !d.speed?.length ? h("div", { class: "empty", text: "Nothing in this span yet. Hand offs and plan parts from your apps, and Claude Code's prompts, show here." })
+      : !d.prompts.length ? h("div", { class: "rp-body" }, h("div", { class: "empty", text: "No prompts in this span yet. Hand offs and plan parts from your apps, and Claude Code's prompts, show here. The models' speed so far:" }), reportSpeedEl(d))
       : h("div", { class: "rp-body" + (S.report.loading ? " busy" : "") }, reportTiles(d), reportChartEl(d),
           h("div", { class: "rp-two" }, reportModelsEl(d), reportKindsEl(d)), reportSpeedEl(d), reportPromptsEl(d));
     return h("section", { class: "rp", id: "reportCard" },
@@ -1900,6 +1901,17 @@
   function spNow(m) {
     const notes = [];
     if (m.movedDown?.length) notes.push(`moved down for ${m.movedDown.map((k) => (RP_KIND[k] ?? k).toLowerCase()).join(" and ")} (graded below good too often)`);
+    if (m.rest) {
+      const until = new Date(m.rest.until).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+      const wake = async (e) => {
+        e.target.disabled = true;
+        try { await api("/api/rest/end", { body: { model: m.id } }); } catch {}
+        loadReport();
+      };
+      return [h("span", { class: "chip warn", text: `resting until ${until}` }),
+        h("span", { class: "tiny", text: `${m.rest.why[0].toUpperCase()}${m.rest.why.slice(1)}. Auto picks others until then.${notes.length ? ` Also ${notes.join("; ")}.` : ""}` }),
+        h("button", { class: "btn small", type: "button", text: "Try it now", onclick: wake })];
+    }
     return [h("span", { class: "chip good", text: "ready" }), notes.length ? h("span", { class: "tiny", text: notes.join("; ") }) : null];
   }
   function reportSpeedEl(d) {
@@ -1916,7 +1928,8 @@
         h("dl", { class: "sp-key" },
           h("dt", { text: "Time" }), h("dd", { text: "From each call's own clock: the first word (time to first token) and the whole answer. The middle one and the slowest 1 in 10." }),
           h("dt", { text: "Failures" }), h("dd", { text: "Busy (503, 529), rate limited (429), timed out, could not be reached, and other errors. Each try counts, also when Auto passed the work on." }),
-          h("dt", { text: "Quality" }), h("dd", { text: "Your app's grades of its answers, else the blind checks. Not graded yet: on the bottom line, hollow." }))));
+          h("dt", { text: "Quality" }), h("dd", { text: "Your app's grades of its answers, else the blind checks. Not graded yet: on the bottom line, hollow." }),
+          h("dt", { text: "Resting" }), h("dd", { text: "A model that failed or did not start answering in time too often lately rests for a while (amber): Auto picks others while one can take the work, then tries it again." }))));
     const table = h("div", { class: "card rp-card" }, h("h3", { text: "Models: speed, failures, cost and quality" }),
       h("p", { class: "muted", text: "Every call in this span: hand offs, checks, side by side, plans and chats. Most calls first." }),
       h("div", { class: "scroll" }, h("table", { class: "trial-table sp-table" },
@@ -1924,7 +1937,7 @@
           h("th", { class: "num" }, "First word", h("span", { class: "tiny", text: "middle · slowest 1 in 10" })),
           h("th", { class: "num" }, "Whole answer", h("span", { class: "tiny", text: "middle · slowest 1 in 10" })),
           h("th", { class: "num", text: "Writes" }), h("th", { class: "num", text: "Cost a call" }), h("th", { class: "num", text: "Good" }), h("th", { text: "Now" }))),
-        h("tbody", {}, ...rows.map((m) => h("tr", {},
+        h("tbody", {}, ...rows.map((m) => h("tr", { class: m.rest ? "resting" : null },
           h("td", { class: "nm" }, h("b", { text: m.label }), h("span", { class: "tiny", text: spWhere(m) })),
           h("td", { class: "num", text: num(m.calls) }),
           h("td", {}, m.failed ? [h("span", { class: "fail", text: `${num(m.failed)} failed` }), h("span", { class: "tiny", text: spFails(m) })] : h("span", { class: "muted", text: "none" })),
@@ -1962,7 +1975,7 @@
     for (const m of order) {
       const cx = x(m.whole.mid), cy = y(m.goodShare ?? yLo), r = 5 + 6 * Math.sqrt(m.calls / maxCalls);
       placed.push({ x: cx - r, y: cy - r, w: 2 * r, h: 2 * r });
-      const cls = m.goodShare === null ? "spd none" : "spd ready";
+      const cls = m.rest ? "spd rest" : m.goodShare === null ? "spd none" : "spd ready";
       const dot = svg("circle", { cx, cy, r, class: cls, tabindex: 0, role: "img", "aria-label": `${m.label}: ${spSec(m.whole.mid)} an answer, ${m.goodShare === null ? "not graded" : pctText(m.goodShare) + " good"}` });
       const show = () => {
         tip.replaceChildren(h("div", { class: "when", text: m.label }),
@@ -1980,13 +1993,13 @@
     }
     for (const m of order) {
       const cx = x(m.whole.mid), cy = y(m.goodShare ?? yLo), r = 5 + 6 * Math.sqrt(m.calls / maxCalls);
-      const text = m.goodShare === null ? `${m.label}, not graded yet` : m.label, w = text.length * 6.4 + 4;
+      const text = m.rest ? `${m.label}, resting` : m.goodShare === null ? `${m.label}, not graded yet` : m.label, w = text.length * 6.4 + 4;
       const right = cx + r + 4 + w <= L + pw;
       const tries = [{ x: right ? cx + r + 4 : cx - r - 4 - w, y: cy - 7 }, { x: cx - w / 2, y: cy - r - 16 }, { x: cx - w / 2, y: cy + r + 2 }];
       const b = tries.map((t) => ({ ...t, w, h: 14 })).find((t) => t.x >= 0 && t.x + w <= W && t.y >= 0 && t.y + 14 <= T + ph + 2 && free(t));
       if (!b) continue;
       placed.push(b);
-      kids.push(svg("text", { x: b.x, y: b.y + 11, class: m.goodShare === null ? "lab none" : "lab" }, text));
+      kids.push(svg("text", { x: b.x, y: b.y + 11, class: m.rest ? "lab rest" : m.goodShare === null ? "lab none" : "lab" }, text));
     }
     const chart = svg("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Each model's time for an answer against how often it was graded good" }, kids);
     box.replaceChildren(chart, tip);

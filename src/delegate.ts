@@ -24,6 +24,7 @@ import { passedLocal } from "./localpass";
 import { mayTake, modelOn, readRisk } from "./platforms";
 import { movedDown } from "./grades";
 import { fromAnotherCompany, masked } from "./judge";
+import { restOf, restText } from "./rest";
 import { startSideBySide } from "./sidebyside";
 import { plan, runChat, usableModels, type ChatOptions } from "./engine";
 import { DELEGATE_LIMITS, type DelegateFile } from "./readfiles";
@@ -201,6 +202,7 @@ export interface DelegateResult {
   first: { model: Who; cost: number | null } | null; // the first answer, when a failed check replaced it
   rerunError: string | null; // asking again after a failed check did not work
   swap: string | null; // a plan's part: why another model answered than the one its table named
+  passed: string[]; // why Auto passed the work on: a model resting, busy, or that did not start answering in time
   row: number | null; // its row in the delegations table, which its grade goes to
   total: number | null; // everything this task cost: the answers and the check
   task: string;
@@ -263,6 +265,7 @@ export function receiptOf(r: Omit<DelegateResult, "receipt">, maxOut: number): s
   else {
     parts.push(`Leanfare delegate: ${r.model.label}, ${usd(r.cost)}.`);
     if (r.swap) parts.push(r.swap);
+    for (const n of r.passed ?? []) parts.push(n);
     // Blind: the checker was not told which model answered (judge.ts).
     const by = `${c.checker?.label}${c.other ? " (another company)" : ""}`;
     if (c.verdict === "pass") parts.push(`Checked blind by ${by}: passed (${usd(c.cost)}).`);
@@ -363,10 +366,15 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   const opts: ChatOptions = { system, source, guess, only: within(doFit.ok), onlyWhy: tooMuch(doFit.need), effort: input.effort, maxOut: input.maxOut, speed: input.speed, job };
   // Reading at low or medium effort goes first to a model on this computer that passed its test here
   // (localpass.ts), when nothing is named and Auto is to be the cheapest: it is free.
-  const local = !input.model && !input.trial && input.kind === "read" && input.effort !== "high" && (input.speed ?? settings().speed) === "cheapest" ? passedLocal(within(doFit.ok)) : null;
+  const local = !input.model && !input.trial && input.kind === "read" && input.effort !== "high" && (input.speed ?? settings().speed) === "cheapest" ? passedLocal(within((m) => doFit.ok(m) && !restOf(m.id))) : null;
   const named = input.model ? getModel(input.model) ?? null : local;
-  const namedOk = !!named && usableModels(within(doFit.ok)).some((m) => m.id === named.id);
-  let swap: string | null = input.model && !namedOk ? `The plan named ${named?.label ?? input.model}, which cannot take it here now, so Auto picked another.` : null;
+  // A plan's model resting after failing too often (rest.ts) gives the part to Auto, while another model can take it.
+  const namedRest = named && input.model ? restOf(named.id) : null;
+  const othersUp = !!namedRest && usableModels(within((m) => doFit.ok(m) && m.id !== named!.id && !restOf(m.id))).length > 0;
+  const namedOk = !!named && usableModels(within(doFit.ok)).some((m) => m.id === named.id) && !(namedRest && othersUp);
+  let swap: string | null = input.model && !namedOk
+    ? namedRest && othersUp ? `The plan named ${named!.label}, but ${restText(namedRest).replace(/^.*? is resting/, "it is resting")}, so Auto picked another.` : `The plan named ${named?.label ?? input.model}, which cannot take it here now, so Auto picked another.`
+    : null;
   let first = await run(messages, namedOk ? named!.id : asked, "Delegate", opts);
   const tried: (number | null)[] = [];
   if (namedOk && first.status !== "ok" && first.status !== "stopped" && !gone()) {
@@ -452,6 +460,8 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     first: firstUsed,
     rerunError,
     swap,
+    // What Auto said on the way to the answer: a model resting (rest.ts), busy, or slow to start (engine.ts).
+    passed: ((final.meta?.notes ?? []) as string[]).filter((n) => /is resting|passed the request to its next pick|is resting after failing/.test(n)).slice(0, 3),
     row: null,
     total: add(...spent),
     task: guess.task,

@@ -24,6 +24,7 @@ import { plansBrief, plansView } from "./plans";
 import { meterViews, setStatusline } from "./meter";
 import { checkDelegate, gradeRow, runDelegate, startDelegate, stopDelegates, waitDelegate } from "./delegate";
 import { sideMonth, sideStandings, sideText, stopSideBySide } from "./sidebyside";
+import { endRest } from "./rest";
 import { checkReport, report } from "./report";
 import { checkPlan, gradePart, makePlan, runView, startRun, stopAllRuns, stopRun } from "./planner";
 import { setAuto } from "./workers";
@@ -470,6 +471,12 @@ async function api(req: Request, url: URL): Promise<Response> {
       return json({ text: standingText(st), standing: st });
     }
     return fail(400, "Grade a plan's part (id and part) or a model's answer (model and kind: read, write, reason or search).");
+  }
+  // A model resting after failing too often (rest.ts): end its rest now, so Auto may pick it again.
+  if (p === "/api/rest/end" && m === "POST") {
+    const b = await readBody(req);
+    if (typeof b?.model !== "string" || b.model.length > 200) return fail(400, "model is needed.");
+    return json({ ended: endRest(b.model) });
   }
   if (p === "/api/grades/reset" && m === "POST") {
     const b = await readBody(req);
