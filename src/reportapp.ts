@@ -150,7 +150,7 @@ export const REPORT_APP_HTML = `<!doctype html>
           el("span", { class: "v", text: tok(m.read) + " · " + m.parts + (m.parts === 1 ? " part" : " parts") }),
           el("span", { class: "q" }, el("i", { class: "dot " + dot(m.goodShare) }), m.goodShare === null ? "not graded" : pct(m.goodShare) + " good")))),
         el("div", { class: "box" }, el("h2", { text: "Last prompts" }), d.prompts.map((p) => el("div", { class: "p" },
-          el("span", { class: "w", text: when(p.ts, d) }),
+          el("span", { class: "w" }, p.id ? el("b", { text: p.id + " " }) : null, when(p.ts, d)),
           el("span", { class: "m", text: p.app + (p.model ? " · " + p.model : "") + (p.plan ? " · " + p.plan : "") + (p.parts.length ? " → " + p.parts.join(", ") : "") }),
           el("span", { class: "k", text: tok(p.kept) + " kept" + (p.saved !== null ? " · " + pct(p.saved) : "") }),
           p.grade ? el("span", { class: "g", text: GRADE[p.grade] }) : el("span", { class: "muted", text: "—" })))));

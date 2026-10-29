@@ -1902,7 +1902,8 @@
       const toggle = () => { S.report.open[p.key] = !open; const old = $("#reportCard"); if (old) old.replaceWith(reportCardEl()); };
       const labels = [...new Set(p.parts.map((x) => x.label))];
       rows.push(h("tr", { class: "pr" + (open ? " open" : ""), onclick: p.parts.length || p.own ? toggle : null },
-        h("td", { class: "when" }, (p.parts.length || p.own) ? h("span", { class: "tw", text: open ? "▾" : "▸" }) : null, when(p.ts)),
+        h("td", { class: "pid" }, (p.parts.length || p.own) ? h("span", { class: "tw", text: open ? "▾" : "▸" }) : null, p.id ?? "—"),
+        h("td", { class: "when", text: when(p.ts) }),
         h("td", { class: "nw", text: p.app }),
         h("td", { class: "nw" }, p.model ? h("b", { text: p.model.label }) : "—", p.plan ? ` · ${shortPlan(p.plan)}` : ""),
         h("td", { class: "num", text: p.own ? `${tokShort(p.prompt ?? 0)} → ${tokShort(p.own.output)}` : "not known" }),
@@ -1913,7 +1914,8 @@
         h("td", {}, gradeChip(p.grade, p.parts.some((x) => x.gradedBy === "check")))));
       if (!open) continue;
       p.parts.forEach((x, i) => rows.push(h("tr", { class: "part" },
-        h("td", { class: "ind", text: `${i + 1} · ${(RP_KIND[x.kind] ?? x.kind ?? "part").toLowerCase()}` }), h("td", {}),
+        h("td", { class: "ind pid", text: x.ref ?? `${i + 1}` }), h("td", { class: "when", text: when(x.ts) }),
+        h("td", { class: "nw", text: (RP_KIND[x.kind] ?? x.kind ?? "part").toLowerCase() }),
         h("td", { text: x.label }),
         h("td", { class: "num", text: `${tokShort(x.read)} read → ${tokShort(x.back)}` }),
         h("td", { class: "muted", text: `${RP_WHERE[x.where]}${secs(x.ms)}${x.side ? ` · side by side: ${x.side === "worse" ? "the top model's was better" : x.side === "better" ? "better than the top model's" : "as good as the top model's"}` : ""}` }),
@@ -1921,15 +1923,15 @@
         h("td", { class: "num", text: money(x.cost) }),
         h("td", {}, gradeChip(x.grade, x.gradedBy === "check")))));
       rows.push(h("tr", { class: "part own" },
-        h("td", { class: "ind", text: p.app }), h("td", {}),
+        h("td", {}), h("td", {}), h("td", { class: "nw", text: p.app }),
         h("td", { text: p.model ? `${p.model.label}${p.plan ? ` · ${shortPlan(p.plan)}` : ""}` : "—" }),
         h("td", { colspan: 6, class: "muted", text: p.own ? `prompt ${tokShort(p.prompt ?? 0)}, its own work ${tokShort(p.own.fresh)} new tokens (measured)${p.own.cached ? `, ${tokShort(p.own.cached)} more read again from the cache` : ""}` : "its own work: not known (this app does not share it)" })));
     }
     const left = d.prompts.length - S.report.shown + d.more;
     return h("div", { class: "card rp-card" }, h("h3", { text: "Prompts" }),
-      h("p", { class: "muted", text: "Each prompt with the app it came from, its main model and your plan, and every part Leanfare ran. Open one for its parts." }),
+      h("p", { class: "muted", text: "Each prompt with its id, the app it came from, its main model and your plan, and every part Leanfare ran. Open one for its parts (PRM-41.1, PRM-41.2…)." }),
       h("div", { class: "scroll" }, h("table", { class: "trial-table rp-table" },
-        h("thead", {}, h("tr", {}, ...["When", "App", "Main model", "Prompt → answer", "Handed off", "Kept out", "Saved", "Cost", "Grade"].map((c) => h("th", { text: c })))),
+        h("thead", {}, h("tr", {}, ...["ID", "When", "App", "Main model", "Prompt → answer", "Handed off", "Kept out", "Saved", "Cost", "Grade"].map((c) => h("th", { text: c })))),
         h("tbody", {}, ...rows))),
       left > 0 ? h("button", { class: "btn small", type: "button", text: `Show ${Math.min(20, left)} more`, onclick: () => { S.report.shown += 20; const old = $("#reportCard"); if (old) old.replaceWith(reportCardEl()); } }) : null,
       h("p", { class: "fine", text: "Claude Code's own tokens come from its own files: numbers only, never your words. New tokens: what it did not read again from its cache. Claude's chats and Cowork do not share theirs, so they show as not known." }));
@@ -1939,12 +1941,12 @@
   function reportCsv(d) {
     // A text that starts like a formula (=, +, -, @) is kept as text, so a spreadsheet never runs it.
     const cell = (v) => { let s = v === null || v === undefined ? "" : String(v); if (typeof v === "string" && /^[=+\-@\t\r]/.test(s)) s = "'" + s; return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    const head = ["time", "app", "thread", "project", "main_model", "plan", "prompt_tokens", "own_new_tokens", "own_cache_reads", "part", "kind", "model", "where", "tokens_read", "tokens_back", "kept_out", "saved", "cost_usd", "grade", "graded_by", "side_by_side"];
+    const head = ["prompt_id", "time", "app", "thread", "project", "main_model", "plan", "prompt_tokens", "own_new_tokens", "own_cache_reads", "part_id", "handoff", "kind", "model", "where", "tokens_read", "tokens_back", "kept_out", "saved", "cost_usd", "grade", "graded_by", "side_by_side"];
     const lines = [head.join(",")];
     for (const p of d.prompts) {
-      const base = [p.ts, p.app, p.thread, p.project, p.model?.label, p.plan, p.prompt, p.own?.fresh, p.own?.cached];
-      lines.push([...base, "", "", "", "", "", "", p.kept, p.saved === null ? "" : p.saved.toFixed(4), p.cost.toFixed(6), p.grade, "", ""].map(cell).join(","));
-      p.parts.forEach((x, i) => lines.push([...base, i + 1, x.kind, x.label, x.where, x.read, x.back, x.read, "", x.cost === null ? "" : x.cost.toFixed(6), x.grade, x.gradedBy, x.side].map(cell).join(",")));
+      const base = [p.id, p.ts, p.app, p.thread, p.project, p.model?.label, p.plan, p.prompt, p.own?.fresh, p.own?.cached];
+      lines.push([...base, "", "", "", "", "", "", "", p.kept, p.saved === null ? "" : p.saved.toFixed(4), p.cost.toFixed(6), p.grade, "", ""].map(cell).join(","));
+      p.parts.forEach((x, i) => lines.push([...base, x.ref ?? i + 1, x.id, x.kind, x.label, x.where, x.read, x.back, x.read, "", x.cost === null ? "" : x.cost.toFixed(6), x.grade, x.gradedBy, x.side].map(cell).join(",")));
     }
     return lines.join("\n") + "\n";
   }
