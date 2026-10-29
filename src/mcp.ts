@@ -257,6 +257,21 @@ function writeShared(folder: string, id: string, files: Record<string, string>):
     return `.leanfare/plans/${id}`;
   } catch { return null; } // a folder Leanfare may not write in: the answers are in the tool's result anyway
 }
+// The test switch (Settings, Show who wrote what): each paragraph of a model's answer starts with the model's name
+// in a small mark (inline code, which apps show highlighted), and the app is asked to keep the marks on what it takes
+// and to mark its own paragraphs the same way, so its reply shows who wrote what. A list, a table, a heading or code
+// keeps its form: the mark goes on its own line above it, and nothing inside code is marked.
+export function markedBy(text: string, label: string): string {
+  const mark = "`" + label.replace(/`/g, "") + "`";
+  let fence = false;
+  return text.split(/\n{2,}/).map((block) => {
+    const inside = fence;
+    if ((block.match(/^\s*```/gm) ?? []).length % 2 === 1) fence = !fence;
+    if (inside || !block.trim()) return block;
+    return /^\s*([-*+]\s|\d+[.)]\s|\||#|```|>)/.test(block) ? `${mark}\n${block}` : `${mark} ${block}`;
+  }).join("\n\n");
+}
+export const whoNote = (labels: string[]) => `(Test, Show who wrote what is on in Leanfare: keep the ${labels.map((l) => "`" + l + "`").join(", ")} marks on what you take from ${labels.length === 1 ? "this answer" : "these answers"}, and start each paragraph you write yourself with your own model's name the same way, so the user sees who wrote what.)`;
 const STATUS: Record<string, string> = { waiting: "waiting", running: "running", done: "done", failed: "failed", stopped: "stopped", yours: "yours to do", after_yours: "after yours: hand it to delegate once yours is done", blocked: "waits for a part that is not done", asks: "paid: waits for a yes" };
 const SHOWN = 3000; // characters of an answer in the tool's result (the whole answer is in its file)
 export function statusText(v: any, saved: string | null): string {
@@ -265,10 +280,12 @@ export function statusText(v: any, saved: string | null): string {
   const lines = ["| # | Part | Now | Model | Cost |", "|---|---|---|---|---|", ...rows, ""];
   lines.push(v.running ? "Still running: ask plan_status again (wait up to 50 seconds)." : "Leanfare's parts have ended.");
   if (v.asks) lines.push(`Parts ${v.asks.parts.join(", ")} are paid (about ${usd(v.asks.estimate)}, over the cap of ${usd(v.asks.cap)} set in Leanfare) and wait for the user's yes: ask them, then call plan_run with paid yes.`);
-  for (const r of done) lines.push("", `## Part ${r.n}: ${r.title}`, "", r.answer.length > SHOWN ? `${r.answer.slice(0, SHOWN)}\n\n(cut here: the whole answer is in ${saved ?? "Leanfare"}${saved ? `/part-${r.n}.md` : ""})` : r.answer, "", `(${r.receipt})`);
+  const shown = (r: any) => (v.whoWrote ? markedBy(r.answer, r.model ?? "Leanfare") : r.answer);
+  for (const r of done) lines.push("", `## Part ${r.n}: ${r.title}`, "", r.answer.length > SHOWN ? `${shown({ ...r, answer: r.answer.slice(0, SHOWN) })}\n\n(cut here: the whole answer is in ${saved ?? "Leanfare"}${saved ? `/part-${r.n}.md` : ""})` : shown(r), "", `(${r.receipt})`);
   for (const r of v.parts.filter((x: any) => x.error)) lines.push("", `Part ${r.n} failed: ${r.error}`);
   if (done.length) lines.push("", `Once you have used ${done.length === 1 ? "this answer" : "these answers"}, grade ${done.length === 1 ? "it" : "each"} with grade (good, partly or wrong, with the plan's id and the part): models graded below good too often are moved down.`);
   if (saved) lines.push("", `Saved in ${saved}/ in the project.`);
+  if (v.whoWrote && done.length) lines.push("", whoNote([...new Set<string>(done.map((r: any) => String(r.model ?? "Leanfare")))]));
   return lines.join("\n");
 }
 function sharedFiles(v: any): Record<string, string> {
@@ -477,7 +494,8 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
     }
     if (j.running) return text(`Still working in Leanfare (${j.seconds} seconds so far). Call delegate again with id "${j.id}" and nothing else to get the answer.`, { running: true, id: j.id, seconds: j.seconds });
     const gradeIt = ["read", "write", "reason"].includes(j.kind) ? `\n\n(Once you have used it: grade, with model ${j.model.id}, kind ${j.kind}${j.row ? ` and handoff ${j.row}` : ""}.)` : "";
-    return text(`${j.answer}\n\n(${j.receipt})${gradeIt}`, {
+    const who = j.whoWrote ? `\n\n${whoNote([j.model.label])}` : "";
+    return text(`${j.whoWrote ? markedBy(j.answer, j.model.label) : j.answer}\n\n(${j.receipt})${gradeIt}${who}`, {
       answer: j.answer, model: j.model.id, cost_usd: j.cost, total_usd: j.total, task: j.task, effort: j.effort,
       check: j.check.picked ? { verdict: j.check.verdict, by: j.check.checker?.id ?? null, why: j.check.why || null, cost_usd: j.check.cost } : null,
       first: j.first ? { model: j.first.model.id, cost_usd: j.first.cost } : null,

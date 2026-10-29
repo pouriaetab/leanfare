@@ -178,6 +178,10 @@ Now and then (1 in 10 hand offs at first; Settings, **Side by side**: off, 1 in 
 
 Settings, How the models did for you, shows for each model and kind of work how often its answers were as good as the top model's, and Savings shows the month's count. It is never done for a private task or for a plan's part kept to free or local models, and never past its own limit a month ($1 at first) or your budget. Leanfare keeps only the models, the kind of work, which answer was shown first, the verdict and the costs.
 
+### Show who wrote what (a test)
+
+Settings, **Show who wrote what**, marks each paragraph of the answers Leanfare hands back to your apps (hand offs and plan parts) with the name of the model that wrote it, in a small mark: `` `DeepSeek V4 Flash` The disk is full. `` Your app is asked to keep the marks on what it takes and to mark the paragraphs it writes itself, so its reply shows who wrote what. It works as far as the app follows it, and adds a few words to each paragraph. Off at first.
+
 ## Set up without typing
 
 - **Paste any key.** One box in Settings takes a key from any provider: Leanfare tells by its shape whose it is (patterns from gitleaks), tests it with that provider and saves it. A key it cannot place offers to add its provider.

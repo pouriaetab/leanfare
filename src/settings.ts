@@ -49,6 +49,7 @@ export interface Settings {
   filesTo: "any" | "notFree" | "local"; // where your projects' files may go in plans and the delegate (platforms.ts: mayTake)
   sideBySide: number; // one hand off in this many is also answered by the top model and judged blind against it (sidebyside.ts); 0: off
   sideBySideCap: number; // US dollars a month side by side may spend, from your budget
+  whoWrote: boolean; // a test: answers handed back to apps mark which model wrote each paragraph (mcp.ts: markedBy)
 }
 
 export const DEFAULTS: Settings = {
@@ -78,6 +79,7 @@ export const DEFAULTS: Settings = {
   filesTo: "any",
   sideBySide: 10,
   sideBySideCap: 1,
+  whoWrote: false,
 };
 
 // What a short answer is, given to the chat screen's models before the chat's own instructions
@@ -148,7 +150,7 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
   if ("atLimit" in p) { if (p.atLimit !== "cheapest" && p.atLimit !== "stop") return { error: "atLimit must be cheapest or stop" }; out.atLimit = p.atLimit; }
   if ("history" in p) out.history = !!p.history;
   if ("updateCheck" in p) out.updateCheck = !!p.updateCheck;
-  for (const k of ["showValue", "brief", "codexPlan", "setupDone"] as const) {
+  for (const k of ["showValue", "brief", "codexPlan", "setupDone", "whoWrote"] as const) {
     if (!(k in p)) continue;
     if (typeof p[k] !== "boolean") return { error: `${k} must be true or false` };
     out[k] = p[k];
