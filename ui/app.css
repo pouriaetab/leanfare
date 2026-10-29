@@ -344,6 +344,8 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
 .setting .row input[type="number"] { width: 120px; }
 .side-results { display: grid; gap: 6px; margin-top: 4px; }
 .side-results h4 { margin: 4px 0 0; font-size: 13px; }
+.lrow.side { row-gap: 2px; }
+.lrow.side .vs { grid-column: 1 / -1; margin-top: 0; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .money { position: relative; display: inline-flex; align-items: center; }
 .money span { position: absolute; left: 10px; color: var(--muted); }
 .money input { padding-left: 20px; }
