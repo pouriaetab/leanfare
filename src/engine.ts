@@ -191,6 +191,7 @@ export interface Plan {
   copies: number;
   cheapestId: string | null; // the cheapest model this request could use (the only one allowed past the budget)
   optional?: boolean; // never sent past the budget, not even on the cheapest model
+  job?: string | null; // the hand off this request is for (delegate.ts): each of its calls is marked with it in the ledger
 }
 
 const AUTO = /^(leanfare\/)?(auto|leanfare)(-(save|balanced|best))?$/i;
@@ -384,8 +385,9 @@ export async function plan(input: PlanInput): Promise<Plan> {
 export interface LedgerResult { cost: number | null; listCost: number | null; priceStatus: string; usage: Usage; usualCost: number | null }
 
 const INSERT = `INSERT INTO ledger(ts, month, day, source, provider, model, asked, task, mode, auto, reason, usual, usual_cost,
-    in_tokens, cached, cache_write, out_tokens, cost, list_cost, price_status, usage_status, status, error, ms, first_ms, switched_from, effort)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    in_tokens, cached, cache_write, out_tokens, cost, list_cost, price_status, usage_status, status, error, ms, first_ms, switched_from, effort,
+    job, think_tokens, think_source)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 // Rows that could not be written yet (another program had the database
 // locked): kept in memory and written as soon as it is free, in order.
 const unwritten: any[][] = [];
@@ -399,8 +401,18 @@ function writeRows() {
 }
 export const unwrittenRows = () => unwritten.length;
 
-export function record(p: Plan, m: Model, source: string, usage: Usage | null, o: { status: "ok" | "stopped" | "error"; error?: string; ms: number; firstMs?: number | null; reportedCost?: number | null; estimated?: boolean }): LedgerResult {
+// Of an answer's output, the thinking: as the provider said; else from the thinking it sent, about four characters a
+// token (an estimate); a model that does not think, none; else not known (null).
+export function thinkingOf(m: Model, u: Usage | null, chars: number): { tokens: number | null; source: "reported" | "text" | "none" | null } {
+  if (u?.thinking !== undefined) return { tokens: u.thinking, source: "reported" };
+  if (chars > 0) return { tokens: Math.min(Math.ceil(chars / 4), u?.output ?? Infinity), source: "text" };
+  if (!m.skills.includes("reasoning")) return { tokens: 0, source: "none" };
+  return { tokens: null, source: null };
+}
+
+export function record(p: Plan, m: Model, source: string, usage: Usage | null, o: { status: "ok" | "stopped" | "error"; error?: string; ms: number; firstMs?: number | null; reportedCost?: number | null; estimated?: boolean; thinkingChars?: number }): LedgerResult {
   const u = usage ?? ZERO;
+  const think = usage || o.thinkingChars ? thinkingOf(m, usage, o.thinkingChars ?? 0) : { tokens: null, source: null }; // a call that failed before any answer: nothing to split
   // A failed request costs nothing unless the provider had already written part of an answer.
   const billed = o.status !== "error" || u.output > 0;
   const list = typeof o.reportedCost === "number" ? o.reportedCost : costOf(m, u);
@@ -415,7 +427,7 @@ export function record(p: Plan, m: Model, source: string, usage: Usage | null, o
     u.uncached + u.cacheRead + u.cacheWrite + (u.cacheWrite1h ?? 0), u.cacheRead, u.cacheWrite + (u.cacheWrite1h ?? 0), u.output,
     billed ? charge.cost : 0, billed ? list : 0, priceStatus, o.estimated ? "estimated" : "reported",
     o.status, o.error ? redact(o.error).slice(0, 300) : null, Math.round(o.ms), o.firstMs == null ? null : Math.round(o.firstMs), p.switchedFrom,
-    effortFor(m, p.effortAsked),
+    effortFor(m, p.effortAsked), p.job ?? null, think.tokens, think.source,
   ];
   unwritten.push(row);
   if (!retryTimer) writeRows();
@@ -890,6 +902,7 @@ export interface ChatOptions {
   maxOut?: number | null; // the answer limit, in tokens (the chat has none of its own)
   optional?: boolean; // work that can be skipped: never sent past the budget
   speed?: SpeedChoice; // cheapest, fastest or within N seconds (the delegate passes its own)
+  job?: string; // the hand off this is for: the ledger marks each of its calls with it (delegate.ts)
 }
 
 // The chat's instructions go first, as a system message (Claude's translation moves it to "system").
@@ -910,6 +923,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
     emit({ type: "done", result: meta }); // the page always learns how it ended
     return { text: "", meta, status: status === 499 ? "stopped" : "error" };
   }
+  p.job = opts.job ?? null;
   const rid = register(source, `${label} · ${p.model.label}`, ac);
   emit({ type: "meta", plan: planView(p) });
   const body = { messages: withSystem(messages, opts.system) };
@@ -953,7 +967,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
   // A try that failed before the provider answered was written down where it failed (sendWithFallback).
   const recordTry = (t: Try, status: "ok" | "stopped" | "error", error?: string) =>
     status !== "error" || t.answered || t.usage
-      ? record(p, t.model, source, t.usage ?? estimatedUsage(p, t.text.length + t.thinking.length), { status, error, ms: performance.now() - t.t0, firstMs: t.firstMs, reportedCost: t.reported, estimated: !t.usage })
+      ? record(p, t.model, source, t.usage ?? estimatedUsage(p, t.text.length + t.thinking.length), { status, error, ms: performance.now() - t.t0, firstMs: t.firstMs, reportedCost: t.reported, estimated: !t.usage, thinkingChars: t.thinking.length })
       : null;
 
   // A model that ran out of room while thinking can hand its thinking back as the answer, under a first line "thought"

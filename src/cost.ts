@@ -9,6 +9,7 @@ export interface Usage {
   cacheWrite: number; // input tokens written to the cache for 5 minutes (Anthropic bills these)
   cacheWrite1h?: number; // input tokens written to the cache for an hour (Anthropic, twice the input price)
   output: number; // answer tokens, thinking included
+  thinking?: number; // of output, the thinking, where the provider says (OpenAI's reasoning_tokens, or a total that counts more)
 }
 
 export const ZERO: Usage = { uncached: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, output: 0 };
@@ -26,11 +27,15 @@ export function fromOpenAIUsage(u: any): Usage | null {
   const written = n(u.prompt_tokens_details?.cache_write_tokens);
   const hour = Math.min(written, n(u.prompt_tokens_details?.cache_write_1h_tokens)); // Leanfare's own, for Claude behind this address
   let output = n(u.completion_tokens ?? u.output_tokens);
+  const said = u.completion_tokens_details?.reasoning_tokens ?? u.output_tokens_details?.reasoning_tokens;
+  let thinking: number | undefined = typeof said === "number" && Number.isFinite(said) && said >= 0 ? said : undefined;
   // Some providers leave thinking tokens out of completion_tokens but in the
-  // total; they are billed as output either way.
+  // total; they are billed as output either way, and they are the thinking.
   const total = n(u.total_tokens);
-  if (total && total - prompt > output) output = total - prompt;
-  return { uncached: Math.max(0, prompt - cached - written), cacheRead: cached, cacheWrite: written - hour, cacheWrite1h: hour, output };
+  if (total && total - prompt > output) { thinking = Math.max(thinking ?? 0, total - prompt - output); output = total - prompt; }
+  const out: Usage = { uncached: Math.max(0, prompt - cached - written), cacheRead: cached, cacheWrite: written - hour, cacheWrite1h: hour, output };
+  if (thinking !== undefined) out.thinking = Math.min(thinking, output);
+  return out;
 }
 
 // Anthropic's format: input_tokens already excludes cache reads and writes.
