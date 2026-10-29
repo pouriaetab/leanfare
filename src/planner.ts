@@ -26,6 +26,7 @@ import { dirname, relative, sep } from "node:path";
 import { CODEX_ID, CODEX_LABEL, codexFor, runCodex } from "./codex";
 import { DEFAULT_MAX_OUT, TIER, gradeRow, nameOf, notePart, runDelegate, taskFor, type Effort, type Kind } from "./delegate";
 import { LOCAL_CONTEXT, allModels, fitsText, getModel, localNeed, type Model } from "./data";
+import { fitsFree } from "./freeplans";
 import { chargeOf, plan as route, runChat, usableModels } from "./engine";
 import { addGrade, movedDown, standing, standingText, type GradedKind, type Verdict } from "./grades";
 import { gb, suggestLocal } from "./local";
@@ -300,7 +301,7 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
   const big = (part.effort === "high" && (part.kind === "reason" || part.kind === "write"));
   if (big && !near) return stay(`high effort judgement: your strongest model, in your plan`);
   const need = Math.ceil((r.tokens * 4) / 3) + DEFAULT_MAX_OUT; // as delegate counts it: three characters a token, and the answer
-  const fits = (m: Model) => fitsText(m, r.tokens * 4, DEFAULT_MAX_OUT);
+  const fits = (m: Model) => fitsText(m, r.tokens * 4, DEFAULT_MAX_OUT) && fitsFree(m, r.tokens * 4, DEFAULT_MAX_OUT); // a free plan's tokens a minute too
   const kindOk = part.kind === "search" ? (m: Model) => m.provider === "perplexity" && fits(m) && modelOn(m) && mayTake(m, work) : (m: Model) => fits(m) && modelOn(m) && mayTake(m, work); // a search goes to a model that searches the web; a platform turned off takes nothing
   const anyFit = part.kind === "search" ? (m: Model) => m.provider === "perplexity" && fits(m) : fits;
   const offWhy = !usableModels(anyFit).length || usableModels(kindOk).length ? null

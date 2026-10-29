@@ -10,6 +10,7 @@ import type { Model } from "./data";
 import { db } from "./db";
 import { providerReady } from "./engine";
 import { meterView, type WindowView } from "./meter";
+import { FREE_PLANS, onFreePlan } from "./freeplans";
 import { saveSettings, settings } from "./settings";
 import { localDay, now } from "./util";
 
@@ -19,14 +20,16 @@ export const modelOn = (m: Pick<Model, "provider" | "local">): boolean => platfo
 
 // What a model's own terms let its company do with what is sent to it. Google's free key: people may read it, and
 // Google asks that nothing sensitive or personal goes there (Gemini API Additional Terms, Unpaid Services, March
-// 2026). OpenRouter's free models: their providers may keep it or train on it, as your OpenRouter settings allow.
+// 2026). Mistral's free Experiment plan: what is sent may be used to train its models. OpenRouter's free models:
+// their providers may keep it or train on it, as your OpenRouter settings allow (freeplans.ts has the free plans).
 export function readRisk(m: Pick<Model, "provider" | "free">): string | null {
-  if (m.provider === "google" && settings().providers.google?.free) return "people may read it";
+  if (onFreePlan(m.provider)) { const r = FREE_PLANS[m.provider as keyof typeof FREE_PLANS]?.risk ?? null; if (r) return r; }
   if (m.free) return "its provider may train on it";
   return null;
 }
 export const RISK_WHY: Record<string, string> = {
   "people may read it": "Google's terms for a free Gemini key: people may read what is sent, and it is used to improve Google's products; Google asks that nothing sensitive or personal goes there. A paid key is not read or used that way.",
+  "its company may train on it": "Mistral's free Experiment plan: what is sent through it may be used to train Mistral's models. A paid plan is not used that way.",
   "its provider may train on it": "A free model on OpenRouter: its provider may keep what is sent or train on it, as your OpenRouter privacy settings allow.",
 };
 // Whether a model may take a piece of work: a private one stays on this computer; one with files from your
@@ -130,7 +133,10 @@ export async function platformsView(): Promise<{ rows: PlatformRow[]; lines: str
   for (const p of PROVIDERS) {
     if (["openai", "anthropic", "google", "xai", "ollama"].includes(p.id) || p.local || !providerReady(p.id)) continue;
     const freeOnes = p.id === "openrouter" && settings().ticked.some((id) => id.startsWith("openrouter/") && id.endsWith(":free"));
-    row({ id: p.id, label: provider(p.id)?.name ?? p.id, ready: true, windows: [], source: null, needs: null, limit: budgetLine(), risk: freeOnes ? "its provider may train on it" : null });
+    // A free plan you said you are on (Groq's, Mistral's): its requests through Leanfare today, and its own limits.
+    const plan = onFreePlan(p.id) ? FREE_PLANS[p.id as keyof typeof FREE_PLANS]! : null, n = plan ? requestsToday(p.id) : 0;
+    const limit = plan ? `Free plan: ${n.toLocaleString("en-US")} request${n === 1 ? "" : "s"} through Leanfare today${plan.tokensPerMinute ? `; at most ${tok(plan.tokensPerMinute)} tokens a minute, so bigger work goes to another model` : ""}.` : budgetLine();
+    row({ id: p.id, label: provider(p.id)?.name ?? p.id, ready: true, windows: [], source: null, needs: null, limit, risk: plan?.risk ?? (freeOnes ? "its provider may train on it" : null) });
   }
   return { rows, lines: platformLines(rows) };
 }
