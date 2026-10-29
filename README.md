@@ -34,7 +34,9 @@ Leanfare needs a model to hand work to. It uses an API key your computer already
 ## The app
 
 - **The switch at the top**, In your apps, turns Leanfare off and on in all your apps at once. Off means your apps do all the work themselves.
-- **Chat** talks to any model, and each answer says which model wrote it and what it cost. **Plan** splits a task across models. **Savings** shows what Leanfare saved, what it did for your apps (the share kept out of your plans, and how good the answers were), and what you spent. **Settings** has the rest: models and keys, your apps, your plans, a monthly budget. Leanfare picks all of it for you. Change it only if you want to.
+- **Chat** talks to any model, and each answer says which model wrote it and what it cost. **Plan** splits a task across models. **Savings** opens with a report of what Leanfare did for your apps, over any span and prompt by prompt: the tokens kept out of your plans, which models did the work, and how good their answers were. Then what Leanfare saved and what you spent. **Settings** has the rest: models and keys, your apps, your plans, a monthly budget. Leanfare picks all of it for you. Change it only if you want to.
+- **Inside Claude:** ask for Leanfare's report, and Claude Desktop and Cowork show it as a card in the chat. A plan shows there as a table, with each part's model, your app's own included.
+- **Fair grades:** a sample of the answers is checked blind, by a model of another company when one can take it, and now and then compared with the best model you ticked.
 - **Your own models:** Settings, Local models says where they are and tests one on your computer. One that passes takes reading work first, for free. **Where Leanfare may send work** turns each platform off or on, with what is left before its nearest limit.
 - The [guide](https://github.com/pouriaetab/leanfare/blob/main/docs/GUIDE.md) explains each part.
 
