@@ -164,12 +164,18 @@ describe("a run", () => {
   test("a free plan's limit a minute: the trial waits, then asks once more; the wait is not the answer's time", async () => {
     await keys(...ALL_KEYS);
     answers();
-    const until = Date.now() + 200;
-    fake.hooks.fail = () => (Date.now() < until ? 429 : null);
+    // Every ask in the 350 ms after the first one is refused, however late a busy computer sends it. The ask after
+    // the wait comes at least 400 ms after the last refused one, so it is answered.
+    let first = 0;
+    fake.hooks.fail = () => { const now = Date.now(); first ||= now; return now - first < 350 ? 429 : null; };
+    const t0 = performance.now();
     await ui(url, "/api/trial/start", {});
     const r = (await finished()).report;
+    const whole = (performance.now() - t0) / 1000;
     expect(r.rows[0]).toMatchObject({ q: "log-errors", effort: "low", ok: true, right: true });
-    expect(r.rows[0].seconds).toBeLessThan(timing.rateWait / 1000);
+    // The answer's own time leaves the wait out: it fits in the whole run less the wait. A busy computer makes the
+    // answer and the run longer alike, so this holds there too; counting the wait would break it.
+    expect(r.rows[0].seconds).toBeLessThanOrEqual(whole - timing.rateWait / 1000 + 0.02);
     expect(r.errors).toEqual([]);
     expect(ledger().filter((x) => x.status === "error").length).toBeGreaterThan(0); // the refused tries, as the trial's
   }, 60_000);
