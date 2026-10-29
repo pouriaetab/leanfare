@@ -121,7 +121,7 @@ It speaks the 2026-07-28 protocol and the earlier ones.
 Claude stays in charge and hands pieces of work to Leanfare: searching or summarizing big files, logs or many documents, reviewing a file, drafting a section. Leanfare reads the files itself, so their text never enters Claude's context, picks the cheapest model you ticked that rates well enough, and answers briefly with a receipt:
 
 ```
-(Leanfare delegate: DeepSeek V4 Flash, $0.0004. Checked by Gemini 3.8 Flash: passed ($0.0011). About 54,000 tokens of files stayed out of your context; this answer is about 300. It took about 6 s.)
+(Leanfare delegate: DeepSeek V4 Flash, $0.0004. Checked blind by Gemini 3.8 Flash (another company): passed ($0.0011). About 54,000 tokens of files stayed out of your context; this answer is about 300. It took about 6 s.)
 ```
 
 - **Effort.** `low` takes the cheapest model rated within 80 points of the best you ticked (Save more), `medium` within 40 (Balanced), `high` within 15 (Best quality). It is also the thinking effort for models that think.
@@ -129,6 +129,7 @@ Claude stays in charge and hands pieces of work to Leanfare: searching or summar
 - **Kind.** `read` (find, pull out, summarize), `write` (draft text or code) or `reason` (work something out) decides which Arena rating counts.
 - **Speed.** `cheapest`, `fastest` or a number of seconds, as in [Speed](#speed); by default your choice in Settings.
 - **Checks.** A model rated above the one that answered checks every high effort answer, 1 in 4 medium ones and 1 in 10 low ones. A failed answer is asked again one tier up, with the checker's reason. Neither a check nor a second try goes past your budget.
+- **Blind, and from another company.** The checker is never told which model answered, and what an answer says of its own model ("I am Claude", "made by Google") is masked in its copy. When a model of another company than the one that answered is rated above it and can take the check, that model checks: models tend to favour answers like their own and their maker's. The receipt says so: "Checked blind by Gemini 3.8 Flash (another company): passed".
 - **Longer than a minute.** An app waits about a minute for a tool's answer (Cowork's link to your computer waits 60 seconds). A hand off still working after about 40 seconds answers with an id and goes on; the app calls `delegate` again with only that id for the answer. Switching Leanfare off stops the ones still working.
 - **Files.** Text files only: at most 50, 2 MB each, 4 MB in all. Files that hold secrets are never read: `.env` files and their kin, private keys and certificates, credential and token files, and anything in `.ssh`, `.gnupg`, `.aws`, `.git`, a keychain or Leanfare's own folder.
 
