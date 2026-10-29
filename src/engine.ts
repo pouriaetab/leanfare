@@ -446,7 +446,7 @@ function send(m: Model, body: any, stream: boolean, signal: AbortSignal, native:
     payload = toAnthropic(cap && body.max_tokens == null && body.max_completion_tokens == null ? { ...body, max_tokens: cap } : body, m, stream, effort);
   } else if (m.provider === "ollama" && ollamaPlain(body)) {
     url = `${base.replace(/\/v1\/?$/, "")}/api/chat`;
-    payload = toOllama(body, m, stream, cap);
+    payload = toOllama(body, m, stream, cap, effortAsked);
   } else {
     url = `${base}/chat/completions`;
     payload = openaiBody(m, body, stream, effort);
