@@ -124,8 +124,12 @@ export function startFake() {
     pulls: 0,
     contexts: {} as Record<string, number | null>, // what /api/show says of a model's context (null: says nothing); 131072 when not set
     showFails: false, // /api/show answers 500
+    // Models that think before they answer: name -> the tokens they think for. Ollama lists "thinking" among their
+    // capabilities, and their thinking counts toward num_predict: with too little room the answer comes back empty.
+    thinkers: {} as Record<string, number>,
+    thinkAsked: [] as unknown[], // the "think" of each chat request, as sent
     reset() {
-      Object.assign(this, { models: [llama()], loaded: [], down: false, steps: 8, gap: 10, error: null, errorAfter: 3, http: 0, httpMessage: "", cut: false, holding: false, deleteStatus: 0, partial: {}, pulls: 0, contexts: {}, showFails: false });
+      Object.assign(this, { models: [llama()], loaded: [], down: false, steps: 8, gap: 10, error: null, errorAfter: 3, http: 0, httpMessage: "", cut: false, holding: false, deleteStatus: 0, partial: {}, pulls: 0, contexts: {}, showFails: false, thinkers: {}, thinkAsked: [] });
     },
   };
   let dataJson: any = null;
@@ -195,7 +199,7 @@ export function startFake() {
         const m = ollama.models.find((x) => x.name === name);
         if (!m) return Response.json({ error: `model '${name}' not found` }, { status: 404 });
         const ctx = name in ollama.contexts ? ollama.contexts[name] : 131072;
-        return Response.json({ details: m.details, model_info: { "general.architecture": "fake", ...(ctx === null ? {} : { "fake.context_length": ctx }) } });
+        return Response.json({ details: m.details, model_info: { "general.architecture": "fake", ...(ctx === null ? {} : { "fake.context_length": ctx }) }, capabilities: ["completion", ...(name in ollama.thinkers ? ["thinking"] : [])] });
       }
       if (provider === "ollama" && url.pathname === "/ollama/api/pull" && req.method === "POST") {
         ollama.pulls++;
@@ -318,14 +322,23 @@ export function startFake() {
 
       // Ollama's own chat: a whole answer, or JSON lines as it streams them, with its own token counts.
       if (provider === "ollama" && url.pathname === "/ollama/api/chat") {
-        const last = { model: body.model, created_at: "2026-10-21T12:00:00Z", message: { role: "assistant", content: "" }, done: true, done_reason: capped ? "length" : "stop", ...(nousage ? {} : { prompt_eval_count: inTok, eval_count: outTok }) };
-        if (!body.stream) return Response.json({ ...last, message: { role: "assistant", content: answer, ...(think ? { thinking: think } : {}) } });
+        ollama.thinkAsked.push(body.think);
+        const thinkFor = ollama.thinkers[String(body.model)];
+        let said = answer, thought = think, stopped = capped, wrote = outTok;
+        if (thinkFor !== undefined && body.think !== false) { // it thinks first, and that counts toward num_predict
+          const lim = body?.options?.num_predict ?? Infinity;
+          thought = "Let me think. ".repeat(Math.max(1, Math.ceil(thinkFor / 3)));
+          wrote = Math.min(lim, thinkFor + outTok);
+          if (thinkFor + Math.ceil(answer.length / 4) > lim) { said = ""; stopped = true; }
+        }
+        const last = { model: body.model, created_at: "2026-10-21T12:00:00Z", message: { role: "assistant", content: "" }, done: true, done_reason: stopped ? "length" : "stop", ...(nousage ? {} : { prompt_eval_count: inTok, eval_count: wrote }) };
+        if (!body.stream) return Response.json({ ...last, message: { role: "assistant", content: said, ...(thought ? { thinking: thought } : {}) } });
         return new Response(new ReadableStream({
           async start(c) {
             const send = (o: any) => c.enqueue(enc.encode(JSON.stringify(o) + "\n"));
             try {
-              if (think) send({ model: body.model, message: { role: "assistant", content: "", thinking: think }, done: false });
-              for (const t of split) {
+              if (thought) send({ model: body.model, message: { role: "assistant", content: "", thinking: thought }, done: false });
+              for (const t of said === answer ? split : [said]) {
                 if (rec.aborted) return;
                 if (!t) continue;
                 send({ model: body.model, message: { role: "assistant", content: t }, done: false });
