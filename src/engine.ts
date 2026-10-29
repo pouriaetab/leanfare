@@ -15,6 +15,7 @@ import { addSpent, budgetState, release, tryReserve, wouldFit } from "./budget";
 import { failOfStatus, failOfText, type FailKind } from "./fails";
 import { noteFailure, restOf, restText } from "./rest";
 import { fitsFree, onFreePlan } from "./freeplans";
+import { RESPONSES_PATH, ResponsesStreamTranslator, responsesToOpenAI, toResponses } from "./upstream";
 import { AnthropicStreamTranslator, UserError, anthropicDefaultMax, anthropicToOpenAI, effortFor, headersFor, networkError, ollamaChunks, ollamaPlain, ollamaToOpenAI, openaiBody, plainError, thinkRoom, toAnthropic, toOllama } from "./upstream";
 import { SSEParser, dollars, localDay, localMonth, median, now, providerMessage, randomId, redact, usd8 } from "./util";
 import { takesImages, takesPdfs } from "./files";
@@ -480,6 +481,9 @@ function send(m: Model, body: any, stream: boolean, signal: AbortSignal, native:
     url = `${base}/v1/messages`;
     payload = { ...body, model: m.apiId };
     if (cap && payload.max_tokens == null) payload.max_tokens = cap;
+  } else if (def.kind === "responses") { // Perplexity's Agent API (upstream.ts)
+    url = `${base}${RESPONSES_PATH}`;
+    payload = toResponses(body, m, stream, cap);
   } else if (def.kind === "anthropic") {
     url = `${base}/v1/messages`;
     payload = toAnthropic(cap && body.max_tokens == null && body.max_completion_tokens == null ? { ...body, max_tokens: cap } : body, m, stream, effort);
@@ -581,6 +585,12 @@ async function* openaiChunks(res: Response, m: Model, modelName: string): AsyncG
       for (const j of ollamaChunks(o, modelName)) yield { data: JSON.stringify(j), j };
       if (o?.done === true) { yield { data: "[DONE]", j: null }; return; }
     }
+    return;
+  }
+  if (provider(m.provider)!.kind === "responses") {
+    const tr = new ResponsesStreamTranslator(modelName);
+    for await (const ev of sseEvents(res)) for (const j of tr.event(ev.event, ev.data)) yield { data: JSON.stringify(j), j };
+    if (tr.done) yield { data: "[DONE]", j: null };
     return;
   }
   if (provider(m.provider)!.kind === "anthropic") {
@@ -718,12 +728,12 @@ export async function handleOpenAI(req: Request, body: any): Promise<Response> {
         let j: any;
         try { j = JSON.parse(text); } catch { throw new UserError(502, `${def.name} sent an answer Leanfare could not read.`, "bad_provider_answer"); }
         const native = OLLAMA_NATIVE.has(r);
-        const oj = def.kind === "anthropic" ? anthropicToOpenAI(j, name) : native ? ollamaToOpenAI(j, name) : j;
+        const oj = def.kind === "anthropic" ? anthropicToOpenAI(j, name) : def.kind === "responses" ? responsesToOpenAI(j, name) : native ? ollamaToOpenAI(j, name) : j;
         const msg = oj.choices?.[0]?.message ?? {};
         const answer = typeof msg.content === "string" ? msg.content : "";
         const empty = !answer.trim() && !msg.tool_calls?.length && !msg.function_call && oj.choices?.[0]?.finish_reason !== "content_filter";
         const usage = def.kind === "anthropic" ? fromAnthropicUsage(j.usage) : fromOpenAIUsage(oj.usage);
-        return { out: def.kind === "anthropic" || native ? JSON.stringify(oj) : text, answer, empty, usage, reported: reportedCost(oj.usage), t };
+        return { out: def.kind === "anthropic" || def.kind === "responses" || native ? JSON.stringify(oj) : text, answer, empty, usage, reported: reportedCost(oj.usage), t };
       };
       let a = await read(res, t0);
       if (a.empty && !ac.signal.aborted) {

@@ -43,7 +43,7 @@ export type ProviderId = string;
 export interface ProviderDef {
   id: ProviderId;
   name: string;
-  kind: "openai" | "anthropic"; // the wire format it speaks
+  kind: "openai" | "anthropic" | "responses"; // the wire format it speaks (responses: OpenAI's Responses shape, Perplexity's Agent API)
   defaultBase: string;
   host?: string; // the host name llmledger uses for its prices
   prefix: string; // prefix of its keys in llmledger's catalogue
@@ -73,7 +73,7 @@ export const PROVIDERS: ProviderDef[] = [
   { id: "deepseek", name: "DeepSeek", kind: "openai", defaultBase: "https://api.deepseek.com", host: "deepseek", prefix: "deepseek/", needsKey: true, envKeys: ["DEEPSEEK_API_KEY"], keyUrl: "https://platform.deepseek.com/api_keys", streamUsage: "ask", keyShape: /^sk-[0-9a-f]{32}$/ },
   { id: "xai", name: "xAI", kind: "openai", defaultBase: "https://api.x.ai/v1", host: "xai", prefix: "xai/", needsKey: true, envKeys: ["XAI_API_KEY"], keyUrl: "https://console.x.ai", streamUsage: "ask", keyShape: /^xai-/ },
   { id: "mistral", name: "Mistral", kind: "openai", defaultBase: "https://api.mistral.ai/v1", host: "mistral", prefix: "mistral/", needsKey: true, envKeys: ["MISTRAL_API_KEY"], keyUrl: "https://console.mistral.ai/api-keys", streamUsage: "own", note: "Its free Experiment plan works: tick it below (Mistral may train on what is sent there).", keyShape: /^[A-Za-z0-9]{32}$/ },
-  { id: "perplexity", name: "Perplexity", kind: "openai", defaultBase: "https://api.perplexity.ai", host: "perplexity", prefix: "perplexity/", needsKey: true, envKeys: ["PERPLEXITY_API_KEY", "PPLX_API_KEY"], keyUrl: "https://www.perplexity.ai/account/api/keys", streamUsage: "own", note: "Answers from a live web search, with the pages it used. Each request also has a small search fee, counted in its cost.", keyShape: /^pplx-/, only: /^sonar(-pro|-reasoning-pro)?$/, more: true, noModelList: true },
+  { id: "perplexity", name: "Perplexity", kind: "responses", defaultBase: "https://api.perplexity.ai", host: "perplexity", prefix: "perplexity/", needsKey: true, envKeys: ["PERPLEXITY_API_KEY", "PPLX_API_KEY"], keyUrl: "https://www.perplexity.ai/account/api/keys", streamUsage: "own", note: "Answers from a live web search (Sonar, through Perplexity's Agent API). Each search also has a small fee, counted in its cost.", keyShape: /^pplx-/, only: /^sonar$/, more: true, noModelList: true },
   { id: "groq", name: "Groq", kind: "openai", defaultBase: "https://api.groq.com/openai/v1", host: "groq", prefix: "groq/", needsKey: true, envKeys: ["GROQ_API_KEY"], keyUrl: "https://console.groq.com/keys", streamUsage: "own", note: "Open models served very fast, OpenAI's gpt-oss among them. A free key works: tick its free plan below.", keyShape: /^gsk_/, slashIds: true, skip: /guard/i, more: true },
   { id: "cerebras", name: "Cerebras", kind: "openai", defaultBase: "https://api.cerebras.ai/v1", host: "cerebras", prefix: "cerebras/", needsKey: true, envKeys: ["CEREBRAS_API_KEY"], keyUrl: "https://cloud.cerebras.ai", streamUsage: "own", note: "Open models served very fast.", keyShape: /^csk[-_]/, more: true },
   { id: "together", name: "Together AI", kind: "openai", defaultBase: "https://api.together.xyz/v1", host: "together_ai", prefix: "together_ai/", needsKey: true, envKeys: ["TOGETHER_API_KEY"], keyUrl: "https://api.together.ai/settings/api-keys", streamUsage: "own", keyShape: /^tgp_v1_/, slashIds: true, skip: /^together-ai-/, more: true },

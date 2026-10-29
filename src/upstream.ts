@@ -3,7 +3,7 @@
 // Claude models work behind the OpenAI address and in the chat.
 import { baseOf, provider, type ProviderDef, type ProviderId } from "./config";
 import { LOCAL_CONTEXT, localNeed, type Model } from "./data";
-import { fromAnthropicUsage, promptChars, type Usage } from "./cost";
+import { fromAnthropicUsage, promptChars, textOfContent, type Usage } from "./cost";
 import { providerMessage, redact } from "./util";
 
 export class UserError extends Error {
@@ -163,6 +163,67 @@ export function anthropicToOpenAI(j: any, modelId: string): any {
     choices: [{ index: 0, message: { role: "assistant", content: text, ...(thinking ? { reasoning_content: thinking } : {}) }, finish_reason: FINISH[j.stop_reason] ?? "stop" }],
     usage: openaiUsage(usage),
   };
+}
+
+// ---- Perplexity's Agent API (0.10) -----------------------------------------------------------------
+// Perplexity's search answers come through its Agent API, in OpenAI's Responses shape: input in, output items out
+// (Sonar's chat completions moved there in July 2026). Leanfare speaks chat completions inside, so a request is turned
+// into the Responses shape with web search on, and the answer (whole, or streamed) back into chat completions. Its
+// usage keeps its own names (input_tokens, output_tokens) with the cost Perplexity reports, search fees included.
+export const RESPONSES_PATH = "/v1/agent";
+export function toResponses(body: any, m: Model, stream: boolean, cap: number | null): any {
+  const msgs: any[] = Array.isArray(body?.messages) ? body.messages : [];
+  const system = msgs.filter((x) => x?.role === "system" || x?.role === "developer").map((x) => textOfContent(x.content)).filter(Boolean).join("\n\n");
+  const turns = msgs.filter((x) => x?.role === "user" || x?.role === "assistant").map((x) => ({ role: x.role, content: textOfContent(x.content) }));
+  const most = body?.max_completion_tokens ?? body?.max_tokens ?? cap;
+  return {
+    model: m.apiId.includes("/") ? m.apiId : `perplexity/${m.apiId}`,
+    input: turns.length === 1 && turns[0].role === "user" ? turns[0].content : turns,
+    ...(system ? { instructions: system } : {}),
+    tools: [{ type: "web_search" }], // a search model answers from a live search
+    stream,
+    ...(typeof most === "number" && most > 0 ? { max_output_tokens: most } : {}),
+  };
+}
+const RESPONSES_FINISH: Record<string, string> = { max_output_tokens: "length", content_filter: "content_filter" };
+const responsesText = (r: any) => (Array.isArray(r?.output) ? r.output : []).filter((o: any) => o?.type === "message")
+  .flatMap((o: any) => (Array.isArray(o.content) ? o.content : [])).filter((c: any) => c?.type === "output_text" && typeof c.text === "string").map((c: any) => c.text).join("");
+// A whole Responses answer -> a whole chat completions answer, its usage as given.
+export function responsesToOpenAI(j: any, modelId: string): any {
+  if (j?.error && !j?.output) return { error: j.error };
+  const finish = j?.status === "incomplete" ? RESPONSES_FINISH[j?.incomplete_details?.reason] ?? "length" : "stop";
+  return {
+    id: j?.id ?? "chatcmpl-leanfare", object: "chat.completion", created: Math.floor(Date.now() / 1000), model: modelId,
+    choices: [{ index: 0, message: { role: "assistant", content: typeof j?.output_text === "string" ? j.output_text : responsesText(j) }, finish_reason: finish }],
+    ...(j?.usage ? { usage: j.usage } : {}),
+  };
+}
+// A streamed Responses answer -> chat completions chunks, one event at a time.
+export class ResponsesStreamTranslator {
+  done = false;
+  constructor(private modelId: string) {}
+  private chunk(delta: any, finish: string | null = null, usage?: any) {
+    return { id: "chatcmpl-leanfare", object: "chat.completion.chunk", model: this.modelId, choices: [{ index: 0, delta, finish_reason: finish }], ...(usage ? { usage } : {}) };
+  }
+  event(name: string, data: string): any[] {
+    let j: any;
+    try { j = JSON.parse(data); } catch { return []; }
+    const type = j?.type ?? name;
+    if (type === "response.output_text.delta" && typeof j.delta === "string") return [this.chunk({ content: j.delta })];
+    if ((type === "response.reasoning_summary_text.delta" || type === "response.reasoning_text.delta") && typeof j.delta === "string") return [this.chunk({ reasoning_content: j.delta })];
+    if (type === "response.completed" || type === "response.incomplete") {
+      this.done = true;
+      const r = j.response ?? {};
+      const finish = type === "response.incomplete" ? RESPONSES_FINISH[r?.incomplete_details?.reason] ?? "length" : "stop";
+      return [this.chunk({}, finish, r.usage)];
+    }
+    if (type === "response.failed" || type === "error") {
+      this.done = true;
+      const e = j.response?.error ?? j.error ?? j;
+      return [{ error: { message: String(e?.message ?? "Perplexity's answer failed."), type: String(e?.code ?? e?.type ?? "server_error") } }];
+    }
+    return [];
+  }
 }
 
 // A streamed Anthropic answer -> OpenAI stream chunks, one event at a time.
@@ -336,8 +397,9 @@ export async function checkKey(id: ProviderId, key: string | null, signal?: Abor
 // nothing, and the answer tells a good key (400 or 404: the model is wrong) from a bad one (401, 403).
 async function checkByAsking(def: ProviderDef, base: string, key: string | null, signal?: AbortSignal): Promise<KeyCheck> {
   try {
-    const res = await fetch(`${base}/chat/completions`, {
-      method: "POST", headers: headersFor(def, key), body: JSON.stringify({ model: "leanfare-key-check", messages: [{ role: "user", content: "." }], max_tokens: 1 }),
+    const responses = def.kind === "responses"; // Perplexity's Agent API
+    const res = await fetch(responses ? `${base}${RESPONSES_PATH}` : `${base}/chat/completions`, {
+      method: "POST", headers: headersFor(def, key), body: JSON.stringify(responses ? { model: "leanfare-key-check", input: ".", max_output_tokens: 1 } : { model: "leanfare-key-check", messages: [{ role: "user", content: "." }], max_tokens: 1 }),
       signal: AbortSignal.any([AbortSignal.timeout(15_000), ...(signal ? [signal] : [])]),
     });
     const text = await res.text();
