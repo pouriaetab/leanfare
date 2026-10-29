@@ -208,7 +208,7 @@ function workLines(w: any): string {
   const graded = w.grades.good + w.grades.partly + w.grades.wrong;
   const checked = w.checks.passed + w.checks.failed;
   return [
-    `Work for your apps this month (plan and delegate): ${count(w.tasks)} task${w.tasks === 1 ? "" : "s"}, ${w.keptPct === null ? "nothing measured yet" : `${Math.round(w.keptPct * 100)}% kept out of your plans`} (${count(w.kept)} tokens stayed out, ${count(w.back)} came back), ${usd(w.cost)}.`,
+    `Work for your apps this month (plan and delegate): ${count(w.tasks)} task${w.tasks === 1 ? "" : "s"}; Leanfare's models read ${count(w.kept)} tokens your apps never had to, and ${count(w.back)} came back to them; ${usd(w.cost)}.`,
     `Quality: ${graded ? `${count(w.grades.good)} of ${count(graded)} graded good, ${count(w.grades.partly)} partly, ${count(w.grades.wrong)} wrong` : "no answer graded yet"}; checks: ${checked ? `${count(w.checks.passed)} of ${count(checked)} passed` : "none yet"}.`,
   ].join("\n");
 }

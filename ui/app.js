@@ -537,8 +537,11 @@
     const head = ["#", "Part", "Kind", "Runs on", "Model", "Time", "Tokens", "Cost", "When", ...(run ? ["Now"] : [])];
     const table = h("div", { class: "plan-table-wrap" }, h("table", { class: "plan-table" }, h("thead", {}, h("tr", {}, ...head.map((x) => h("th", { text: x })))), h("tbody", {}, ...rows)));
     const time = [t.seconds !== null ? `Leanfare's parts take ${secsShort(t.seconds)} done at once` : "", t.after !== null && t.after !== undefined ? `${t.seconds !== null ? "the ones after yours take" : "Leanfare's parts wait for yours, then take"} ${secsShort(t.after)}${t.seconds !== null ? " once yours are done" : ""}` : ""].filter(Boolean).join("; ");
-    const share = t.kept > 0 ? ` (${t.used ? `${Math.max(1, Math.min(99, Math.round((t.kept / (t.kept + t.used)) * 100)))}%` : "all"} of this task)` : "";
-    const sum = h("p", { class: "plan-sum", text: `${t.out} of ${t.parts} parts go to Leanfare, keeping about ${tokShort(t.kept)} tokens out of your plan${share}${t.used ? `; about ${tokShort(t.used)} stay in it` : ""}.${time ? ` ${time}.` : ""} Pay per use: ${t.cost === null ? "not known" : money(t.cost)}.${t.out ? "" : ` ${nothingOut(P.parts)}`}` });
+    const share = t.kept > 0 ? ` (${t.used ? `${Math.max(1, Math.min(99, Math.round((t.kept / (t.kept + t.used)) * 100)))}%` : "all"} of the parts' tokens)` : "";
+    // Before the parts run these are estimates, and a guess where no files were named (planner.ts: totalsText).
+    const what = t.out ? `${t.out} of ${t.parts} parts go to Leanfare. If they run, about ${tokShort(t.kept)} tokens stay out of your plan${share}${t.used ? ` and about ${tokShort(t.used)} stay in it` : ""}: ${t.guessed ? "a guess, as no files were named for the reading" : "an estimate until they run"}.` : "Nothing goes to Leanfare.";
+    const small = !t.out && P.parts.every((p) => p.keep);
+    const sum = h("p", { class: "plan-sum", text: `${what}${time ? ` ${time}.` : ""} Pay per use: ${t.cost === null ? "not known" : money(t.cost)}.${t.out ? "" : ` ${small ? "It is small enough to answer yourself: handing it off would cost more than it saves." : nothingOut(P.parts)}`}` });
     // A local model that would run the reading and drafting free: pressing Download it is the yes.
     const localNote = P.local ? h("p", { class: "fine plan-local" }, `A local model fits this computer: ${P.local.name} (${gbs(P.local.size)}), rated like ${P.local.like}, free to run. `,
       h("button", { class: "btn small", type: "button", text: "Download it", onclick: async () => {
@@ -1596,7 +1599,7 @@
     const checked = w.checks.passed + w.checks.failed;
     const places = [["free", "free"], ["local", "on this computer"], ["plan", "on your ChatGPT plan"], ["paid", "paid"]].filter(([k]) => w.where[k]).map(([k, t]) => `${num(w.where[k])} ${t}`).join(" · ");
     const tiles = h("div", { class: "cards6" },
-      stat("kept", "Kept out of your plans", pctText(w.keptPct), `${num(w.kept)} tokens stayed out · ${num(w.back)} came back`, w.keptPct >= 0.5 ? "good" : ""),
+      stat("kept", "Kept out of your plans", `${tokShort(w.kept)} tokens`, `read by Leanfare's models, not your apps · ${num(w.back)} came back`, w.kept > 0 ? "good" : ""),
       stat("workCost", "Cost of that work", money(w.cost), places),
       stat("quality", "Quality", graded ? `${num(w.grades.good)} of ${num(graded)} good` : "Not graded yet",
         graded ? `${num(w.grades.partly)} partly · ${num(w.grades.wrong)} wrong · graded by your apps` : "your app grades the answers it uses", graded ? (w.grades.good === graded ? "good" : "") : "small"),
@@ -1612,7 +1615,7 @@
         h("td", { "data-label": "When", text: whenText(r.ts) }),
         h("td", { "data-label": "What", class: "what", text: what(r) }),
         h("td", { "data-label": "Where", text: r.models.map((m) => `${WHERE[m.where] ?? m.where}: ${m.label}`).join(" · ") }),
-        h("td", { "data-label": "Kept out", text: pctText(r.keptPct) }),
+        h("td", { "data-label": "Kept out", text: `${tokShort(r.kept)} tokens` }),
         h("td", { "data-label": "Cost", text: money(r.cost) }),
         h("td", { "data-label": "Quality" }, ...chips(r))))));
     const again = d && d.reruns ? `, ${num(d.failed)} failed and ${d.reruns === d.failed ? (d.failed === 1 ? "was" : "were") : `${num(d.reruns)} ${d.reruns === 1 ? "was" : "were"}`} asked again one tier up` : d && d.failed ? `, ${num(d.failed)} failed` : "";
