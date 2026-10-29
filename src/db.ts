@@ -99,6 +99,11 @@ CREATE TABLE IF NOT EXISTS trials(id INTEGER PRIMARY KEY, started TEXT NOT NULL,
 -- The manager's grades (grades.ts): which model, the kind of part, how good its answer was. No words.
 CREATE TABLE IF NOT EXISTS grades(id INTEGER PRIMARY KEY, ts TEXT NOT NULL, model TEXT NOT NULL, kind TEXT NOT NULL, effort TEXT, verdict TEXT NOT NULL, source TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS grades_model_kind ON grades(model, kind);
+-- Side by side (sidebyside.ts): a hand off's answer and the top model's, compared blind by a judge of a third company.
+-- Which models, the kind, which answer was shown first, the verdict (same, better or worse than the top model's) and
+-- the costs. No words.
+CREATE TABLE IF NOT EXISTS comparisons(id INTEGER PRIMARY KEY, ts TEXT NOT NULL, month TEXT NOT NULL, day TEXT NOT NULL, handoff INTEGER, kind TEXT NOT NULL, effort TEXT, model TEXT NOT NULL, top_model TEXT NOT NULL, judge TEXT, shown_first TEXT, verdict TEXT NOT NULL, top_cost REAL, judge_cost REAL);
+CREATE INDEX IF NOT EXISTS comparisons_month ON comparisons(month);
 `;
 
 // Columns added after 0.1: an older file gets them on its first start.

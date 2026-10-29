@@ -79,8 +79,8 @@ export function chargeOf(m: Model, listCost: number | null): { cost: number | nu
 // Lengths are kept apart by the kind of work: the delegate's short hand off answers, the checks'
 // verdicts and the trial's one word answers would make every chat estimate too low, and the other
 // way round. "main" is everything else (the chat and your other apps).
-export type LengthGroup = "main" | "delegate" | "check" | "trial";
-export const lengthGroup = (source: string | undefined): LengthGroup => (source === "delegate" || source === "check" || source === "trial" ? source : "main");
+export type LengthGroup = "main" | "delegate" | "check" | "trial" | "sidebyside";
+export const lengthGroup = (source: string | undefined): LengthGroup => (source === "delegate" || source === "check" || source === "trial" || source === "sidebyside" ? source : "main");
 let hist = { at: 0, map: new Map<string, number | null>() };
 export function outputHistory(task: string, model: string | null, effort: string | null = null, group: LengthGroup = "main"): number | null {
   if (effort) { const v = lengthsSeen(task, model, effort, group); if (v !== null) return v; }
@@ -91,7 +91,7 @@ function lengthsSeen(task: string, model: string | null, effort: string | null, 
   const k = `${task}|${model ?? ""}|${effort ?? ""}|${group}`;
   if (hist.map.has(k)) return hist.map.get(k)!;
   const since = new Date(now().getTime() - 30 * 86_400_000).toISOString();
-  const where = ["task = ?", "status = 'ok'", "ts >= ?", group === "main" ? "source NOT IN ('delegate', 'check', 'trial')" : "source = ?", ...(model ? ["model = ?"] : []), ...(effort ? ["effort = ?"] : [])].join(" AND ");
+  const where = ["task = ?", "status = 'ok'", "ts >= ?", group === "main" ? "source NOT IN ('delegate', 'check', 'trial', 'sidebyside')" : "source = ?", ...(model ? ["model = ?"] : []), ...(effort ? ["effort = ?"] : [])].join(" AND ");
   const args = [task, since, ...(group === "main" ? [] : [group]), ...(model ? [model] : []), ...(effort ? [effort] : [])];
   const rows = db.query(`SELECT out_tokens AS o FROM ledger WHERE ${where} ORDER BY id DESC LIMIT 200`).all(...args) as { o: number }[];
   const v = rows.length >= 5 ? median(rows.map((r) => r.o)) : null;

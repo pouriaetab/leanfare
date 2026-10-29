@@ -23,6 +23,7 @@ import { GRADED_KINDS, VERDICTS, addGrade, giveAnotherChance, standing, standing
 import { plansBrief, plansView } from "./plans";
 import { meterViews, setStatusline } from "./meter";
 import { checkDelegate, gradeRow, runDelegate, startDelegate, stopDelegates, waitDelegate } from "./delegate";
+import { sideMonth, sideStandings, sideText, stopSideBySide } from "./sidebyside";
 import { checkPlan, gradePart, makePlan, runView, startRun, stopAllRuns, stopRun } from "./planner";
 import { setAuto } from "./workers";
 import { setUp, setupView } from "./setup";
@@ -393,7 +394,7 @@ async function api(req: Request, url: URL): Promise<Response> {
     // Off stops what is already going too: the parts of running plans, hand offs still working, and the trial
     // (and a local model's test, which is one).
     const stopped = { plans: 0, delegates: 0, trial: false };
-    if (!b.on) { stopped.plans = stopAllRuns(); stopped.delegates = stopDelegates(); stopped.trial = trialRunning() || testRunning(); await stopTrial(); stopTest(); }
+    if (!b.on) { stopped.plans = stopAllRuns(); stopped.delegates = stopDelegates(); stopSideBySide(); stopped.trial = trialRunning() || testRunning(); await stopTrial(); stopTest(); }
     return json({ on: switchedOn(), stopped });
   }
   if (p === "/api/setup" && m === "GET") return json(setupView());
@@ -451,7 +452,7 @@ async function api(req: Request, url: URL): Promise<Response> {
   if (p === "/api/local/pull" && m === "GET") return json({ pull: local.pullView() });
   if (p === "/api/local/suggest" && m === "GET") return json(local.suggestLocal());
   // The manager's grades (grades.ts): a part's answer graded, the standings, and another chance.
-  if (p === "/api/grades" && m === "GET") return json({ standings: standings().map((x) => ({ ...x, text: standingText(x) })) });
+  if (p === "/api/grades" && m === "GET") return json({ standings: standings().map((x) => ({ ...x, text: standingText(x) })), side: sideStandings().map((x) => ({ ...x, text: sideText(x) })), sideMonth: sideMonth() });
   if (p === "/api/grades" && m === "POST") {
     const b = await readBody(req);
     if (!VERDICTS.includes(b?.verdict)) return fail(400, "verdict must be good, partly or wrong.");

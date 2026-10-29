@@ -1604,7 +1604,9 @@
       stat("quality", "Quality", graded ? `${num(w.grades.good)} of ${num(graded)} good` : "Not graded yet",
         graded ? `${num(w.grades.partly)} partly · ${num(w.grades.wrong)} wrong · graded by your apps` : "your app grades the answers it uses", graded ? (w.grades.good === graded ? "good" : "") : "small"),
       stat("checked", "Checked", checked ? `${num(w.checks.passed)} of ${num(checked)} passed` : "None yet",
-        w.checks.again ? `${num(w.checks.again)} ${w.checks.again === 1 ? "was" : "were"} asked again one tier up` : "a stronger model checks a sample", checked ? (w.checks.failed ? "" : "good") : "small"));
+        w.checks.again ? `${num(w.checks.again)} ${w.checks.again === 1 ? "was" : "were"} asked again one tier up` : "a stronger model checks a sample", checked ? (w.checks.failed ? "" : "good") : "small"),
+      stat("sideBySide", "Side by side", w.side?.compared ? `${num(w.side.asGood)} of ${num(w.side.compared)} as good` : "None yet",
+        w.side?.compared ? "as the top model's answer, judged blind" : "the top model answers a sample too", w.side?.compared ? (w.side.asGood === w.side.compared ? "good" : "") : "small"));
     const chips = (r) => r.grades.length ? r.grades.map((g) => h("span", { class: `chip ${g === "good" ? "good" : g === "wrong" ? "bad" : "warn"}`, text: g }))
       : r.checks.length ? r.checks.map((c) => h("span", { class: `chip ${c === "pass" ? "good" : "bad"}`, text: c === "pass" ? "check passed" : "check failed" }))
       : [h("span", { class: "none", text: "not graded" })];
@@ -1766,7 +1768,7 @@
     const notes = [];
     if (v.unpriced) notes.push(`${num(v.unpriced)} answer${v.unpriced === 1 ? " has" : "s have"} no listed price and count as $0 here.`);
     if (v.estimated) notes.push(`Token counts were estimated for ${num(v.estimated)} answer${v.estimated === 1 ? "" : "s"} (the provider did not report them).`);
-    const SOURCES = { chat: "Chat", openai: "Apps (OpenAI address)", anthropic: "Apps (Anthropic address)", delegate: "Delegated", check: "Checks", trial: "Trial", plan: "Plans" };
+    const SOURCES = { chat: "Chat", openai: "Apps (OpenAI address)", anthropic: "Apps (Anthropic address)", delegate: "Delegated", check: "Checks", trial: "Trial", plan: "Plans", sidebyside: "Side by side" };
     const src = v.bySource.map((s) => `${SOURCES[s.source] ?? s.source}: ${num(s.answers)}`).join(" · ");
     el.replaceChildren(
       h("div", { class: "sv-head" }, h("h2", { text: title }), h("span", { class: "grow" }), pickMonth, runButton("Refresh", async (signal) => { await loadSavings(); await loadPlans(true, signal); toast("Up to date.", "done"); })),
@@ -2444,7 +2446,10 @@
 
   // ---- How the models did for you (Settings) ---------------------------------------------------------
   const GRADE_KIND = { read: "reading", write: "drafting", reason: "working things out", search: "searching" };
-  async function loadGrades() { try { S.grades = (await api("/api/grades")).standings; } catch { S.grades = []; } renderSettings(); }
+  async function loadGrades() {
+    try { const r = await api("/api/grades"); S.grades = r.standings; S.side = r.side ?? []; S.sideMonth = r.sideMonth ?? null; } catch { S.grades = []; S.side = []; }
+    renderSettings();
+  }
   function gradesSettingEl() {
     if (S.grades === undefined) { S.grades = null; loadGrades(); }
     const list = S.grades ?? [];
@@ -2457,7 +2462,33 @@
           g.down ? runButton("Give it another chance", async () => {
             const r = await api("/api/grades/reset", { body: { model: g.model, kind: g.kind } });
             S.grades = r.standings; renderSettings(); toast(`${g.label} is picked again for ${GRADE_KIND[g.kind] ?? g.kind}.`, "done");
-          }, "btn small") : h("span", {})))));
+          }, "btn small") : h("span", {})))),
+      sideResultsEl());
+  }
+
+  // Side by side's results (sidebyside.ts): how close each model's work was to the top model's, judged blind.
+  function sideResultsEl() {
+    const list = S.side ?? [];
+    if (!list.length) return null;
+    return h("div", { class: "side-results" }, h("h4", { text: "Side by side with the top model" }),
+      h("p", { class: "note", text: "Judged blind by a model of a third company: it was not told which model wrote which answer." }),
+      h("div", { class: "lmodels" }, ...list.map((x) => h("div", { class: "lrow", title: x.text },
+        h("span", { class: "nm", title: x.model, text: `${x.label} · ${GRADE_KIND[x.kind] ?? x.kind}` }),
+        h("span", { class: "facts" }, h("span", { text: `as good in ${x.same + x.better} of ${x.n}${x.better ? `, better in ${x.better}` : ""}` }),
+          h("span", { class: "note", text: `against ${x.tops.join(", ")}` }))))));
+  }
+
+  // Side by side (sidebyside.ts): how often the top model answers a hand off too, and the most it may spend a month.
+  function sideBySideSettingEl(s) {
+    const box = moneyInput(s.sideBySideCap ?? 1, "Side by side, at most a month");
+    const often = h("select", { "aria-label": "Side by side, how often", onchange: (e) => patchSettings({ sideBySide: Number(e.target.value) }, Number(e.target.value) ? `Side by side: 1 in ${e.target.value} hand offs.` : "Side by side is off.") },
+      ...[[0, "Off"], [20, "1 in 20 hand offs"], [10, "1 in 10 hand offs"], [5, "1 in 5 hand offs"]].map(([v, t]) => h("option", { value: String(v), text: t, selected: (s.sideBySide ?? 10) === v })));
+    const m = S.sideMonth;
+    return h("div", { class: "setting", id: "sideCard" }, h("h3", { text: "Side by side" }),
+      h("div", { class: "row" }, often, h("span", { text: "at most" }), box,
+        h("button", { class: "btn", type: "button", text: "Save", onclick: () => patchSettings({ sideBySideCap: box.querySelector("input").value || 0 }, "Saved.") }), h("span", { text: "a month" })),
+      h("p", { text: "Now and then the best rated model you ticked answers a hand off too, after its answer went back to your app, and a model of a third company compares the two answers without knowing which model wrote which (in a random order, with what each says of its own model hidden). So you see how close each model's work is to the top model's, for each kind of work. Never for a private task, never past this limit or your budget. Leanfare keeps only the verdicts and costs." }),
+      m && m.compared ? h("p", { class: "note", text: `This month: ${num(m.compared)} compared, as good as the top model in ${num(m.asGood)}; ${money(m.cost)} of your ${money(s.sideBySideCap ?? 1)}.` }) : null);
   }
 
   function speedSettingEl(s) {
@@ -2582,7 +2613,7 @@
         h("div", { class: "seg", role: "group", "aria-label": "Thinking effort" }, ...[["auto", "Model's default"], ["low", "Low"], ["medium", "Medium"], ["high", "High"]].map(([k, label]) =>
           h("button", { type: "button", "aria-pressed": String((s.effort ?? "auto") === k), text: label, onclick: () => patchSettings({ effort: k }, k === "auto" ? "Thinking models think as they do by default." : `Thinking effort: ${label.toLowerCase()}.`) }))),
         h("p", { text: "For models that think before they answer, at the levels each one takes. Thinking is billed as output, so a higher effort costs more and takes longer; the estimate learns from your answers at each level." })),
-      planCapSettingEl(s), platformsSettingEl(), codexSettingEl(s), gradesSettingEl(),
+      planCapSettingEl(s), platformsSettingEl(), codexSettingEl(s), gradesSettingEl(), sideBySideSettingEl(s),
       h("div", { class: "setting" }, h("h3", { text: "Your usual model" }), usualSel,
         h("p", { text: "The model you would use without Leanfare. Savings are measured against it." })),
       h("div", { class: "setting", id: "budgetSetting" }, h("h3", { text: "Monthly budget" }),

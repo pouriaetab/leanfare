@@ -10,6 +10,7 @@ import { resetBudget } from "../src/budget";
 import { forgetHistoryCache, setPaused, stopRunning } from "../src/engine";
 import { forgetSpeeds } from "../src/speed";
 import { forgetGrades } from "../src/grades";
+import { sideBySideIdle, stopSideBySide } from "../src/sidebyside";
 import { stopTrial } from "../src/trial";
 import { forgetTests } from "../src/localtest";
 import { setNow } from "../src/util";
@@ -35,10 +36,12 @@ export async function boot() {
 
 export async function reset(patch: Partial<Settings> = {}) {
   stopRunning();
+  stopSideBySide();
+  await sideBySideIdle();
   setPaused(false);
   setNow("2026-10-21T12:00:00Z");
   await stopTrial();
-  db.exec("DELETE FROM ledger; DELETE FROM messages; DELETE FROM chats; DELETE FROM settings; DELETE FROM files; DELETE FROM delegations; DELETE FROM trials; DELETE FROM grades;");
+  db.exec("DELETE FROM ledger; DELETE FROM messages; DELETE FROM chats; DELETE FROM settings; DELETE FROM files; DELETE FROM delegations; DELETE FROM trials; DELETE FROM grades; DELETE FROM comparisons;");
   forgetGrades();
   resetSettingsCache();
   resetBudget();
@@ -60,7 +63,8 @@ export async function reset(patch: Partial<Settings> = {}) {
   fake.oauth.codes.clear();
   // Short answers (on by default) add an instruction to every chat request; the tests that check
   // what a provider gets turn it off, and chat.test.ts checks it on its own.
-  saveSettings({ brief: false, ...patch });
+  // Side by side is off unless a test turns it on: it would add answers to every hand off now and then.
+  saveSettings({ brief: false, sideBySide: 0, ...patch });
 }
 
 export async function keys(...ids: string[]) {
