@@ -24,6 +24,7 @@ import { plansBrief, plansView } from "./plans";
 import { meterViews, setStatusline } from "./meter";
 import { checkDelegate, gradeRow, runDelegate, startDelegate, stopDelegates, waitDelegate } from "./delegate";
 import { sideMonth, sideStandings, sideText, stopSideBySide } from "./sidebyside";
+import { checkReport, report } from "./report";
 import { checkPlan, gradePart, makePlan, runView, startRun, stopAllRuns, stopRun } from "./planner";
 import { setAuto } from "./workers";
 import { setUp, setupView } from "./setup";
@@ -451,6 +452,8 @@ async function api(req: Request, url: URL): Promise<Response> {
   }
   if (p === "/api/local/pull" && m === "GET") return json({ pull: local.pullView() });
   if (p === "/api/local/suggest" && m === "GET") return json(local.suggestLocal());
+  // The report (report.ts): a span of time and filters, everything Leanfare did for your apps in it.
+  if (p === "/api/report" && m === "GET") { const q = checkReport(url.searchParams); return typeof q === "string" ? fail(400, q) : json(await report(q)); }
   // The manager's grades (grades.ts): a part's answer graded, the standings, and another chance.
   if (p === "/api/grades" && m === "GET") return json({ standings: standings().map((x) => ({ ...x, text: standingText(x) })), side: sideStandings().map((x) => ({ ...x, text: sideText(x) })), sideMonth: sideMonth() });
   if (p === "/api/grades" && m === "POST") {
