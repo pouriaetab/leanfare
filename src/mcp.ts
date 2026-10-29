@@ -209,7 +209,7 @@ function workLines(w: any): string {
   const checked = w.checks.passed + w.checks.failed;
   return [
     `Work for your apps this month (plan and delegate): ${count(w.tasks)} task${w.tasks === 1 ? "" : "s"}; Leanfare's models read ${count(w.kept)} tokens your apps never had to, and ${count(w.back)} came back to them; ${usd(w.cost)}.`,
-    `Quality: ${graded ? `${count(w.grades.good)} of ${count(graded)} graded good, ${count(w.grades.partly)} partly, ${count(w.grades.wrong)} wrong` : "no answer graded yet"}; checks: ${checked ? `${count(w.checks.passed)} of ${count(checked)} passed` : "none yet"}.`,
+    `Quality: ${graded ? `${count(w.grades.good)} of ${count(graded)} graded good, ${count(w.grades.partly)} partly, ${count(w.grades.wrong)} wrong` : "no answer graded yet"}; checks: ${checked ? `${count(w.checks.passed)} of ${count(checked)} passed` : "none yet"}${w.side?.compared ? `; side by side: as good as the top model in ${count(w.side.asGood)} of ${count(w.side.compared)}, judged blind` : ""}.`,
   ].join("\n");
 }
 const text = (t: string, structured?: unknown) => ({ content: [{ type: "text", text: t }], ...(structured !== undefined ? { structuredContent: structured } : {}) });

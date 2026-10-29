@@ -12,6 +12,7 @@ import { TASKS, getModel } from "./data";
 import { db } from "./db";
 import { weightedPass, wilson } from "./delegate";
 import { budgetState } from "./budget";
+import { sideMonth } from "./sidebyside";
 import { settings } from "./settings";
 import { localDay, localMonth } from "./util";
 
@@ -24,7 +25,8 @@ export const DEFINITIONS = {
   budget: "Your monthly budget minus what was spent and what requests still running have reserved.",
   top: "The model that wrote the most answers this month.",
   kept: "Work Leanfare did for your apps this month (hand offs and plan parts): what its models read that the app never did (the files, and a plan part's own text), against the answers the app read back. What stays out of an app's context does not count toward its plan. The thinking and writing the app did not have to do is not counted, so this is the least it kept out. It is not a share of everything your apps used: Claude's chats and Cowork do not tell Leanfare theirs.",
-  workCost: "What that work cost: the hand offs, the plan parts and their checks, and the models that split the plans. Free and local models count as $0; a part Codex did counts in your ChatGPT plan, not here.",
+  workCost: "What that work cost: the hand offs, the plan parts and their checks, side by side, and the models that split the plans. Free and local models count as $0; a part Codex did counts in your ChatGPT plan, not here.",
+  sideBySide: "Now and then the best rated model you ticked answers a hand off too, and a model of a third company compares the two answers without knowing which model wrote which (Settings, Side by side). As good: the judge found the answer as good as the top model's, or better.",
   quality: "How the app that asked graded the answers it used (good, partly or wrong), from Leanfare's grade tool or the Plan tab. Answers nobody graded are not counted.",
   checked: "Answers a stronger model of yours checked. With checks on auto: every high effort answer, a quarter of the medium ones and a tenth of the low ones; a free part's checker is free too. The checker is not told which model answered, and is from another company when one can take it. A failed answer is asked again one tier up.",
   delegate: "Tasks another app (Claude Code, Claude Desktop) handed to Leanfare through its delegate tool. Leanfare read the files itself, so their text stayed out of that app's context. The pass rate counts checked answers only, with a 90% range (Wilson). The weighted rate counts each checked answer once for every answer it stands for (one over its chance of being checked), so it speaks for all handed over answers.",
@@ -69,9 +71,10 @@ export function work(month = localMonth()) {
     };
   }).sort((x, y) => (x.ts < y.ts ? 1 : -1)).slice(0, 8);
   const k = stayed(rows), b = back(rows);
+  const side = sideMonth(month);
   return {
     tasks: groups.size, parts: rows.length, kept: k, back: b, keptPct: share(k, b),
-    cost: rows.reduce((n, r) => n + costOf(r), 0) + Math.max(0, planLedger - rows.filter((r) => r.kind === "search").reduce((n, r) => n + (r.cost ?? 0), 0)), where, grades,
+    cost: rows.reduce((n, r) => n + costOf(r), 0) + side.cost + Math.max(0, planLedger - rows.filter((r) => r.kind === "search").reduce((n, r) => n + (r.cost ?? 0), 0)), where, grades, side,
     checks: { passed: rows.filter((r) => r.verdict === "pass").length, failed: rows.filter((r) => r.verdict === "fail").length, again: rows.filter((r) => r.rerun).length },
     recent,
   };
