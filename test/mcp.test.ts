@@ -291,6 +291,20 @@ describe("the tools", () => {
     } finally { rmSync(folder, { recursive: true, force: true }); }
   });
 
+  test("delegate with Show who wrote what on: the answer's paragraphs carry the model's mark, and the app is asked to keep them", async () => {
+    await keys("deepseek");
+    await ui(url, "/api/settings", { whoWrote: true });
+    const r = await rpc("tools/call", modern({ name: "delegate", arguments: { task: "Say it. [reply The disk is full.\n\nRetry failed.]", kind: "write", effort: "low", check: "never" } }));
+    const t = r.result.content[0].text;
+    expect(t).toStartWith("`DeepSeek V4 Flash` The disk is full.\n\n`DeepSeek V4 Flash` Retry failed.\n\n(Leanfare delegate: DeepSeek V4 Flash");
+    expect(t).toEndWith("(Test, Show who wrote what is on in Leanfare: keep the `DeepSeek V4 Flash` marks on what you take from this answer, and start each paragraph you write yourself with your own model's name the same way, so the user sees who wrote what.)");
+    expect(r.result.structuredContent.answer).toBe("The disk is full.\n\nRetry failed."); // the answer itself is unchanged
+    await ui(url, "/api/settings", { whoWrote: false });
+    const off = await rpc("tools/call", modern({ name: "delegate", arguments: { task: "Say it. [reply The disk is full.]", kind: "write", effort: "low", check: "never" } }));
+    expect(off.result.content[0].text).toStartWith("The disk is full.\n\n(Leanfare delegate:");
+    expect(off.result.content[0].text).not.toContain("Show who wrote what");
+  });
+
   test("works while Leanfare is locked (the door uses the control token)", async () => {
     await keys("openai");
     await fetch(`${url}/api/lock`, { method: "POST", headers: { "x-leanfare": "1", "content-type": "application/json" }, body: JSON.stringify({ on: true }) });
