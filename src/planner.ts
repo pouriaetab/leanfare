@@ -74,14 +74,16 @@ export interface Part {
   cost: number | null; // on pay per use; 0 on a local or free model; null when it stays with you, or not known
   why: string;
   risk?: string | null; // a free tier whose terms let its company read or train on what is sent (platforms.ts: readRisk)
+  guess?: boolean; // its size is a guess: a reading part with no files named (the sources a search finds, say)
+  keep?: boolean; // the whole task is small enough to answer yourself: it is not split
 }
-type Split = Omit<Part, "where" | "model" | "use" | "seconds" | "tokens" | "cost" | "why" | "risk">;
+type Split = Omit<Part, "where" | "model" | "use" | "seconds" | "tokens" | "cost" | "why" | "risk" | "guess">;
 export interface PlanResult {
   id: string; // kept here (the last 20), so it can run
   task: string;
   manager: string; // the app the person works in, as said ("Claude Code"), or "you"
   parts: Part[];
-  totals: { parts: number; out: number; later: number; kept: number; used: number; seconds: number | null; after: number | null; cost: number | null }; // later: Leanfare's parts that wait for yours; seconds: the time of the others, after: of the ones after yours
+  totals: { parts: number; out: number; later: number; kept: number; used: number; seconds: number | null; after: number | null; cost: number | null; guessed?: boolean }; // later: Leanfare's parts that wait for yours; seconds: the time of the others, after: of the ones after yours; guessed: a size is a guess
   split: { by: "model" | "rules"; model: { id: string; label: string } | null; cost: number | null; note: string | null };
   limits: { five: number | null; week: number | null } | null; // the person's plan windows, when known (percent used)
   local?: { name: string; size: number; like: string; rating: number; fit: string } | null; // a local model to download that would run reading and drafting free
@@ -187,7 +189,7 @@ export function rulesSplit(task: string, files: (PlanFile | Shown)[]): Split[] {
   ];
   if (RESEARCH.test(task)) return [
     p(1, "Gather the sources", "search", "medium", [], "none", "Find the most relevant, current sources and list them with links."),
-    p(2, "Pull out the facts", "read", "low", [1], big, "Pull out the facts the task needs from the sources, each with where it came from.", all),
+    p(2, "Pull out the facts", "read", "low", [1], files.length ? big : "medium", "Pull out the facts the task needs from the sources, each with where it came from.", all), // with no files: what a search finds, a guess
     p(3, "Outline the answer", "reason", "medium", [2], "small", "Outline the answer: the points in order, each with its facts."),
     p(4, "Write it", "write", "medium", [3], "small", "Write the answer from the outline, briefly."),
     p(5, "Check it against the sources", "reason", "high", [4], "medium", "Check every claim against the sources; list any that do not hold."),
@@ -288,6 +290,7 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
   const work = { private: priv, files: r.named > 0 };
   const filesTo = settings().filesTo ?? "any";
   const stay = (why: string): Part => ({ ...part, where: "you", model: null, use: modelInYourApp(part, manager), seconds: null, tokens: r.tokens + OUT_YOU, cost: null, why });
+  if (part.keep) return stay(KEEP_WHY);
   // Reading, drafting and working out can run on your ChatGPT plan through Codex, before anything paid.
   // Codex moved down by the manager's grades for this kind takes only a part no model can take.
   const codexCan = codex && !priv && !(work.files && filesTo === "local") && platformOn("chatgpt") && !!DELEGATE_KIND[part.kind];
@@ -371,10 +374,31 @@ export const chainSeconds = (parts: Part[]) => chains(parts).now;
 // ---- the table -----------------------------------------------------------------------------------
 
 export const tokText = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(Math.round(n)));
-// The share of the task's tokens that Leanfare's parts keep out of the plan, as " (97% of this task)": never
-// 100% while some stay in, never 0% when some go out.
+// The share of the parts' tokens that Leanfare's parts would keep out of the plan, as " (97% of the parts' tokens)":
+// never 100% while some stay in, never 0% when some go out. Your app's own thinking and writing around the parts is
+// not in it: the report counts that where the app says it (Claude Code's own files).
 export const keptShare = (t: { kept: number; used: number }) =>
-  t.kept > 0 ? ` (${t.used ? `${Math.max(1, Math.min(99, Math.round((t.kept / (t.kept + t.used)) * 100)))}%` : "all"} of this task)` : "";
+  t.kept > 0 ? ` (${t.used ? `${Math.max(1, Math.min(99, Math.round((t.kept / (t.kept + t.used)) * 100)))}%` : "all"} of the parts' tokens)` : "";
+// What the numbers are before the parts run (28 Oct: a plan that never ran read as 160k tokens saved).
+export const estimateNote = (t: { guessed?: boolean }) => (t.guessed ? "a guess, as no files were named for the reading" : "an estimate until they run");
+// What the totals say: what would go out, what would stay, and that it is an estimate.
+export function totalsText(t: PlanResult["totals"]): string {
+  if (!t.out) return `Nothing goes to Leanfare${t.parts === 1 ? "" : ` (${t.parts} parts)`}.`;
+  return `${t.out} of ${t.parts} parts go to Leanfare. If they run, about ${tokText(t.kept)} tokens stay out of your plan${keptShare(t)}${t.used ? ` and about ${tokText(t.used)} stay in it` : ""}: ${estimateNote(t)}.`;
+}
+// A question small enough to answer yourself: asked as a question, a few sentences, no files, nothing to build,
+// research, write or work out, and nothing of a project's own (its code, tests, logs). Splitting it would cost more
+// than it saves, and take longer. Short work is still work: "Work out why the nightly job is slow" or "Plan a
+// birthday party" is handed off (29 Oct: the first rule kept them as questions).
+export const TINY_CHARS = 400;
+const WRITES = /\b(write|draft|compose|translate|rewrite|summari[sz]e|create|generate|outline|list)\b/i; // writing work: its answer is long, and worth handing off
+const WORK = /\b(work out|figure out|find out|investigate|diagnose|analy[sz]e|review|audit|profile|benchmark|test|check|plan|design|set ?up|install|deploy|run|solve|prove|calculate|estimate)\b/i;
+const PROJECT = /\b(code|repo|repository|project|app|function|class|module|script|file|folder|tests?|build|job|logs?|errors?|bugs?|crash(es)?|server|database|query|endpoint|branch|commit|pull request|pipeline)\b/i;
+export function isTiny(task: string, files: unknown[]): boolean {
+  const t = task.trim();
+  return !files.length && t.length <= TINY_CHARS && /\?$/.test(t) && ![BUILDS, RESEARCH, WRITES, WORK, PROJECT].some((r) => r.test(t));
+}
+const KEEP_WHY = "it is small enough to answer yourself: handing it off would cost more than it saves";
 const usd = (v: number | null) => (v === null ? "not known" : v === 0 ? "$0" : v < 0.01 ? "under $0.01" : `$${v.toFixed(2)}`);
 const RUNS: Record<Where, string> = { you: "you", local: "Leanfare, on this computer", free: "Leanfare, free model", paid: "Leanfare, pay per use", codex: "Leanfare, through Codex" };
 const cell = (s: string) => s.replace(/\|/g, "/").replace(/\n/g, " ");
@@ -410,7 +434,7 @@ export function tableOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
     "|---|---|---|---|---|---|---|---|---|",
     ...rows.map((x) => `| ${x} |`),
     "",
-    `${t.out} of ${t.parts} parts go to Leanfare, keeping about ${tokText(t.kept)} tokens out of your plan${keptShare(t)}${t.used ? `; about ${tokText(t.used)} stay in it` : ""}. ${timeLine(t)}Pay per use: ${usd(t.cost)}.${t.out ? "" : ` ${nothingOut(r.parts)}`}${r.codex ? ` Codex took no part: ${r.codex}.` : ""}${r.local ? ` ${localLine(r.local)}` : ""}${r.parts.some((p) => p.risk) ? ` Parts on a free tier: ${[...new Set(r.parts.map((p) => p.risk).filter(Boolean))].join("; ")}. For anything private, plan it with private: it stays on this computer.` : ""}${r.private ? " This plan stays on this computer." : ""}`,
+    `${totalsText(t)} ${timeLine(t)}Pay per use: ${usd(t.cost)}.${t.out ? "" : ` ${r.parts.every((p) => p.keep) ? "It is small enough to answer yourself: handing it off would cost more than it saves." : nothingOut(r.parts)}`}${r.codex ? ` Codex took no part: ${r.codex}.` : ""}${r.local ? ` ${localLine(r.local)}` : ""}${r.parts.some((p) => p.risk) ? ` Parts on a free tier: ${[...new Set(r.parts.map((p) => p.risk).filter(Boolean))].join("; ")}. For anything private, plan it with private: it stays on this computer.` : ""}${r.private ? " This plan stays on this computer." : ""}`,
   ].join("\n");
 }
 
@@ -439,7 +463,8 @@ function nextOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
   const later = out.filter((p) => p.needs.length && !yoursFirst.has(p.n));
   if (later.length) s.push(`Then ${list(later.map((p) => p.n))}, each once the parts it needs are back, with their answers in its task.`);
   if (out.some((p) => p.kind === "search")) s.push("A search part goes to ask with the model in the table.");
-  if (mine.length) {
+  if (mine.length && mine.every((p) => p.keep)) s.push("Answer it yourself: it is too small to hand off.");
+  else if (mine.length) {
     const on = mine.map((p) => `part ${p.n}${picksPerPart(r.manager) || !r.you?.label ? ` on ${p.use?.label ?? "your strongest model"}` : ""}`);
     // Claude Code runs a part on another model with a subagent (its Agent tool takes model: opus, sonnet, haiku or fable).
     const how = mine.some((p) => p.use?.alias) && picksPerPart(r.manager) ? " For a part on another model than the one you run on, use a subagent with that model (model: opus, sonnet or haiku)." : "";
@@ -521,7 +546,9 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
   const shown = splitView(input.files);
   let parts: Split[] | null = null;
   const split: PlanResult["split"] = { by: "rules", model: null, cost: null, note: null };
-  if (input.split !== "rules") {
+  const tiny = isTiny(input.task, input.files);
+  if (tiny) parts = [{ n: 1, title: "Answer it", kind: "write", effort: "low", needs: [], size: "none", files: [], task: input.task.trim(), keep: true }];
+  if (input.split !== "rules" && !tiny) {
     const fileList = shown.length ? `\n\nFiles (${input.files.length.toLocaleString("en-US")}${shown.length < input.files.length ? `, shown by folder` : ""}):\n${shown.map((f) => `- ${f.name} (${tokText(Math.ceil(f.size / 4))} tokens)`).join("\n")}` : "";
     const ask: Msg[] = [{ role: "user", content: `The task: ${input.task}${fileList}\n\nThe person works in ${manager === "you" ? "their own AI app" : manager}.` }];
     const wait = splitSeconds();
@@ -549,11 +576,14 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
   const known = limits.five !== null || limits.week !== null;
   const nearText = [limits.five !== null && limits.five >= NEAR ? `the 5 hours at ${Math.round(limits.five)}%` : "", limits.week !== null && limits.week >= NEAR ? `the week at ${Math.round(limits.week)}%` : ""].filter(Boolean).join(", ") || null;
   const placed: Part[] = [];
-  for (const p of parts) placed.push(await place(p, input.files, nearText, manager, input.signal, codex.ok, !!input.private));
+  // A reading part with no files named reads what an earlier part finds (a search's sources): its size is a guess.
+  const guessed = (p: Split) => p.kind === "read" && p.size !== "none" && reading(p, input.files).named === 0;
+  const mark = (x: Part, p: Split): Part => (guessed(p) ? { ...x, guess: true } : x);
+  for (const p of parts) placed.push(mark(await place(p, input.files, nearText, manager, input.signal, codex.ok, !!input.private), p));
   // A part that waits for one of yours is handed over by your app once yours are done, with delegate,
   // which cannot run it on Codex: such a part is placed as if Codex were off.
   const later = afterYours(placed);
-  for (let i = 0; i < placed.length; i++) if (placed[i].where === "codex" && later.has(placed[i].n)) placed[i] = await place(parts[i], input.files, nearText, manager, input.signal, false);
+  for (let i = 0; i < placed.length; i++) if (placed[i].where === "codex" && later.has(placed[i].n)) placed[i] = mark(await place(parts[i], input.files, nearText, manager, input.signal, false), parts[i]);
   const out = placed.filter((p) => p.where !== "you");
   const costs = out.map((p) => p.cost);
   const time = chains(placed);
@@ -562,6 +592,7 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
     kept: out.reduce((n, p) => n + p.tokens, 0), used: placed.filter((p) => p.where === "you").reduce((n, p) => n + p.tokens, 0),
     seconds: time.now, after: time.after,
     cost: costs.some((c) => c === null) ? null : costs.reduce<number>((a, b) => a + (b ?? 0), 0),
+    guessed: out.some((p) => p.guess),
   };
   // A part that goes to pay per use, or stays with you only because Leanfare had no model for it, could
   // run free on this computer, if a local model can take it (its context: at most 16k tokens, with room
