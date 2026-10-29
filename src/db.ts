@@ -116,6 +116,7 @@ const ADDED: [table: string, column: string, type: string][] = [
   ["delegations", "task_tokens", "INTEGER NOT NULL DEFAULT 0"], // a plan part's own text, which the app that asked never read
   ["delegations", "app", "TEXT"], // the app that asked, by the name it gives Leanfare's door ("Claude Code", "Claude")
   ["delegations", "app_model", "TEXT"], // the model that app runs on, as it says (claude-opus-5-5): the prompt's main model
+  ["delegations", "ms", "INTEGER"], // how long it took, checks included (the report shows it)
 ];
 
 function addColumns(d: Database) {
