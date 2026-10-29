@@ -23,6 +23,7 @@ import { db } from "./db";
 import { passedLocal } from "./localpass";
 import { mayTake, modelOn, readRisk } from "./platforms";
 import { movedDown } from "./grades";
+import { fromAnotherCompany, masked } from "./judge";
 import { plan, runChat, usableModels, type ChatOptions } from "./engine";
 import { DELEGATE_LIMITS, type DelegateFile } from "./readfiles";
 import { guessTask, rating, type Guess, type Msg } from "./router";
@@ -191,7 +192,7 @@ export function weightedPass(rows: { verdict: string; chance: number }[]): numbe
 }
 
 export interface Who { id: string; label: string }
-export interface DelegateCheck { chance: number; picked: boolean; verdict: "pass" | "fail" | "unclear" | "skipped" | null; why: string; checker: Who | null; cost: number | null }
+export interface DelegateCheck { chance: number; picked: boolean; verdict: "pass" | "fail" | "unclear" | "skipped" | null; why: string; checker: Who | null; cost: number | null; other?: boolean } // other: the checker is another company's model
 export interface DelegateResult {
   answer: string;
   model: Who;
@@ -261,8 +262,10 @@ export function receiptOf(r: Omit<DelegateResult, "receipt">, maxOut: number): s
   else {
     parts.push(`Leanfare delegate: ${r.model.label}, ${usd(r.cost)}.`);
     if (r.swap) parts.push(r.swap);
-    if (c.verdict === "pass") parts.push(`Checked by ${c.checker!.label}: passed (${usd(c.cost)}).`);
-    else if (c.verdict === "unclear") parts.push(`Checked by ${c.checker!.label}: no clear verdict (${usd(c.cost)}).`);
+    // Blind: the checker was not told which model answered (judge.ts).
+    const by = `${c.checker?.label}${c.other ? " (another company)" : ""}`;
+    if (c.verdict === "pass") parts.push(`Checked blind by ${by}: passed (${usd(c.cost)}).`);
+    else if (c.verdict === "unclear") parts.push(`Checked blind by ${by}: no clear verdict (${usd(c.cost)}).`);
     else if (c.verdict === "fail") parts.push(`${c.checker!.label} failed it (${c.why || "no reason given"}; ${usd(c.cost)}), and asking again did not work (${r.rerunError ?? "unknown"}). Check this answer yourself.`);
     else if (c.verdict === "skipped") parts.push(`Not checked: ${c.why}.`);
     else if (c.chance > 0) parts.push(`Not checked this time (Leanfare checks 1 in ${Math.round(1 / c.chance)} ${r.effort} effort answers).`);
@@ -391,13 +394,16 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   };
 
   if (picked) {
-    const checkPrompt = `The task:\n${input.task}${block ? `\n\n${block}` : ""}\n\nThe answer to check:\n${first.text}`;
+    // Blind: the checker is not told which model answered, and what the answer says of its own model is masked (judge.ts).
+    const checkPrompt = `The task:\n${input.task}${block ? `\n\n${block}` : ""}\n\nThe answer to check:\n${masked(first.text)}`;
     const ckFit = fit(checkPrompt.length + CHECKER_SYSTEM.length, CHECK_MAX_OUT);
     // Rated above the model that answered and able to take the check's text; the grades' preference
     // comes last, so a moved-down model still checks when it is the only one that can.
     const above0 = doer ? ratedAbove(doer) : () => false;
     const above = kept(above0);
-    const stronger = within((m) => above0(m) && ckFit.ok(m));
+    // A checker from another company than the model that answered, when one rated above it can take it (judge.ts).
+    const judge = fromAnotherCompany(doer ? [doer] : [], within((m) => above0(m) && ckFit.ok(m)));
+    const stronger = judge.only;
     if (!usableModels(above).length) {
       check.verdict = "skipped";
       check.why = doer ? `${doer.label} is the best rated model you ticked for this, so there is no stronger one to check it` : "the model that answered is no longer in Leanfare's price list";
@@ -415,7 +421,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
       } else {
         const checker = who(c.meta.model);
         const v = verdictOf(c.text);
-        check.verdict = v.verdict; check.why = v.why; check.checker = checker;
+        check.verdict = v.verdict; check.why = v.why; check.checker = checker; check.other = judge.other;
         if (v.verdict === "fail") {
           // One tier up, among the models rated above the first; from Best quality, the checker
           // itself. Like the check, it never goes past the budget: the first answer is there.
