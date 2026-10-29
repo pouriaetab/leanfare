@@ -51,6 +51,8 @@ export interface PlatformRow {
   windows: LimitWindow[]; // a plan's windows, the nearest first (the 5 hours before the week)
   limit: string | null; // the rest, in words: a free key's count today, a budget, no limit
   source: string | null; // where the numbers come from
+  asOf: string | null; // when a plan's numbers were read (the app writes them only while it runs)
+  stale: string | null; // when that was long ago: why the number may be behind, and what updates it
   risk: string | null; // a free tier whose terms let its company read or train on what is sent, and why (riskWhy)
   riskWhy: string | null;
 }
@@ -62,40 +64,53 @@ function windowsOf(ws: WindowView[]): LimitWindow[] {
   return ws.filter((w) => typeof w.used === "number").sort((a, b) => ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind))
     .map((w) => ({ kind: w.kind, left: Math.max(0, Math.round(100 - w.used)), tokensLeft: w.tokensLeft === null ? null : Math.round(w.tokensLeft), resets: w.resets }));
 }
-async function planWindows(p: "claude" | "chatgpt"): Promise<LimitWindow[]> {
-  try { return windowsOf((await meterView(p)).windows); } catch { return []; }
+async function planView(p: "claude" | "chatgpt"): Promise<{ windows: LimitWindow[]; at: string | null }> {
+  try { const v = await meterView(p); return { windows: windowsOf(v.windows), at: v.at }; } catch { return { windows: [], at: null }; }
 }
+// A plan's numbers are read from its own app, and only while that app runs: Claude Code's status line, Codex's
+// log files. Claude's chats, Cowork and ChatGPT's app use the same limits but tell Leanfare nothing, so an old
+// reading can be well behind (28 Oct: the week read 91% left when Claude's own page said 64% used).
+export const STALE_AFTER = 60 * 60_000;
+const STALE: Record<"claude" | "chatgpt", string> = {
+  claude: "It may be behind: Claude's chats and Cowork use the same limits and tell Leanfare nothing. Any prompt in Claude Code updates it.",
+  chatgpt: "It may be behind: ChatGPT's own app uses the same limits and tells Leanfare nothing. Any message in Codex updates it.",
+};
+const staleOf = (p: "claude" | "chatgpt", at: string | null) => (at && now().getTime() - Date.parse(at) > STALE_AFTER ? STALE[p] : null);
 function budgetLine(): string {
   const b = budgetState();
   return b.budget === null ? "Pay per use; no monthly budget is set." : `Pay per use: ${usd(Math.max(0, b.left ?? 0))} of your ${usd(b.budget)} monthly budget left.`;
 }
 const requestsToday = (prov: string): number => (db.query("SELECT COUNT(*) AS n FROM ledger WHERE day = ? AND provider = ? AND status != 'error'").get(localDay(), prov) as any).n;
 
+// A time in words: "4:10 PM" today, "Tue 4:10 PM" another day.
+export function whenText(iso: string, at = now().getTime()): string {
+  const d = new Date(iso), t = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  return d.toDateString() === new Date(at).toDateString() ? t : `${d.toLocaleDateString("en-US", { weekday: "short" })} ${t}`;
+}
 // A plan's windows in words, the nearest first: "5 hours: 62% left (about 1.2M tokens), resets 4:10 PM · week: 81% left".
 export function windowsText(ws: LimitWindow[], at = now().getTime()): string {
-  const when = (iso: string) => {
-    const d = new Date(iso), t = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-    return d.toDateString() === new Date(at).toDateString() ? t : `${d.toLocaleDateString("en-US", { weekday: "short" })} ${t}`;
-  };
-  return ws.map((w) => `${w.kind}: ${w.left}% left${w.tokensLeft ? ` (about ${tok(w.tokensLeft)} tokens)` : ""}${w.resets ? `, resets ${when(w.resets)}` : ""}`).join(" · ");
+  return ws.map((w) => `${w.kind}: ${w.left}% left${w.tokensLeft ? ` (about ${tok(w.tokensLeft)} tokens)` : ""}${w.resets ? `, resets ${whenText(w.resets, at)}` : ""}`).join(" · ");
 }
 
 export async function platformsView(): Promise<{ rows: PlatformRow[]; lines: string[] }> {
   const s = settings();
   const rows: PlatformRow[] = [];
-  const row = (r: Omit<PlatformRow, "on" | "risk" | "riskWhy"> & { risk?: string | null }) => rows.push({ ...r, on: platformOn(r.id), risk: r.risk ?? null, riskWhy: r.risk ? RISK_WHY[r.risk] ?? null : null });
+  const row = (r: Omit<PlatformRow, "on" | "risk" | "riskWhy" | "asOf" | "stale"> & { risk?: string | null; asOf?: string | null; stale?: string | null }) =>
+    rows.push({ ...r, on: platformOn(r.id), risk: r.risk ?? null, riskWhy: r.risk ? RISK_WHY[r.risk] ?? null : null, asOf: r.asOf ?? null, stale: r.stale ?? null });
   // Claude: work goes to Claude's models with an Anthropic key; the plan's limits come from Claude Code's status line.
-  const claude = await planWindows("claude");
+  const cv = await planView("claude"), claude = cv.windows;
   const anthropic = providerReady("anthropic");
   row({ id: "anthropic", label: "Claude", ready: anthropic, windows: claude, source: claude.length ? "your plan, from Claude Code's status line" : null,
+    asOf: claude.length ? cv.at : null, stale: claude.length ? staleOf("claude", cv.at) : null,
     needs: anthropic ? null : "No Anthropic key: Leanfare sends Claude's models no work, and only shows your plan's limits.",
     limit: anthropic ? budgetLine() : claude.length ? null : "Your plan's limits show once Leanfare is in Claude Code's status line (Savings, Your subscriptions)." });
   // ChatGPT: OpenAI's models with a key, and Codex on your ChatGPT plan when plans may use it.
-  const gpt = await planWindows("chatgpt");
+  const gv = await planView("chatgpt"), gpt = gv.windows;
   const openai = providerReady("openai");
   let codex = false;
   try { const c = await codexState(); codex = c.signedIn && c.login === "chatgpt" && s.codexPlan; } catch {}
   row({ id: "chatgpt", label: "ChatGPT", ready: openai || codex, windows: gpt, source: gpt.length ? "your plan, from Codex" : null,
+    asOf: gpt.length ? gv.at : null, stale: gpt.length ? staleOf("chatgpt", gv.at) : null,
     needs: openai || codex ? null : "Add an OpenAI key, or let plans use Codex on your ChatGPT plan (Your ChatGPT plan, through Codex).",
     limit: [codex ? "Plans' parts run on Codex, on your plan." : null, openai ? budgetLine() : null].filter(Boolean).join(" ") || null });
   // Gemini: a free key's requests through Leanfare today (Google does not say its free limits ahead).
@@ -122,5 +137,5 @@ export async function platformsView(): Promise<{ rows: PlatformRow[]; lines: str
 
 // The lines the MCP door's spend tool shows.
 export function platformLines(rows: PlatformRow[]): string[] {
-  return rows.filter((r) => r.ready || r.windows.length).map((r) => `${r.label}${r.ready && !r.on ? " (off for plans and the delegate)" : ""}${!r.ready ? " (not used: " + (r.needs ?? "").replace(/\.$/, "").toLowerCase() + ")" : ""}: ${[r.windows.length ? `${windowsText(r.windows)}${r.source ? ` (${r.source})` : ""}.` : null, r.limit].filter(Boolean).join(" ") || "no limit known."}`);
+  return rows.filter((r) => r.ready || r.windows.length).map((r) => `${r.label}${r.ready && !r.on ? " (off for plans and the delegate)" : ""}${!r.ready ? " (not used: " + (r.needs ?? "").replace(/\.$/, "").toLowerCase() + ")" : ""}: ${[r.windows.length ? `${windowsText(r.windows)}${r.source ? ` (${r.source}${r.asOf ? `, as of ${whenText(r.asOf)}` : ""})` : ""}.` : null, r.stale, r.limit].filter(Boolean).join(" ") || "no limit known."}`);
 }

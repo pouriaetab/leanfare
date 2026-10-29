@@ -2385,10 +2385,11 @@
     for (const r of P.rows) {
       const sw = r.ready ? h("button", { class: "hswitch", type: "button", role: "switch", "aria-checked": String(r.on), "aria-label": `${r.label} for plans and the delegate`, onclick: () => setPlatform(r.id, !r.on) },
         h("span", { class: "hs-label", text: r.on ? "Use" : "Off" }), h("span", { class: "track", "aria-hidden": "true" }, h("span", { class: "knob" }))) : null;
-      const lims = r.windows.length ? `${r.windows.map(windowText).join(" · ")}${r.source ? ` (${r.source})` : ""}` : null;
+      const lims = r.windows.length ? `${r.windows.map(windowText).join(" · ")}${r.source ? ` (${r.source}${r.asOf ? `, ${ago(r.asOf)}` : ""})` : ""}` : null;
       card.append(h("div", { class: "prow" + (r.ready ? "" : " off") },
         h("div", { class: "pinfo" }, h("div", { class: "pname" }, r.label, r.risk ? h("span", { class: "chip warn", text: r.risk }) : null),
           lims ? h("div", { class: "note lim", text: lims }) : null,
+          r.stale ? h("div", { class: "note stale", text: r.stale }) : null,
           r.limit ? h("div", { class: "note", text: r.limit }) : null,
           r.needs ? h("div", { class: "note", text: r.needs }) : null,
           r.riskWhy ? h("details", { class: "why" }, h("summary", { text: "Why it says so" }), h("p", { class: "note", text: r.riskWhy })) : null),
