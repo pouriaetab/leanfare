@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.0
+
+- The report: Savings opens with what Leanfare did for your apps over any span, from the last hour to a year: the tokens kept out of your plans, your apps' own use where it is known (Claude Code's, from its own files; Claude's chats and Cowork do not share theirs, so they show as not known), the cost and the quality. Tokens over time, work by model, quality by kind of work, and each prompt with the models it handed work to and how good their answers were, under an id that is kept (PRM-41, and PRM-41.2 for a part). Filters by app, provider, model, kind of work and thread, and Export CSV. Ask Claude for Leanfare's report (the new `report` tool) and Claude Desktop and Cowork show it as a card in the chat.
+- Fair grades: checks are blind, and come from a model of another company when one can take them; what an answer says of its own model is masked. Side by side: on 1 in 10 hand offs at first (at most $1 a month), the best rated model you ticked answers too, after the answer went back, and a model of a third company compares the two blind. Settings shows how close each model comes for each kind of work.
+- Plans name every model: a part that stays with your app names your app's own model and your plan ("you (Claude, on your Claude Max plan)", Claude Opus 5.5), and each hand off keeps them. A plan's numbers say they are estimates, and a question small enough to answer yourself is not split.
+- Show who wrote what (a test, off at first): each paragraph of an answer handed back to your apps is marked with the model that wrote it.
+
+Fixed from 0.8.0:
+
+- Local models that think (qwen3.5 and others) no longer fail the reading test: they answer without thinking at low effort, and get room for their thinking otherwise.
+- A plan's limits say when they were read, and that a reading more than an hour old may be behind: Claude's chats and Cowork use the same limits without telling Leanfare.
+- Cloud models that think get room for their thinking, and an answer that hands back only its thinking is asked again.
+- Side by side's rows in Settings show the whole model name, the top model and the judge.
+- Tests get the 20 seconds they were meant to have.
+
 ## 0.8.0
 
 - What Leanfare did for your apps: Savings opens with the share of the work for your apps (plans and the delegate) that stayed out of your plans, in tokens too, what it cost and where it ran, how good the answers were (your apps' grades and the checks), and the last few tasks, a plan's parts on one line. A plan says the share of the task it keeps out, and the `spend` tool says all of it.
