@@ -126,6 +126,7 @@ const ADDED: [table: string, column: string, type: string][] = [
   ["ledger", "job", "TEXT"], // the hand off a call was made for: its answer, a second try, its check, side by side
   ["ledger", "think_tokens", "INTEGER"], // of out_tokens, the thinking: as the provider said, else from its text; null: not known
   ["ledger", "think_source", "TEXT"], // reported (by the provider), text (about four characters a token), none (a model that does not think)
+  ["ledger", "fail", "TEXT"], // why a try failed: busy, limit, timeout, unreachable, server, refused, cut or other (fails.ts)
 ];
 
 function addColumns(d: Database) {

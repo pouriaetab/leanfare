@@ -12,6 +12,7 @@ import { estimateFor, expectedOutput, guessTask, ledgerWhy, pickModel, resolveMo
 import { forgetSpeeds, parseSpeed, secondsFor, type SpeedChoice } from "./speed";
 import { successor } from "./retire";
 import { addSpent, budgetState, release, tryReserve, wouldFit } from "./budget";
+import { failOfStatus, failOfText, type FailKind } from "./fails";
 import { AnthropicStreamTranslator, UserError, anthropicDefaultMax, anthropicToOpenAI, effortFor, headersFor, networkError, ollamaChunks, ollamaPlain, ollamaToOpenAI, openaiBody, plainError, thinkRoom, toAnthropic, toOllama } from "./upstream";
 import { SSEParser, dollars, localDay, localMonth, median, now, providerMessage, randomId, redact, usd8 } from "./util";
 import { takesImages, takesPdfs } from "./files";
@@ -386,8 +387,8 @@ export interface LedgerResult { cost: number | null; listCost: number | null; pr
 
 const INSERT = `INSERT INTO ledger(ts, month, day, source, provider, model, asked, task, mode, auto, reason, usual, usual_cost,
     in_tokens, cached, cache_write, out_tokens, cost, list_cost, price_status, usage_status, status, error, ms, first_ms, switched_from, effort,
-    job, think_tokens, think_source)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    job, think_tokens, think_source, fail)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 // Rows that could not be written yet (another program had the database
 // locked): kept in memory and written as soon as it is free, in order.
 const unwritten: any[][] = [];
@@ -410,7 +411,7 @@ export function thinkingOf(m: Model, u: Usage | null, chars: number): { tokens: 
   return { tokens: null, source: null };
 }
 
-export function record(p: Plan, m: Model, source: string, usage: Usage | null, o: { status: "ok" | "stopped" | "error"; error?: string; ms: number; firstMs?: number | null; reportedCost?: number | null; estimated?: boolean; thinkingChars?: number }): LedgerResult {
+export function record(p: Plan, m: Model, source: string, usage: Usage | null, o: { status: "ok" | "stopped" | "error"; error?: string; ms: number; firstMs?: number | null; reportedCost?: number | null; estimated?: boolean; thinkingChars?: number; fail?: FailKind }): LedgerResult {
   const u = usage ?? ZERO;
   const think = usage || o.thinkingChars ? thinkingOf(m, usage, o.thinkingChars ?? 0) : { tokens: null, source: null }; // a call that failed before any answer: nothing to split
   // A failed request costs nothing unless the provider had already written part of an answer.
@@ -427,7 +428,7 @@ export function record(p: Plan, m: Model, source: string, usage: Usage | null, o
     u.uncached + u.cacheRead + u.cacheWrite + (u.cacheWrite1h ?? 0), u.cacheRead, u.cacheWrite + (u.cacheWrite1h ?? 0), u.output,
     billed ? charge.cost : 0, billed ? list : 0, priceStatus, o.estimated ? "estimated" : "reported",
     o.status, o.error ? redact(o.error).slice(0, 300) : null, Math.round(o.ms), o.firstMs == null ? null : Math.round(o.firstMs), p.switchedFrom,
-    effortFor(m, p.effortAsked), p.job ?? null, think.tokens, think.source,
+    effortFor(m, p.effortAsked), p.job ?? null, think.tokens, think.source, o.status === "error" ? o.fail ?? failOfText(o.error ?? null) : null,
   ];
   unwritten.push(row);
   if (!retryTimer) writeRows();
@@ -492,7 +493,7 @@ async function sendWithFallback(p: Plan, source: string, body: any, stream: bool
       const def = provider(m.provider)!;
       const page = res.ok; // a 200 web page (a sign-in page or proxy in the way), not an answer
       const msg = page ? `${def.name} sent a web page instead of an answer; a sign-in page or a proxy may be in the way.` : plainError(def, res.status, text, getKey(m.provider));
-      record(p, m, source, null, { status: "error", error: msg, ms: performance.now() - t0 });
+      record(p, m, source, null, { status: "error", error: msg, ms: performance.now() - t0, fail: page ? "other" : failOfStatus(res.status) });
       last = new UserError(page ? 502 : res.status === 401 || res.status === 403 ? 502 : res.status, msg, "provider_error");
       if ((!page && !RETRYABLE.has(res.status)) || i === tries.length - 1) throw last;
       p.notes.push(`${m.label} ${page ? "sent a web page instead of an answer" : `answered ${res.status}`}, so Auto passed the request to its next pick.`);
@@ -500,7 +501,7 @@ async function sendWithFallback(p: Plan, source: string, body: any, stream: bool
       if (e instanceof UserError) throw e;
       if (signal.aborted) throw new UserError(499, "Stopped.", "stopped");
       const msg = networkError(provider(m.provider)!, e);
-      record(p, m, source, null, { status: "error", error: msg, ms: performance.now() - t0 });
+      record(p, m, source, null, { status: "error", error: msg, ms: performance.now() - t0, fail: e?.name === "TimeoutError" ? "timeout" : "unreachable" });
       last = new UserError(502, msg, "provider_unreachable");
       if (!p.auto || i === tries.length - 1) throw last;
       p.notes.push(`${m.label} could not be reached, so Auto passed the request to its next pick.`);
@@ -965,9 +966,9 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
   };
   const words = (s: string) => (s.trim() ? s.trim().split(/\s+/).length : 0);
   // A try that failed before the provider answered was written down where it failed (sendWithFallback).
-  const recordTry = (t: Try, status: "ok" | "stopped" | "error", error?: string) =>
+  const recordTry = (t: Try, status: "ok" | "stopped" | "error", error?: string, fail?: FailKind) =>
     status !== "error" || t.answered || t.usage
-      ? record(p, t.model, source, t.usage ?? estimatedUsage(p, t.text.length + t.thinking.length), { status, error, ms: performance.now() - t.t0, firstMs: t.firstMs, reportedCost: t.reported, estimated: !t.usage, thinkingChars: t.thinking.length })
+      ? record(p, t.model, source, t.usage ?? estimatedUsage(p, t.text.length + t.thinking.length), { status, error, ms: performance.now() - t.t0, firstMs: t.firstMs, reportedCost: t.reported, estimated: !t.usage, thinkingChars: t.thinking.length, fail })
       : null;
 
   // A model that ran out of room while thinking can hand its thinking back as the answer, under a first line "thought"
@@ -989,7 +990,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
       if (limit) why = { note: `${name} spent its whole ${limit.toLocaleString("en-US")}-token answer limit thinking and wrote nothing, so Leanfare asked again with ${next.toLocaleString("en-US")}.`, ledger: "spent the answer limit thinking", cap: Math.max(1, next - room(t.model)) };
     } else if (!t.text.trim() && t.finish !== "content_filter") why = { note: `The first try came back empty, so Leanfare asked ${name} once more.`, ledger: "came back empty", cap: null };
     if (why) {
-      const first = recordTry(t, "error", why.ledger);
+      const first = recordTry(t, "error", why.ledger, "cut"); // it answered, then was cut off or came back empty
       if (reserveAgain(p, t.model, why.cap ?? p.maxOut)) {
         firstSpent = first ? first.cost : 0;
         p.notes.push(why.note);
