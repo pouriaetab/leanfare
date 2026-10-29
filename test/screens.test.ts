@@ -869,7 +869,7 @@ describe("The Plan tab", () => {
     expect(doc.querySelectorAll("#planResult tbody tr").length).toBe(5);
     let t = doc.querySelector("#planResult").textContent;
     expect(t).toContain("you (Claude Code)");
-    expect(t).toContain("go to Leanfare, keeping about");
+    expect(t).toContain("go to Leanfare. If they run, about");
     expect(t).toContain("Split by rules.");
     expect(t).toContain("One of Leanfare's parts waits for yours (see When)."); // part 5 reviews your changes
     expect(t).toContain("Claude Sonnet 4.6"); // the parts that stay with you name the model to pick in Claude Code
@@ -1007,7 +1007,7 @@ describe("What Leanfare did for your apps (Savings)", () => {
     const t = card.textContent;
     expect(t).toContain("What Leanfare did for your apps");
     expect(t).toContain("2 tasks this month, through plan and delegate");
-    expect(t).toMatch(/Kept out of your plans\S*\d+%18 tokens stayed out · \d+ came back/);
+    expect(t).toMatch(/Kept out of your plans\S*18 tokensread by Leanfare's models, not your apps · \d+ came back/);
     expect(t).toContain("Cost of that work");
     expect(t).toContain("2 paid");
     expect(t).toContain("QualityiNot graded yet");

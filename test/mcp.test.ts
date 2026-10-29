@@ -275,7 +275,7 @@ describe("the tools", () => {
       await rpc("tools/call", { name: "grade", arguments: { model: "deepseek/deepseek-v4-flash", kind: "read", verdict: "partly", handoff: row } });
       expect((await ui(url, "/api/savings")).json.work.grades).toEqual({ good: 0, partly: 1, wrong: 0 });
       const spent = (await rpc("tools/call", { name: "spend", arguments: {} })).result;
-      expect(spent.content[0].text).toMatch(/Work for your apps this month \(plan and delegate\): 1 task, 53% kept out of your plans \(9 tokens stayed out, 8 came back\), \$[\d.e-]+\.\nQuality: 0 of 1 graded good, 1 partly, 0 wrong; checks: none yet\./);
+      expect(spent.content[0].text).toMatch(/Work for your apps this month \(plan and delegate\): 1 task; Leanfare's models read 9 tokens your apps never had to, and 8 came back to them; \$[\d.e-]+\.\nQuality: 0 of 1 graded good, 1 partly, 0 wrong; checks: none yet\./);
       expect(spent.structuredContent.work).toMatchObject({ tasks: 1, tokens_kept_out: 9, tokens_came_back: 8, grades: { partly: 1 }, checks: { passed: 0, failed: 0 } });
       expect(receipt).toMatch(/^\(Leanfare delegate: DeepSeek V4 Flash, \$[\d.e-]+\. About 9 tokens of files stayed out of your context; this answer is about 8\. It took about (a second|\d+ s)\.\)$/);
       expect(r.result.structuredContent).toMatchObject({ answer: "Hello from deepseek-v4-flash.", model: "deepseek/deepseek-v4-flash", task: "longer_query", effort: "low", check: null, first: null, tokens: { files: 9, answer: 8 }, cut: false });
