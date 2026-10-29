@@ -8,7 +8,7 @@ Everything Leanfare does, for people who want the details. To start, the [README
 - [Use it in your apps](#use-it-in-your-apps)
 - [Plan a task](#plan-a-task)
 - [Set up without typing](#set-up-without-typing)
-- [Your subscriptions and pay per use](#your-subscriptions-and-pay-per-use)
+- [Your subscriptions and pay per use](#your-subscriptions-and-pay-per-use), and [the report](#the-report)
 - [Speed](#speed), [The chat](#the-chat), [Use it from your scripts](#use-it-from-your-scripts), [How Auto picks](#how-auto-picks)
 - [Privacy](#privacy), [Commands](#commands), [Definitions](#definitions), [Data and credits](#data-and-credits), [Known limits](#known-limits), [Develop](#develop)
 
@@ -36,6 +36,7 @@ Every top AI model in one app on your own computer, and on top of the AI apps yo
 - **Automatic model choice.** Leanfare guesses the task (coding, math, writing, long documents and more) and picks the cheapest model you ticked that rates well for it. Every answer says which model wrote it and why.
 - **Claude hands work to cheaper models.** Through the `delegate` tool, Claude passes reading heavy work to the cheapest model that is good enough, and a stronger model checks a sample of the answers. **The trial** measures how well that goes on your own models before you rely on it.
 - **Plan a task across models.** Write what you want done, and Leanfare splits it into parts with the model for each: what changes your project or needs the hardest judgement stays with the app you work in, on your plan; reading and drafting go to local, free or cheap models, or to your ChatGPT plan through Codex, at once where they can. Claude Desktop and Cowork show the plan as a table in the chat, and Claude Code, Codex and Gemini CLI can plan on their own.
+- **A report of what it did.** For any span, from the last hour to a year: the tokens Leanfare kept out of your plans, your apps' own use where it is known, the cost and the quality, over time, by model and prompt by prompt, with filters by app, provider, model, kind of work and thread.
 - **Models graded by how they did for you.** The app you work in grades each answer of Leanfare's it used: good, partly or wrong. A model graded below good too often for a kind of work is moved down, so the picks get better as you use them. Only the grade is kept, never the words.
 - **A free model that fits your computer.** Settings, Local models says where Ollama keeps your models (the drive and its free space, followed through a link; downloads go there too) and suggests one for each kind of work, reading, drafting and working things out, with its size: an open model (Apache 2.0) that runs in your computer's memory and fits where your models are. Ollama downloads it when you say yes. Auto and plans use models on your computer at the rating of the same model in the cloud, a little lower.
 - **Your own models, tested here.** Arena rates few small models, so Auto would not pick most of the ones people run. Test it asks one of yours 8 questions with known answers about files Leanfare makes up, on your computer (free, a few minutes, nothing leaves it). One that gets at most one wrong takes reading first, at low and medium effort, in plans and the delegate: it is free, and a stronger model of yours still checks a sample of its answers. A model that thinks before it answers (Ollama says which) is asked to answer without thinking at low effort, as in the test, and gets room for its thinking at medium and high, since its thinking counts toward the answer's limit.
@@ -192,7 +193,7 @@ Settings, **Show who wrote what**, marks each paragraph of the answers Leanfare 
 
 ## Your subscriptions and pay per use
 
-Savings shows three things apart:
+Savings opens with the [report](#the-report), then shows three things apart:
 
 - **What Leanfare did for your apps**, once an app has handed it work this month (plans and `delegate`):
   - **Kept out of your plans:** what Leanfare's models read that your app never did (the files, and a plan part's own text) against the answers your app read back, as a share and in tokens. The thinking and writing your app did not have to do is not counted, so the share is the least it kept out. A plan says it before it runs, as an estimate (a guess where no files were named for the reading, such as a research plan's sources): about how many tokens its parts would keep out of your plan, and what share of the parts' tokens that is. A question small enough to answer yourself (asked as a question, a few sentences, no files, nothing to build, research, write or work out, and nothing about a project's own code, tests or logs) is not split: handing it off would cost more than it saves. Short work is still handed off: "Work out why the nightly job is slow" is work, not a quick question.
@@ -206,6 +207,18 @@ Savings shows three things apart:
 - **Pay per use: what your keys and credits spent through Leanfare.** The spend, what Auto saved, the budget, and each answer's cost.
 
 Settings, Where Leanfare may send work, shows the same windows next to each platform's switch, the nearest first. **What is left** is shown in tokens at your recent mix (and in dollars of work at API prices, when Settings shows them), with a 90% range, and **what still fits** says how many typical sessions of each project fit before the limit. Anthropic's terms do not let other apps use a Claude Pro or Max login, so Leanfare only counts: it never sends a request on your plan.
+
+### The report
+
+At the top of Savings, the report shows what Leanfare did for your apps over a span: the last hour, 6 hours, today, the last 7 or 30 days, a year, or days you pick (**Custom**). The filters keep one app, one provider, one model, one kind of work or one Claude Code thread (a session).
+
+- **Four tiles.** Kept out of your plans: the tokens Leanfare's models read so your apps did not, the share of your apps' use where it is known, and about what those tokens would have cost at your main model's price. Your apps' own use: Claude Code's new tokens, measured from its own files; Claude's chats and Cowork do not share theirs, so they show as not known, never guessed. The cost of the hand offs, and the share of parts that were free or on this computer. The quality: the share of answers graded good, and how many were judged blind.
+- **Tokens over time.** Kept out against what your apps used, a point every 15 minutes up to 6 hours, every hour up to 2 days, every day up to 2 months, then every week. Point at the chart for the numbers.
+- **Work by model** and **Quality by kind of work.** The tokens each model read for your apps, its parts, its cost and the share of its answers graded good; and for reading, drafting, working out and search, the grades and the model that did best (from 2 grades).
+- **Prompts.** Each prompt with its app, its main model and your plan, its prompt and answer tokens (Claude Code), the models it handed work to, the tokens kept out, the share saved, the cost and the lowest grade of its parts. Open one for its parts (the kind, the model, the tokens read and handed back, where it ran, how long it took, side by side's verdict and the grade) and for the app's own work.
+- **Export CSV** saves the prompts and their parts as a file for a spreadsheet.
+
+How a prompt is counted, and new tokens, are in [Definitions](#definitions).
 
 ## Speed
 
