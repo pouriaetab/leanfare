@@ -10,10 +10,11 @@
 // stdout, one message per line; anything for a person goes to stderr.
 import { VERSION } from "./config";
 import { OFF_TEXT, switchedOn } from "./switch";
-import { call } from "./client";
+import { call, where } from "./client";
 import { secondsText } from "./util";
 import { reportText } from "./trialtext";
 import { APP_MIME, PLAN_APP_HTML, PLAN_APP_URI } from "./planapp";
+import { REPORT_APP_HTML, REPORT_APP_URI } from "./reportapp";
 import { readForDelegate, resolvePath, sizesForPlan } from "./readfiles";
 import { existsSync, lstatSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -152,6 +153,21 @@ const TOOLS = [
     annotations: { title: "What was spent", readOnlyHint: true, openWorldHint: false },
   },
   {
+    name: "report",
+    title: "Leanfare's report",
+    description: "What Leanfare did for the user's apps over a span of time: the tokens its models read so the apps did not (kept out of their plans), the apps' own use where it is known (Claude Code's, from its own files), the cost, the quality (the apps' grades and the blind checks), tokens over time, the work by model, and the last prompts with what each handed off. Use it when the user asks what Leanfare saved, how the models did, or for a report. Apps that show MCP Apps draw it as a card with spans to pick.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        range: { type: "string", enum: ["1h", "6h", "today", "7d", "30d", "year"], description: "The span: the last hour, 6 hours, today, the last 7 or 30 days, or the last year. Default 7d." },
+        app: { type: "string", description: "Only the prompts of this app, as Leanfare names it (Claude Code, Claude, Codex)." },
+      },
+      additionalProperties: false,
+    },
+    annotations: { title: "Leanfare's report", readOnlyHint: true, openWorldHint: false },
+    _meta: { ui: { resourceUri: REPORT_APP_URI }, "ui/resourceUri": REPORT_APP_URI },
+  },
+  {
     name: "models",
     title: "Models and prices",
     description: "The models the user ticked in Leanfare and can use now, with their prices in US dollars per 1M tokens and their quality rating (Arena).",
@@ -211,6 +227,35 @@ function workLines(w: any): string {
     `Work for your apps this month (plan and delegate): ${count(w.tasks)} task${w.tasks === 1 ? "" : "s"}; Leanfare's models read ${count(w.kept)} tokens your apps never had to, and ${count(w.back)} came back to them; ${usd(w.cost)}.`,
     `Quality: ${graded ? `${count(w.grades.good)} of ${count(graded)} graded good, ${count(w.grades.partly)} partly, ${count(w.grades.wrong)} wrong` : "no answer graded yet"}; checks: ${checked ? `${count(w.checks.passed)} of ${count(checked)} passed` : "none yet"}${w.side?.compared ? `; side by side: as good as the top model in ${count(w.side.asGood)} of ${count(w.side.compared)}, judged blind` : ""}.`,
   ].join("\n");
+}
+// The report tool's text (apps without pages read this) and its card's data (reportapp.ts draws it).
+const SPAN: Record<string, string> = { "1h": "the last hour", "6h": "the last 6 hours", today: "today", "7d": "the last 7 days", "30d": "the last 30 days", year: "the last year" };
+const tokShort = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(Math.round(n)));
+const pctOf = (x: number | null | undefined) => (x === null || x === undefined ? "not known" : `${Math.round(x * 100)}%`);
+const planShort = (name: string | null) => (name ? name.replace(/^(Claude|ChatGPT)\s+/i, "") : null);
+export function reportLines(r: any, range: string): string {
+  const t = r.tiles;
+  if (!r.prompts.length) return `Leanfare's report, ${SPAN[range] ?? range}: nothing handed to Leanfare yet in this span.`;
+  const own = t.own.byApp.map((a: any) => (a.measured ? `${a.app} ${tokShort(a.fresh)} new tokens (measured)` : `${a.app}: not known`)).join("; ");
+  const lines = [
+    `Leanfare's report, ${SPAN[range] ?? range}: ${tokShort(t.kept.tokens)} tokens kept out of your plans${t.kept.share !== null ? ` (${pctOf(t.kept.share)} of your apps' use where it is known)` : ""}${t.kept.value !== null ? `; about ${usd(t.kept.value)} at ${t.kept.valueModel}'s prices` : ""}.`,
+    `Your apps' own use: ${own}${t.own.cached ? `; ${tokShort(t.own.cached)} more read again from the cache` : ""}.`,
+    `Cost of the hand offs: ${usd(t.cost.usd)}; ${pctOf(t.cost.freeShare)} of parts free or on this computer; ${t.cost.parts} parts in ${t.cost.prompts} prompts.`,
+    `Quality: ${t.quality.graded ? `${pctOf(t.quality.goodShare)} good (${t.quality.partly} partly, ${t.quality.wrong} wrong; ${t.quality.blind} judged blind)` : "not graded yet"}.`,
+    r.byModel.length ? `Work by model: ${r.byModel.slice(0, 6).map((m: any) => `${m.label} ${tokShort(m.read)} tokens, ${m.parts} part${m.parts === 1 ? "" : "s"}${m.goodShare !== null ? `, ${pctOf(m.goodShare)} good` : ""}`).join("; ")}.` : "",
+    `Last prompts:\n${r.prompts.slice(0, 6).map((p: any) => `- ${new Date(p.ts).toISOString().slice(0, 16).replace("T", " ")} UTC, ${p.app}${p.model ? ` (${p.model.label}${p.plan ? `, ${planShort(p.plan)}` : ""})` : ""}: ${p.parts.length ? `${[...new Set(p.parts.map((x: any) => x.label))].join(", ")}, ${tokShort(p.kept)} kept out${p.saved !== null ? `, ${pctOf(p.saved)} saved` : ""}` : "nothing handed off"}${p.grade ? `, ${p.grade}` : ""}`).join("\n")}`,
+    `The full report: Leanfare, Savings (${where().base}/#report).`,
+  ];
+  return lines.filter(Boolean).join("\n");
+}
+function compactReport(r: any, range: string, app: string | null = null) {
+  return {
+    range, app, from: r.from, to: r.to, step: r.step, tiles: r.tiles, series: r.series,
+    byModel: r.byModel.slice(0, 6).map((m: any) => ({ label: m.label, where: m.where, read: m.read, parts: m.parts, cost: m.cost, goodShare: m.goodShare })),
+    byKind: r.byKind,
+    prompts: r.prompts.slice(0, 6).map((p: any) => ({ ts: p.ts, app: p.app, model: p.model?.label ?? null, plan: planShort(p.plan), parts: [...new Set(p.parts.map((x: any) => x.label))], kept: p.kept, saved: p.saved, grade: p.grade })),
+    open_url: `${where().base}/#report`,
+  };
 }
 const text = (t: string, structured?: unknown) => ({ content: [{ type: "text", text: t }], ...(structured !== undefined ? { structuredContent: structured } : {}) });
 const failure = (t: string) => ({ content: [{ type: "text", text: t }], isError: true });
@@ -522,6 +567,12 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
     }
     return text(reportText(r, "mcp"), { running: false, status: r.status, lowest_passing: r.lowest, claude_line: r.claudeLine, arms: r.arms.map((a: any) => ({ effort: a.effort, right: a.right, answered: a.answered, verdict: a.verdict, cost_usd: a.cost })), share_url: r.share.url });
   }
+  if (name === "report") {
+    const range = ["1h", "6h", "today", "7d", "30d", "year"].includes(args?.range) ? args.range : "7d";
+    const app = typeof args?.app === "string" && args.app.trim() ? args.app.trim().slice(0, 60) : null;
+    const { j: r } = await call(`/api/report?range=${range}${app ? `&app=${encodeURIComponent(app)}` : ""}`, {}, signal);
+    return text(reportLines(r, range), compactReport(r, range, app));
+  }
   if (name === "spend") {
     const { j: s } = await call("/api/summary", {}, signal);
     const { j: v } = await call("/api/savings", {}, signal);
@@ -615,10 +666,14 @@ export async function handleMessage(msg: any, send = { reply, error }): Promise<
   }
   if (method === "server/discover") return send.reply(id, { resultType: "complete", supportedVersions: [...MODERN, ...LEGACY], capabilities: { tools: {}, resources: {} }, _meta: META, instructions: INSTRUCTIONS });
   // The plan's page (an MCP App): listed and read like any resource.
-  if (method === "resources/list") return done({ resources: [{ uri: PLAN_APP_URI, name: "Leanfare plan", title: "Leanfare plan", description: "The plan as a table with a Run button, for apps that show MCP Apps.", mimeType: APP_MIME }] });
+  if (method === "resources/list") return done({ resources: [
+    { uri: PLAN_APP_URI, name: "Leanfare plan", title: "Leanfare plan", description: "The plan as a table with a Run button, for apps that show MCP Apps.", mimeType: APP_MIME },
+    { uri: REPORT_APP_URI, name: "Leanfare report", title: "Leanfare report", description: "The report as a card with spans to pick, for apps that show MCP Apps.", mimeType: APP_MIME },
+  ] });
   if (method === "resources/read") {
-    if (params?.uri !== PLAN_APP_URI) return send.error(id, -32002, `Leanfare has no resource ${String(params?.uri)}.`);
-    return done({ contents: [{ uri: PLAN_APP_URI, mimeType: APP_MIME, text: PLAN_APP_HTML, _meta: { ui: { csp: { connectDomains: [], resourceDomains: [] }, prefersBorder: true } } }] });
+    const page = params?.uri === PLAN_APP_URI ? PLAN_APP_HTML : params?.uri === REPORT_APP_URI ? REPORT_APP_HTML : null;
+    if (!page) return send.error(id, -32002, `Leanfare has no resource ${String(params?.uri)}.`);
+    return done({ contents: [{ uri: params.uri, mimeType: APP_MIME, text: page, _meta: { ui: { csp: { connectDomains: [], resourceDomains: [] }, prefersBorder: true } } }] });
   }
   if (method === "ping") return done({});
   if (method === "tools/list") return done({ tools: TOOLS });

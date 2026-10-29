@@ -319,7 +319,8 @@
   const SCREEN = (t) => (["chat", "plan", "savings", "settings"].includes(t) ? t : null);
   const S = {
     st: null,
-    tab: isPhone() ? null : SCREEN(store.get("screen", null)), // null: decided at the start (Set up on the first run)
+    // #report (the report tool's link): Savings, where the report is; else the screen used last (null: decided at the start).
+    tab: location.hash === "#report" ? "savings" : isPhone() ? null : SCREEN(store.get("screen", null)),
     chatId: store.get("chat", null),
     messages: [],
     chats: [],
