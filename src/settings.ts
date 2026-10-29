@@ -47,6 +47,8 @@ export interface Settings {
   setupDone: boolean; // the first run's Set up was done (setup.ts); until then the app opens on it
   appsOff: string[]; // platforms plans and the delegate leave out (platforms.ts): provider ids, "chatgpt" (OpenAI and Codex), "local"
   filesTo: "any" | "notFree" | "local"; // where your projects' files may go in plans and the delegate (platforms.ts: mayTake)
+  sideBySide: number; // one hand off in this many is also answered by the top model and judged blind against it (sidebyside.ts); 0: off
+  sideBySideCap: number; // US dollars a month side by side may spend, from your budget
 }
 
 export const DEFAULTS: Settings = {
@@ -74,6 +76,8 @@ export const DEFAULTS: Settings = {
   setupDone: false,
   appsOff: [],
   filesTo: "any",
+  sideBySide: 10,
+  sideBySideCap: 1,
 };
 
 // What a short answer is, given to the chat screen's models before the chat's own instructions
@@ -148,6 +152,12 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
     if (!(k in p)) continue;
     if (typeof p[k] !== "boolean") return { error: `${k} must be true or false` };
     out[k] = p[k];
+  }
+  if ("sideBySide" in p) { if (![0, 5, 10, 20].includes(p.sideBySide)) return { error: "sideBySide must be 0 (off), 5, 10 or 20" }; out.sideBySide = p.sideBySide; }
+  if ("sideBySideCap" in p) {
+    const v = typeof p.sideBySideCap === "number" || (typeof p.sideBySideCap === "string" && p.sideBySideCap.trim() !== "") ? Number(p.sideBySideCap) : NaN;
+    if (!Number.isFinite(v) || v < 0 || v > 1000) return { error: "sideBySideCap must be a dollar amount from 0 to 1,000" };
+    out.sideBySideCap = Math.round(v * 100) / 100;
   }
   if ("filesTo" in p) { if (!["any", "notFree", "local"].includes(p.filesTo)) return { error: "filesTo must be any, notFree or local" }; out.filesTo = p.filesTo; }
   if ("planAuto" in p) {
