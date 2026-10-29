@@ -1791,7 +1791,7 @@
     const apps = t.own.byApp.map((a) => (a.measured ? `${a.app} ${tokShort(a.fresh)}, measured` : `${a.app}: not known`)).join(" · ");
     return h("div", { class: "rp-tiles" },
       rtile("Kept out of your plans", `${tokShort(t.kept.tokens)} tokens`, [
-        t.kept.share !== null ? [h("b", { text: pctText(t.kept.share) }), " of your apps' use where it is known"] : "read by Leanfare's models, not your apps",
+        t.kept.share !== null ? [h("b", { text: pctText(t.kept.share) }), ` of ${t.kept.measuredIn ?? "your apps"}'s use${t.kept.share === 0 ? ": nothing handed off there" : ""}`] : "read by Leanfare's models, not your apps",
         t.kept.value !== null ? ` · about ${money(t.kept.value)} at ${t.kept.valueModel}'s prices` : ""], t.kept.tokens > 0 ? "good" : ""),
       rtile("Your apps' own use", t.own.measured ? `${tokShort(t.own.fresh)} new tokens` : "Not known",
         [apps || "no prompts", t.own.cached ? ` · ${tokShort(t.own.cached)} more read again from the cache` : ""]),

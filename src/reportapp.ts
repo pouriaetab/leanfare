@@ -140,7 +140,7 @@ export const REPORT_APP_HTML = `<!doctype html>
       const max = Math.max(1, ...d.byModel.map((m) => m.read));
       kids.push(
         el("div", { class: "tiles" },
-          el("div", { class: "tile" }, el("div", { class: "l", text: "Kept out" }), el("div", { class: "v", text: tok(t.kept.tokens) }), el("div", { class: "s", text: t.kept.share !== null ? pct(t.kept.share) + " of your apps' use where it is known" : "read by Leanfare's models, not your apps" })),
+          el("div", { class: "tile" }, el("div", { class: "l", text: "Kept out" }), el("div", { class: "v", text: tok(t.kept.tokens) }), el("div", { class: "s", text: t.kept.share !== null ? pct(t.kept.share) + " of " + (t.kept.measuredIn || "your apps") + "'s use" + (t.kept.share === 0 ? ": nothing handed off there" : "") : "read by Leanfare's models, not your apps" })),
           el("div", { class: "tile" }, el("div", { class: "l", text: "Cost" }), el("div", { class: "v", text: usd(t.cost.usd) }), el("div", { class: "s", text: pct(t.cost.freeShare) + " free or on this computer" })),
           el("div", { class: "tile" }, el("div", { class: "l", text: "Quality" }), el("div", { class: "v", text: t.quality.graded ? pct(t.quality.goodShare) + " good" : "not graded" }), el("div", { class: "s", text: t.quality.blind ? t.quality.blind + " judged blind" : "graded by your app" }))),
         el("div", { class: "box" }, el("div", { class: "legend" }, el("span", { class: "k1", text: "Kept out" }), t.own.measured ? el("span", { class: "k2", text: "Used by your apps (measured)" }) : null), chart(d)),
