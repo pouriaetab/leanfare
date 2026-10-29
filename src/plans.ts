@@ -81,7 +81,9 @@ function listFiles(dirs: string[], match: (name: string) => boolean, notBefore: 
     const had = one.get(k);
     if (!had || f.mtime > had.mtime) one.set(k, f);
   }
-  return { files: match === isCodexLog ? [...one.values()] : files, folders: dirs.length };
+  // Claude Code's files oldest first: a line copied into a later file (a resumed session, or the same session in two
+  // folders) is then read from the file it was first written to, for its prompts and its answers alike.
+  return { files: match === isCodexLog ? [...one.values()] : files.sort((a, b) => a.mtime - b.mtime || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)), folders: dirs.length };
 }
 
 // ---- reading one log file ----------------------------------------------------------------------------
@@ -259,9 +261,14 @@ export interface PromptEntry { ts: number; chars: number; file: string; project:
 export async function recentPrompts(since: number): Promise<PromptEntry[]> {
   const { files } = listFiles(claudeDirs(), logMatch("claude"), since - 36 * 3600_000);
   const out: PromptEntry[] = [];
+  const seen = new Set<string>(); // a prompt copied into another file, or written twice, counts once: the first copy
   for (const f of files) {
     const got = await entriesOf(f, "claude");
-    for (const p of got.meta.prompts ?? []) if (p.ts >= since) out.push({ ...p, file: f.path, project: got.meta.project });
+    for (const p of got.meta.prompts ?? []) {
+      const k = `${p.ts}:${p.chars}`;
+      if (p.ts < since || seen.has(k)) continue;
+      seen.add(k); out.push({ ...p, file: f.path, project: got.meta.project });
+    }
   }
   return out.sort((a, b) => a.ts - b.ts);
 }

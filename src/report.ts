@@ -146,7 +146,7 @@ export async function report(q: ReportQuery, inner = false): Promise<Report> {
       for (const p of ccStarts) { if (p.start <= part.at) host = p; else break; }
       if (host && part.at - host.start <= ATTACH) { host.parts.push(part); continue; }
     }
-    const app = part.app ?? "Your app";
+    const app = part.app ?? "Unknown app"; // an older Leanfare, or an app that does not say its name
     const samePlan = open && part.plan && open.parts.some((x) => x.plan === part.plan);
     if (!open || open.app !== app || (!samePlan && part.at - open.last > GAP)) {
       open = { key: `h:${part.id}`, id: null, ts: part.ts, app, thread: null, project: null, model: part.appModel ? { id: part.appModel, label: modelName(part.appModel) } : null,
@@ -197,6 +197,7 @@ export async function report(q: ReportQuery, inner = false): Promise<Report> {
   for (const x of blind) if (x.checker) judges.set(x.checker, (judges.get(x.checker) ?? 0) + 1);
   const tiles = {
     kept: { tokens: kept, share: keptKnown + freshKnown > 0 && known.length ? keptKnown / (keptKnown + freshKnown) : null,
+      measuredIn: [...new Set(known.map((p) => p.app))].sort().join(" and ") || null, // the apps the share is measured in
       value: price?.input != null ? (kept / 1e6) * price.input : null, valueModel: price ? price.label : null },
     own: { fresh: freshKnown, cached: known.reduce((n, p) => n + p.own!.cached, 0), measured: known.length, notKnown: shown.length - known.length,
       byApp: [...new Set(shown.map((p) => p.app))].map((app) => ({ app, measured: shown.some((p) => p.app === app && p.own), fresh: shown.filter((p) => p.app === app && p.own).reduce((n, p) => n + p.own!.fresh, 0) })) },

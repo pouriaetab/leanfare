@@ -30,7 +30,7 @@ function open(answer: (msg: any) => any) {
 const until = async (ok: () => boolean, ms = 3000) => { for (let i = 0; i < ms / 20 && !ok(); i++) await Bun.sleep(20); };
 const REPORT = (range = "7d", kept = 1_420_000) => ({
   range, from: "2026-10-14T12:00:00Z", to: "2026-10-21T12:00:00Z", step: 86_400_000,
-  tiles: { kept: { tokens: kept, share: 0.31, value: 7.1, valueModel: "Claude Opus 5.5" }, own: { fresh: 3_160_000, cached: 9e6, measured: 21, notKnown: 4, byApp: [] },
+  tiles: { kept: { tokens: kept, share: 0.31, measuredIn: "Claude Code", value: 7.1, valueModel: "Claude Opus 5.5" }, own: { fresh: 3_160_000, cached: 9e6, measured: 21, notKnown: 4, byApp: [] },
     cost: { usd: 0.42, freeShare: 0.96, parts: 48, prompts: 21 }, quality: { good: 44, partly: 5, wrong: 1, graded: 50, goodShare: 0.88, blind: 12, judge: "Gemini 3.8 Flash" } },
   series: Array.from({ length: 8 }, (_, i) => ({ at: new Date(Date.parse("2026-10-14T00:00:00Z") + i * 86_400_000).toISOString(), kept: 100_000 * i, used: 300_000 + 50_000 * i })),
   byModel: [{ label: "Gemini 3.5 Flash-Lite", where: "free", read: 820_000, parts: 23, cost: 0, goodShare: 0.91 }, { label: "DeepSeek V4 Flash", where: "paid", read: 72_000, parts: 4, cost: 0.38, goodShare: 0.75 }],
@@ -47,7 +47,7 @@ describe("the report inside the chat (an MCP App)", () => {
     push("ui/notifications/tool-result", { structuredContent: REPORT() });
     await until(() => !!doc.querySelector(".tiles"));
     expect([...doc.querySelectorAll(".tile")].map((t: any) => t.textContent)).toEqual([
-      "Kept out1.4M31% of your apps' use where it is known", "Cost$0.4296% free or on this computer", "Quality88% good12 judged blind"]);
+      "Kept out1.4M31% of Claude Code's use", "Cost$0.4296% free or on this computer", "Quality88% good12 judged blind"]);
     expect(doc.querySelectorAll(".chart path.l1, .chart path.l2")).toHaveLength(2);
     expect([...doc.querySelectorAll(".bar .n")].map((e: any) => e.textContent)).toEqual(["Gemini 3.5 Flash-Litefree", "DeepSeek V4 Flash$0.38"]);
     expect(doc.querySelector(".p").textContent).toContain("Claude · Claude Opus 5.5 · Max → Gemini 3.5 Flash-Lite, qwen3.5:9b158k kept✓ good");
@@ -82,6 +82,14 @@ describe("the report inside the chat (an MCP App)", () => {
     ([...doc.querySelectorAll(".chips button")] as any[]).find((b) => b.textContent === "30 days").click();
     await until(() => sent.some((m) => m.method === "tools/call"));
     expect(sent.find((m) => m.method === "tools/call").params).toEqual({ name: "report", arguments: { range: "30d", app: "Claude Code" } });
+  });
+
+  test("a share of 0 says nothing was handed off there", async () => {
+    const { doc, push } = open(() => undefined);
+    const r = REPORT();
+    push("ui/notifications/tool-result", { structuredContent: { ...r, tiles: { ...r.tiles, kept: { ...r.tiles.kept, share: 0 } } } });
+    await until(() => !!doc.querySelector(".tile .s"));
+    expect(doc.querySelector(".tile .s").textContent).toBe("0% of Claude Code's use: nothing handed off there");
   });
 
   test("with nothing in the span, it says so; a result without a report shows its text", async () => {

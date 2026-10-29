@@ -2,7 +2,7 @@
 // kind, and the filters. Claude Code's own use comes from its files (numbers only): a prompt runs until the next of
 // its session, its new tokens are what it did not read again from its cache. Other apps' use is not known: their
 // hand offs are grouped by time.
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { db } from "../src/db";
@@ -85,10 +85,35 @@ describe("each prompt", () => {
     expect(sessionOf("C:\\Users\\you\\.claude\\projects\\app\\s-2.jsonl")).toBe("s-2");
   });
 
+  test("a prompt counts once: copied into a resumed session's file, the same session in two folders, or written twice", async () => {
+    const dir = join(claudeRoot(), "projects", "-Users-you-app"), at = (iso: string) => new Date(iso);
+    const first = readFileSync(join(dir, "s-report.jsonl"), "utf8");
+    utimesSync(join(dir, "s-report.jsonl"), at("2026-10-21T10:40:00Z"), at("2026-10-21T10:40:00Z"));
+    // Resumed: the new file starts with a copy of the old one's lines (the same times and message ids), then goes on.
+    writeFileSync(join(dir, "s-resumed.jsonl"), first + [user("2026-10-21T11:40:00Z", "Go on"), asst("2026-10-21T11:40:20Z", { input_tokens: 5, output_tokens: 70 })].map((r) => JSON.stringify(r)).join("\n") + "\n");
+    utimesSync(join(dir, "s-resumed.jsonl"), at("2026-10-21T11:41:00Z"), at("2026-10-21T11:41:00Z"));
+    appendFileSync(join(dir, "s-report.jsonl"), first.split("\n").find((l) => l.includes("Now write the fix")) + "\n"); // one prompt written twice
+    utimesSync(join(dir, "s-report.jsonl"), at("2026-10-21T10:40:00Z"), at("2026-10-21T10:40:00Z"));
+    const root2 = claudeRoot() + "-copy", was = process.env.CLAUDE_CONFIG_DIR; // and the same session in a second folder
+    mkdirSync(join(root2, "projects", "-Users-you-app"), { recursive: true });
+    writeFileSync(join(root2, "projects", "-Users-you-app", "s-report.jsonl"), first);
+    try {
+      process.env.CLAUDE_CONFIG_DIR = `${was},${root2}`;
+      forgetLogs();
+      const r = await report(day());
+      expect(r.prompts.filter((p: any) => p.app === "Claude Code").map((p: any) => [p.ts.slice(11, 16), p.thread, p.id])).toEqual([["11:40", "s-resumed", "PRM-5"], ["10:30", "s-report", "PRM-2"], ["10:00", "s-report", "PRM-1"]]);
+      expect(r.prompts.find((p: any) => p.id === "PRM-1")!.own).toEqual({ fresh: 2650, cached: 102000, input: 2150, output: 500 }); // its answers once, from the first file
+      expect(r.prompts.find((p: any) => p.id === "PRM-5")!.own!.fresh).toBe(75);
+      expect((await report(checkReport(new URLSearchParams({ prompt: "PRM-1" })) as any)).prompts.map((p: any) => p.id)).toEqual(["PRM-1"]);
+    } finally { process.env.CLAUDE_CONFIG_DIR = was; rmSync(root2, { recursive: true, force: true }); forgetLogs(); }
+  });
+
   test("another app's: its hand offs grouped by time, its own use not known", async () => {
     const r = await report(day());
     expect(r.prompts[1]).toMatchObject({ app: "Claude", model: { label: "Claude Opus 5.5" }, own: null, saved: null, prompt: null, kept: 21000, grade: "partly" });
     expect(r.prompts[0]).toMatchObject({ app: "Claude", kept: 3000, grade: "wrong" }); // 25 minutes later: a prompt of its own
+    hand("2026-10-21T11:55:00Z", { file_tokens: 800 }); // from an older Leanfare, or an app that does not say its name
+    expect((await report(day())).prompts[0]).toMatchObject({ app: "Unknown app", id: "PRM-5", own: null });
   });
 });
 
@@ -136,6 +161,8 @@ describe("the tiles, the chart and the breakdowns", () => {
     const r = await report(day());
     expect(r.tiles.kept.tokens).toBe(46000 + 21000 + 3000);
     expect(r.tiles.kept.share).toBeCloseTo(46000 / (46000 + 2650 + 1310), 9); // only Claude Code's prompts are measured
+    expect(r.tiles.kept.measuredIn).toBe("Claude Code");
+    expect((await report(day({ app: "Claude" }))).tiles.kept).toMatchObject({ share: null, measuredIn: null });
     expect(r.tiles.own).toMatchObject({ fresh: 2650 + 1310, measured: 2, notKnown: 2 });
     expect(r.tiles.own.byApp).toEqual([{ app: "Claude", measured: false, fresh: 0 }, { app: "Claude Code", measured: true, fresh: 3960 }]);
     expect(r.tiles.cost).toMatchObject({ parts: 5, prompts: 4 });

@@ -29,7 +29,8 @@ const write = (msg: unknown) => { (child!.stdin as any).write(JSON.stringify(msg
 describe("the door", () => {
   test("an answer to a question the door no longer waits for gets no reply", async () => {
     write({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: { elicitation: {} }, clientInfo: { name: "claude-code", version: "2" } } });
-    await Bun.sleep(300);
+    for (let i = 0; i < 600 && !lines.some((l) => l.id === 1); i++) await Bun.sleep(25); // its answer first, however slowly the door starts
+    expect(lines.some((l) => l.id === 1)).toBe(true);
     const before = lines.length;
     write({ jsonrpc: "2.0", id: "leanfare-7", result: { action: "accept", content: { run: true } } }); // a late yes: a response, not a request
     await Bun.sleep(500);

@@ -122,7 +122,8 @@ describe("Set up, the first time", () => {
 
   test("Turn on is its own Stop: Set up stops before the next app, and the list then shows what it did", async () => {
     process.env.CLAUDE_CONFIG_DIR = join(home, "claude");
-    fakeClaude(home, { slowMs: 1500 }); // Claude Code's command takes a while
+    const gate = join(home, "claude-gate");
+    fakeClaude(home, { gate }); // Claude Code's command runs until the test lets it end, however busy the computer is
     put(join(home, "claude", ".claude.json"), "{}");
     mkdirSync(join(home, ".cursor"), { recursive: true });
     await keys("google");
@@ -132,12 +133,14 @@ describe("Set up, the first time", () => {
     button().click();
     await waitFor(() => button()?.textContent === "Stop");
     expect(button().textContent).toBe("Stop");
+    await waitFor(() => existsSync(gate + ".started"), 15000); // Set up is on Claude Code now
     await Bun.sleep(600); // a second click this soon would be a double click, which is not a Stop
     button().click();
     await waitFor(() => toasts(doc).includes("Stopped."));
     // It finishes the app it is on (Claude Code's slow command), and says so meanwhile.
     await waitFor(() => text(doc, "#tab-setup").includes("Still finishing the app it is on…"));
     expect(text(doc, "#tab-setup")).toContain("Still finishing the app it is on…");
+    writeFileSync(gate, ""); // Claude Code's command ends
     await waitFor(() => text(doc, "#tab-setup").includes("Claude CodeLeanfare is in here already"), 8000);
     expect(text(doc, "#tab-setup")).not.toContain("Still finishing");
     expect(on(doc, "setup")).toBe(true); // still here, not sent on

@@ -310,7 +310,7 @@ Everything lives in `~/.leanfare`: the database (settings, cost ledger, chats an
 | Local rating | A model on your computer takes the Arena rating of the same model in the cloud (the same family and size), 15 points lower for the lighter copy. |
 | New tokens | What an app used that it did not read again from its cache: its uncached input, its cache writes and its output. Each turn reads the whole conversation again from the cache, so those reads are shown apart. |
 | Kept out (the report) | The tokens Leanfare's models read for a prompt: the files and each part's own text. The share is kept out ÷ (kept out + the app's new tokens), over the prompts whose app's own use is known (Claude Code's). |
-| A prompt (the report) | In Claude Code, from a prompt you typed to your next one in the same session; its hand offs belong to it, and its tokens are its characters ÷ 4. In other apps, hand offs less than 10 minutes apart, a plan's parts always together. |
+| A prompt (the report) | In Claude Code, from a prompt you typed to your next one in the same session; its hand offs belong to it, and its tokens are its characters ÷ 4. A prompt Claude Code copied into another file (a resumed session, or the same session in two folders) counts once, with its answers, from the file it was first written to. In other apps, hand offs less than 10 minutes apart, a plan's parts always together. |
 | Prompt id | PRM and a number, one count for all apps in the order of the prompts' times. The first report numbers every prompt it can find (a year back), oldest first; after that, new prompts get the next numbers. A part's id is its prompt's id and its place in the prompt (PRM-41.2). |
 
 ## Data and credits

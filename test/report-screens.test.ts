@@ -48,7 +48,7 @@ describe("the report", () => {
     await goReport(doc);
     const tiles = [...doc.querySelectorAll("#reportCard .rp-tile")].map((t: any) => t.textContent);
     expect(tiles[0]).toContain("Kept out of your plans40k tokens");
-    expect(tiles[0]).toContain("91% of your apps' use where it is known"); // 30k of 30k + 3k measured; the Claude chat's is not known
+    expect(tiles[0]).toContain("91% of Claude Code's use"); // 30k of 30k + 3k measured; the Claude chat's is not known
     expect(tiles[1]).toContain("3k new tokens");
     expect(tiles[1]).toContain("Claude: not known · Claude Code 3k, measured · 40k more read again from the cache");
     expect(tiles[2]).toContain("50% of parts free or on this computer · 2 parts in 2 prompts");
