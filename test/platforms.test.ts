@@ -29,8 +29,26 @@ describe("each platform, and what is left before its nearest limit", () => {
     expect(c).toMatchObject({ label: "Claude", ready: false, on: true, source: "your plan, from Claude Code's status line" });
     expect(c.windows.map((w: any) => [w.kind, w.left])).toEqual([["5 hours", 62], ["week", 81]]);
     expect(c.needs).toBe("No Anthropic key: Leanfare sends Claude's models no work, and only shows your plan's limits.");
-    expect(v.lines[0]).toMatch(/^Claude \(not used: no anthropic key: leanfare sends claude's models no work, and only shows your plan's limits\): 5 hours: 62% left, resets .+ · week: 81% left, resets .+ \(your plan, from Claude Code's status line\)\.$/);
+    expect(v.lines[0]).toMatch(/^Claude \(not used: no anthropic key: leanfare sends claude's models no work, and only shows your plan's limits\): 5 hours: 62% left, resets .+ · week: 81% left, resets .+ \(your plan, from Claude Code's status line, as of .+\)\.$/);
+    expect(c.asOf).toBe(new Date(T - 60_000).toISOString());
+    expect(c.stale).toBeNull(); // read a minute ago
   });
+
+  test("a reading from long ago says it may be behind, and what updates it", async () => {
+    saveSnap({ at: T - 3 * 3600_000, five: { used: 10, resets: T + 1 * 3600_000 }, week: { used: 9, resets: T + 3 * 86_400_000 } });
+    const v = (await ui(url, "/api/platforms")).json;
+    const c = row(v, "anthropic");
+    expect(c.asOf).toBe(new Date(T - 3 * 3600_000).toISOString());
+    expect(c.stale).toBe("It may be behind: Claude's chats and Cowork use the same limits and tell Leanfare nothing. Any prompt in Claude Code updates it.");
+    expect(v.lines[0]).toContain("It may be behind: Claude's chats and Cowork use the same limits");
+    const doc = await openApp(url);
+    doc.querySelector('.tabs button[data-tab="settings"]').click();
+    for (let i = 0; i < 160 && !doc.querySelector("#platformsSetting .prow"); i++) await Bun.sleep(50);
+    const claude = doc.querySelectorAll("#platformsSetting .prow")[0] as any;
+    expect(claude.querySelector(".note.lim").textContent).toMatch(/from Claude Code's status line, .+ ago\)$/); // the page's own clock
+    expect(claude.querySelector(".note.stale").textContent).toContain("Any prompt in Claude Code updates it.");
+    closeApp();
+  }, 20000);
 
   test("a free Gemini key: its requests through Leanfare today; a key paid per use: the budget; no key: what it needs", async () => {
     await keys("google");
