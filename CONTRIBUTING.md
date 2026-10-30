@@ -2,7 +2,7 @@
 
 Issues and pull requests are welcome.
 
-- **Found a bug?** Open a [bug report](https://github.com/pouriaetab/leanfare/issues/new?template=bug_report.yml). Questions and ideas go to [Discussions](https://github.com/pouriaetab/leanfare/discussions).
+- **Found a bug?** Open a [bug report](https://github.com/pouriaetab/leanfare/issues/new?template=bug_report.yml). In Leanfare, Settings, **Report a problem** opens it with your version filled in. Questions and ideas go to [Discussions](https://github.com/pouriaetab/leanfare/discussions).
 - **Run it from the source:** install [Bun](https://bun.sh) 1.4, then `bun install` and `bun src/cli.ts`; it opens on http://127.0.0.1:4747.
 - For a bigger change, open an issue first, so we agree on the shape before the code.
 - One change per pull request, with a test that fails without it. `bun test` runs everything against fake providers, so no key and no network are needed.
