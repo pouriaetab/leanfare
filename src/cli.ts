@@ -137,6 +137,8 @@ async function start() {
   process.on("SIGTERM", () => shutdown("stop signal"));
 
   // Background work, after the app is already open (nothing heavy before launch).
+  // Plan by itself, where it is on, brought up to this version (workers.ts): its block's text and its hooks.
+  import("./workers").then((w) => { const done = w.refreshAuto(); if (done.length) console.log(`Plan by itself is up to date in ${done.join(", ")}.`); }).catch(() => {});
   const day = 24 * 3600_000;
   const stale = () => Date.now() - Date.parse(data.store.catalog.built) > 12 * 3600_000;
   if (stale()) data.refreshCatalog().then((st) => console.log(st.state === "ok" ? `Prices updated to ${data.store.catalog.built.slice(0, 10)}.` : `Prices not updated: ${st.error}. Using the copy from ${data.store.catalog.built.slice(0, 10)}.`));
@@ -286,9 +288,16 @@ else if (command === "stop") await stop();
 else if (command === "status") await status();
 else if (command === "mcp") { const { runMcp } = await import("./mcp"); await runMcp(); }
 else if (command === "statusline") { const { runStatusline } = await import("./statusline"); await runStatusline(args); }
-// Claude Code's prompt hook (Settings, In your apps, Plan by itself): one line of numbers for Claude, never
-// the prompt. It must never get in the way: anything that goes wrong prints nothing.
-else if (command === "hook") { try { const { hookLine } = await import("./statusline"); if (args.includes("prompt")) { const line = hookLine(); if (line) console.log(line); } } catch {} process.exit(0); }
+// Claude Code's hooks (Settings, In your apps, Plan by itself): the prompt hook, one line of numbers for Claude, never
+// the prompt; the read hook (0.11), a reminder before Claude Code reads a big file itself (readhook.ts). They must
+// never get in the way: anything that goes wrong prints nothing.
+else if (command === "hook") {
+  try {
+    if (args.includes("read")) { const { runReadHook } = await import("./readhook"); await runReadHook(); }
+    else if (args.includes("prompt")) { const { hookLine } = await import("./statusline"); const line = hookLine(); if (line) console.log(line); }
+  } catch {}
+  process.exit(0);
+}
 else if (command === "apps") await apps();
 else if (command === "trial") await trial();
 else { console.error(`Unknown command "${command}".\n\n${HELP}`); process.exit(2); }
