@@ -13,6 +13,7 @@ import { meterView, type WindowView } from "./meter";
 import { FREE_PLANS, onFreePlan } from "./freeplans";
 import { saveSettings, settings } from "./settings";
 import { localDay, now } from "./util";
+import { planMode, type ModeView } from "./modes";
 
 export const platformOf = (m: Pick<Model, "provider" | "local">): string => (m.local ? "local" : m.provider === "openai" ? "chatgpt" : m.provider);
 export const platformOn = (p: string): boolean => !(settings().appsOff ?? []).includes(p);
@@ -95,7 +96,7 @@ export function windowsText(ws: LimitWindow[], at = now().getTime()): string {
   return ws.map((w) => `${w.kind}: ${w.left}% left${w.tokensLeft ? ` (about ${tok(w.tokensLeft)} tokens)` : ""}${w.resets ? `, resets ${whenText(w.resets, at)}` : ""}`).join(" · ");
 }
 
-export async function platformsView(): Promise<{ rows: PlatformRow[]; lines: string[] }> {
+export async function platformsView(): Promise<{ rows: PlatformRow[]; lines: string[]; mode: ModeView }> {
   const s = settings();
   const rows: PlatformRow[] = [];
   const row = (r: Omit<PlatformRow, "on" | "risk" | "riskWhy" | "asOf" | "stale"> & { risk?: string | null; asOf?: string | null; stale?: string | null }) =>
@@ -138,7 +139,7 @@ export async function platformsView(): Promise<{ rows: PlatformRow[]; lines: str
     const limit = plan ? `Free plan: ${n.toLocaleString("en-US")} request${n === 1 ? "" : "s"} through Leanfare today${plan.tokensPerMinute ? `; at most ${tok(plan.tokensPerMinute)} tokens a minute, so bigger work goes to another model` : ""}.` : budgetLine();
     row({ id: p.id, label: provider(p.id)?.name ?? p.id, ready: true, windows: [], source: null, needs: null, limit, risk: plan?.risk ?? (freeOnes ? "its provider may train on it" : null) });
   }
-  return { rows, lines: platformLines(rows) };
+  return { rows, lines: platformLines(rows), mode: planMode() }; // Leanfare's mode for your Claude plan (modes.ts)
 }
 
 // The lines the MCP door's spend tool shows.

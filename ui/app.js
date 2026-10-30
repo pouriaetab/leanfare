@@ -2827,6 +2827,10 @@
     const P = S.platforms;
     const card = h("div", { class: "setting", id: "platformsSetting" }, h("h3", { text: "Where Leanfare may send work" }));
     if (!P) { card.append(h("p", { class: "note", text: "Reading your plans' limits…" })); return card; }
+    // Leanfare's mode for your Claude plan (modes.ts): plenty, low or very low, and why.
+    if (P.mode) card.append(h("div", { class: `mode-line mode-${P.mode.mode.replace(" ", "-")}` },
+      h("span", { class: `chip ${P.mode.mode === "plenty" ? "good" : "warn"}`, text: `Mode: ${P.mode.mode}` }),
+      h("span", { class: "note", text: `${P.mode.why[0].toUpperCase()}${P.mode.why.slice(1)}. ${P.mode.mode === "plenty" ? "Leanfare works as usual." : P.mode.mode === "low" ? "Claude is told to hand off all reading, searching and drafting it will not change, and plans send more parts out." : "Everything that can go out goes out, and Claude says so before a big job."}` })));
     for (const r of P.rows) {
       const sw = r.ready ? h("button", { class: "hswitch", type: "button", role: "switch", "aria-checked": String(r.on), "aria-label": `${r.label} for plans and the delegate`, onclick: () => setPlatform(r.id, !r.on) },
         h("span", { class: "hs-label", text: r.on ? "Use" : "Off" }), h("span", { class: "track", "aria-hidden": "true" }, h("span", { class: "knob" }))) : null;
