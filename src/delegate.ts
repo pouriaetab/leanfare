@@ -29,9 +29,9 @@ import { noQuota, noQuotaWhy } from "./quota";
 import { provider } from "./config";
 import { fitsFree } from "./freeplans";
 import { startSideBySide } from "./sidebyside";
-import { plan, runChat, usableModels, type ChatOptions } from "./engine";
+import { chargeOf, plan, runChat, usableModels, type ChatOptions } from "./engine";
 import { DELEGATE_LIMITS, type DelegateFile } from "./readfiles";
-import { guessTask, rating, type Guess, type Msg } from "./router";
+import { estimateFor, guessTask, rating, type Guess, type Msg } from "./router";
 import { settings, type Mode } from "./settings";
 import { UserError } from "./upstream";
 import { localDay, localMonth, now, randomId } from "./util";
@@ -318,6 +318,11 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   // packs tighter than prose), plus the answer limit. A model with no known context is let through.
   // need: what the message says; a model in Ollama keeps less room for the answer (data.ts: fitsText).
   const fit = (chars: number, out: number) => ({ need: Math.ceil(chars / 3) + out, ok: (m: Model) => fitsText(m, chars, out) && fitsFree(m, chars, out) }); // a free plan's tokens a minute too
+  // Your cap for paid work (Settings, Jobs; 0.11): a call's likely cost on a paid model, its text and an answer of at
+  // most 4,000 tokens, within paidCap dollars. Free and local models always are; a model with no price never is.
+  const cap = settings().paidCap ?? 0.1, capText = `$${cap.toFixed(2)}`;
+  const costFor = (m: Model, chars: number, out: number) => chargeOf(m, estimateFor(m, Math.ceil(chars / 3), Math.min(out, 4000))).cost;
+  const capped = (chars: number, out: number) => (m: Model) => { const c = costFor(m, chars, out); return c !== null && c <= cap; };
   const tooMuch = (need: number) => `None of the models you ticked can take this much text (about ${num(need)} tokens with the answer). Hand over fewer or shorter files, or tick a model with a longer context.`;
   // Rated above the model that answered, for this task.
   const ratedAbove = (doer: Model) => {
@@ -342,7 +347,9 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   const write = (r: Parameters<typeof writeRow>[0]) => (input.trial ? null : writeRow(r));
   const none = { checker: null, verdict: null, checkCost: null, rerun: null, rerunCost: null };
 
-  const doFit = fit(prompt.length + system.length, input.maxOut);
+  const doFit0 = fit(prompt.length + system.length, input.maxOut);
+  const doCap = capped(prompt.length + system.length, input.maxOut);
+  const doFit = { ...doFit0, ok: (m: Model) => doFit0.ok(m) && (input.trial ? true : doCap(m)) }; // the trial measures, so no cap
   const limit = input.only;
   // The platforms turned off for plans and the delegate are left out (platforms.ts); not for the test of one
   // named model on this computer, which you asked for by name.
@@ -368,6 +375,11 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     if (input.private && !usableModels((m) => !!m.local && doFit.ok(m)).length) throw Object.assign(new UserError(409, "This task is to stay on this computer, and none of your models here can take it. Do it yourself, or start Ollama with a model that fits (Settings, Local models).", "private_none"), { spent: 0 });
     if (!input.private && work.files && usableModels((m) => doFit.ok(m) && on(m) && (!limit || limit(m))).length && !usableModels((m) => doFit.ok(m) && on(m) && allowed(m) && (!limit || limit(m))).length)
       throw Object.assign(new UserError(409, `Your projects' files go ${settings().filesTo === "local" ? "only to this computer" : "to no free tier that may be read"} (Settings, Where Leanfare may send work), and no model there can take this. Do it yourself, or change that setting.`, "files_where"), { spent: 0 });
+    // Every model that could take it would cost more than your cap for paid work: say so, and spend nothing.
+    if (!input.trial && usableModels((m) => doFit0.ok(m) && on(m) && allowed(m) && (!limit || limit(m))).length && !usableModels((m) => doFit.ok(m) && on(m) && allowed(m) && (!limit || limit(m))).length) {
+      const cheapest = Math.min(...usableModels((m) => doFit0.ok(m) && on(m) && allowed(m) && (!limit || limit(m))).map((m) => costFor(m, prompt.length + system.length, input.maxOut) ?? Infinity));
+      throw Object.assign(new UserError(409, `Every model that could take it would cost more than your cap for paid work, ${capText} a hand off (about ${usd(cheapest)} here). Raise it in Settings, Jobs, or do it yourself.`, "paid_cap"), { spent: 0 });
+    }
     if (usableModels((m) => doFit.ok(m) && (!limit || limit(m))).length)
       throw Object.assign(new UserError(409, "The models that could take it are on platforms turned off for plans and the delegate (Settings, Where Leanfare may send work). Turn one on there, or do it yourself.", "platform_off"), { spent: 0 });
   }
@@ -418,7 +430,9 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   if (picked) {
     // Blind: the checker is not told which model answered, and what the answer says of its own model is masked (judge.ts).
     const checkPrompt = `The task:\n${input.task}${block ? `\n\n${block}` : ""}\n\nThe answer to check:\n${masked(first.text)}`;
-    const ckFit = fit(checkPrompt.length + CHECKER_SYSTEM.length, CHECK_MAX_OUT);
+    const ckFit0 = fit(checkPrompt.length + CHECKER_SYSTEM.length, CHECK_MAX_OUT);
+    const ckCap = capped(checkPrompt.length + CHECKER_SYSTEM.length, CHECK_MAX_OUT);
+    const ckFit = { ...ckFit0, ok: (m: Model) => ckFit0.ok(m) && (input.trial ? true : ckCap(m)) }; // within your cap for paid work too
     // Rated above the model that answered and able to take the check's text; the grades' preference
     // comes last, so a moved-down model still checks when it is the only one that can.
     const above0 = doer ? ratedAbove(doer) : () => false;
@@ -431,7 +445,8 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
       check.why = doer ? `${doer.label} is the best rated model you ticked for this, so there is no stronger one to check it` : "the model that answered is no longer in Leanfare's price list";
     } else if (!usableModels((m) => above(m) && ckFit.ok(m)).length) {
       check.verdict = "skipped";
-      check.why = `the models rated above ${doer!.label} cannot take the check's text (about ${num(ckFit.need)} tokens)`;
+      check.why = usableModels((m) => above(m) && ckFit0.ok(m)).length ? `a check by a stronger model would cost more than your cap for paid work, ${capText} a hand off`
+        : `the models rated above ${doer!.label} cannot take the check's text (about ${num(ckFit.need)} tokens)`;
     } else {
       const c = await run([{ role: "user", content: checkPrompt }], "auto-best", "Delegate check", { system: CHECKER_SYSTEM, source: input.trial ? "trial" : "check", guess, only: stronger, onlyWhy: tooMuch(ckFit.need), maxOut: CHECK_MAX_OUT, optional: true, speed: input.speed, job });
       check.cost = c.cost;
@@ -449,7 +464,8 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
           // itself. Like the check, it never goes past the budget: the first answer is there.
           const up = UP[TIER[input.effort]];
           const note = `\n\nA checker found a problem with an earlier answer to this task: ${(v.why || "it was judged wrong").replace(/[.!]?$/, ".")} Avoid it.`;
-          const againFit = fit(prompt.length + note.length + system.length, input.maxOut);
+          const againFit0 = fit(prompt.length + note.length + system.length, input.maxOut), againCap = capped(prompt.length + note.length + system.length, input.maxOut);
+          const againFit = { ...againFit0, ok: (m: Model) => againFit0.ok(m) && (input.trial ? true : againCap(m)) }; // within your cap for paid work
           const again = await run([{ role: "user", content: prompt + note }], up ? `auto-${up}` : checker.id, "Delegate, asked again", { system, source, guess, only: within((m) => above0(m) && againFit.ok(m)), onlyWhy: tooMuch(againFit.need), effort: input.effort, maxOut: input.maxOut, optional: true, speed: input.speed, job });
           rerunCost = again.cost;
           spent.push(again.cost);

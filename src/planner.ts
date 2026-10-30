@@ -36,7 +36,7 @@ import { mayTake, modelOn, platformOn, readRisk } from "./platforms";
 import { planView, windowsNow } from "./plans";
 import { DELEGATE_LIMITS, readForDelegate, sizesForPlan, PLAN_FILES } from "./readfiles";
 import { guessTask, pickModel, type Msg } from "./router";
-import { settings } from "./settings";
+import { JOB_DEFAULTS, settings, type JobKind } from "./settings";
 import { UserError } from "./upstream";
 import { now, randomId, secondsText } from "./util";
 
@@ -252,6 +252,8 @@ export function byRelevance(names: string[], text: string): string[] {
 export const DELEGATE_KIND: Partial<Record<PartKind, Kind>> = { read: "read", write: "write", reason: "reason" };
 const LABEL_KIND: Record<PartKind, string> = { read: "read", write: "write", reason: "reason", code: "code", search: "search", act: "act" };
 const NEAR = 85; // percent of a window used: from here on, more parts go out
+const JOB_OF: Partial<Record<PartKind, JobKind>> = { read: "read", search: "search", write: "write", reason: "reason" };
+export const JOB_WORD: Record<JobKind, string> = { read: "reading", search: "searching", write: "drafting", reason: "working things out" };
 export const isFree = (m: Model) => !!m.local || chargeOf(m, 1).cost === 0;
 
 export function whereOf(m: Model, cost: number | null): Where {
@@ -320,6 +322,13 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
   const viaCodex = codexCan && !movedDown(CODEX_ID, part.kind);
   if (part.kind === "code") return stay(`it changes the project, which only ${manager} can do`);
   if (part.kind === "act") return stay(`it needs ${manager}'s own tools`);
+  // Your rules for this kind of job (Settings, Jobs; 0.11): to Leanfare, to Leanfare only when your plan runs low
+  // (modes.ts), or with your app.
+  const job = JOB_OF[part.kind];
+  const rule = job ? ({ ...JOB_DEFAULTS, ...settings().jobs })[job] : "leanfare";
+  const yours = manager === "you" ? "your app" : manager;
+  if (job && rule === "app") return stay(`your rules keep ${JOB_WORD[job]} with ${yours} (Settings, Jobs)`);
+  if (job && rule === "low" && !near) return stay(`your rules send ${JOB_WORD[job]} out only when your plan runs low (Settings, Jobs)`);
   const big = (part.effort === "high" && (part.kind === "reason" || part.kind === "write"));
   if (big && !near) return stay(`high effort judgement: your strongest model, in your plan`);
   const need = Math.ceil((r.tokens * 4) / 3) + DEFAULT_MAX_OUT; // as delegate counts it: three characters a token, and the answer
