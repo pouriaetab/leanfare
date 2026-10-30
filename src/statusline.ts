@@ -13,6 +13,7 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import { join } from "node:path";
 import { DATA_DIR } from "./config";
 import { switchedOn } from "./switch";
+import { modeAdvice, planMode } from "./modes";
 
 export interface Win { used: number; resets: number | null } // percent used, 0 to 100; when it resets, epoch ms
 export interface Snap { at: number; five: Win | null; week: Win | null }
@@ -175,7 +176,9 @@ export function hookLine(at = clock()): string {
   const live = (w: { used: number; resets: number | null } | null | undefined) => (w && (w.resets === null || w.resets > at) ? Math.round(w.used) : null);
   const five = live(s?.five), week = live(s?.week);
   const parts = [five !== null ? `its 5 hour window is ${five}% used` : "", week !== null ? `its week ${week}% used` : ""].filter(Boolean);
-  const near = (five ?? 0) >= 85 || (week ?? 0) >= 85;
-  return `Leanfare: ${parts.length ? `the Claude plan: ${parts.join(", ")}. ` : ""}Leanfare's plan tool splits a task with several parts across cheaper models${near ? "; near a limit, its delegate and plan_run can do the reading and drafting off the plan" : ""}.`;
+  // Low or very low (modes.ts, 0.11): what to hand off, plainly; plenty: the plan's numbers and the plan tool.
+  const advice = modeAdvice(planMode(at));
+  if (advice) return advice;
+  return `Leanfare: ${parts.length ? `the Claude plan: ${parts.join(", ")}. ` : ""}Leanfare's plan tool splits a task with several parts across cheaper models, and its delegate reads big files you will not change.`;
 }
 
