@@ -69,7 +69,9 @@ export async function reset(patch: Partial<Settings> = {}) {
   // Short answers (on by default) add an instruction to every chat request; the tests that check
   // what a provider gets turn it off, and chat.test.ts checks it on its own.
   // Side by side is off unless a test turns it on: it would add answers to every hand off now and then.
-  saveSettings({ brief: false, sideBySide: 0, ...patch });
+  // Every kind of job goes to Leanfare and paid work has room, as before 0.11's rules and cap: the tests of those set
+  // them (jobs.test.ts).
+  saveSettings({ brief: false, sideBySide: 0, jobs: { read: "leanfare", search: "leanfare", write: "leanfare", reason: "leanfare" }, paidCap: 100, ...patch });
 }
 
 export async function keys(...ids: string[]) {
