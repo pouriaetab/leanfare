@@ -1,0 +1,67 @@
+name: Bug report
+description: Something in Leanfare does not work as it should.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for telling us. Leanfare keeps only numbers, never your words, so a report like this is how we learn about a problem. Please remove API keys and anything personal from what you paste.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to see it again
+      placeholder: |
+        1. In Claude Code, ask ...
+        2. ...
+  - type: input
+    id: version
+    attributes:
+      label: Leanfare version
+      description: Settings shows it under New versions, or run `leanfare --version`.
+      placeholder: "0.11.3"
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Your computer
+      description: The system and its version.
+      placeholder: macOS 26, Windows 11, Ubuntu 24.04
+    validations:
+      required: true
+  - type: dropdown
+    id: app
+    attributes:
+      label: Where were you using it?
+      options:
+        - Leanfare's own screens
+        - Claude Code
+        - Claude Desktop
+        - Cowork
+        - Codex
+        - Cursor
+        - Gemini CLI
+        - Another app
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: The error, or lines from the terminal
+      description: Paste what Leanfare or your app showed. Remove keys first.
+      render: shell
+  - type: checkboxes
+    id: clean
+    attributes:
+      label: Before you send it
+      options:
+        - label: I removed API keys and personal details from what I pasted.
+          required: true
