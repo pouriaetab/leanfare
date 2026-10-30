@@ -32,7 +32,7 @@ const chat = (headers: Record<string, string> = {}) => post(`${url}/v1/chat/comp
 describe("how long a model takes", () => {
   test("measured from its last answers here: the wait for its first words, then how fast it wrote", () => {
     seed();
-    expect(speedOf(m("google/gemini-3.8-flash"))).toEqual({ latency: 0.3, perSecond: 1000, measured: true, answers: 3 });
+    expect(speedOf(m("google/gemini-3.8-flash"))).toEqual({ latency: 0.3, perSecond: 1000, measured: true, answers: 3, perInput: 0, fail: 0 }); // too few answers for a line
     expect(secondsFor(m("google/gemini-3.8-flash"), 400)).toEqual({ seconds: 0.7, measured: true });
     expect(secondsFor(m("xai/grok-4.20-beta"), 400).seconds).toBeCloseTo(29, 5);
   });
@@ -117,7 +117,7 @@ describe("Auto picks by your speed, at the same quality", () => {
     expect((await ui(url, "/api/settings", { speed: "45" })).json.settings.speed).toBe(45);
     const bad = await ui(url, "/api/settings", { speed: "quick" });
     expect(bad.status).toBe(400);
-    expect(bad.json.error).toContain("speed must be cheapest, fastest, or a number of seconds from 1 to 3600");
+    expect(bad.json.error).toContain("speed must be cheapest, balanced, fastest, or a number of seconds from 1 to 3600");
     expect((await ui(url, "/api/state")).json.settings.speed).toBe(45);
   });
   test("the estimate shows the time, and the cheapest and fastest at the same quality", async () => {
@@ -151,7 +151,7 @@ describe("Auto picks by your speed, at the same quality", () => {
     expect(r.json.receipt).toContain(`It took ${secondsText(r.json.seconds)}.`);
     const bad = await ui(url, "/api/delegate", { task: "x", speed: "whenever" });
     expect(bad.status).toBe(400);
-    expect(bad.json.error).toContain("speed must be cheapest, fastest, or a number of seconds");
+    expect(bad.json.error).toContain("speed must be cheapest, balanced, fastest, or a number of seconds");
   });
 });
 

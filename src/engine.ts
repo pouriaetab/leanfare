@@ -15,6 +15,7 @@ import { addSpent, budgetState, release, tryReserve, wouldFit } from "./budget";
 import { failOfStatus, failOfText, type FailKind } from "./fails";
 import { noteFailure, restOf, restText } from "./rest";
 import { fitsFree, onFreePlan } from "./freeplans";
+import { learnedShift } from "./learn";
 import { RESPONSES_PATH, ResponsesStreamTranslator, responsesToOpenAI, toResponses } from "./upstream";
 import { AnthropicStreamTranslator, UserError, anthropicDefaultMax, anthropicToOpenAI, effortFor, headersFor, networkError, ollamaChunks, ollamaPlain, ollamaToOpenAI, openaiBody, plainError, thinkRoom, toAnthropic, toOllama } from "./upstream";
 import { SSEParser, dollars, localDay, localMonth, median, now, providerMessage, randomId, redact, usd8 } from "./util";
@@ -308,8 +309,11 @@ export async function plan(input: PlanInput): Promise<Plan> {
           : `No model is ready yet. Open Leanfare at http://127.0.0.1:${runtime.port}, add a key and tick a model, or start Ollama.`, "no_model_ready");
     }
     const effortAsked = input.effort ?? null;
+    // A hand off's kind: your own grades for it move each model's rating (learn.ts).
+    const kind = input.guess?.kind ?? null;
+    const learn = kind ? (m: Model) => learnedShift(m.id, kind)?.points ?? 0 : undefined;
     const pick = (list: Model[]) => pickModel(input.messages, list, amode, (t, mid) => outputHistory(t, mid, effortAsked && mid ? effortFor(getModel(mid)!, effortAsked) : null, group), input.system, input.guess,
-      speed, (m, out) => secondsFor(m, out, effortAsked ? effortFor(m, effortAsked) : null), input.tokens);
+      speed, (m, out, tin) => secondsFor(m, out, effortAsked ? effortFor(m, effortAsked) : null, tin), input.tokens, learn);
     const p = pick(usable);
     // Say so when a resting model would have been the pick, or when all of them rest and Auto tries them anyway.
     if (p && awake.length && awake.length < all.length) {
@@ -402,7 +406,7 @@ export async function plan(input: PlanInput): Promise<Plan> {
   const effortAsked = input.effort && input.effort !== "auto" ? input.effort : null;
   const outGuess = expectedOutput(guess.task, model, (t, mid) => outputHistory(t, mid, effortFor(model, effortAsked), group));
   const estimate = chargeOf(model, estimateFor(model, inTok, outGuess)).cost;
-  const time = secondsFor(model, outGuess, effortFor(model, effortAsked));
+  const time = secondsFor(model, outGuess, effortFor(model, effortAsked), inTok); // its first token later for a longer input
   const cheapestId = s.budget !== null ? cheapest(only, inTok)?.id ?? null : null;
   return { model, auto: !!amode, mode, guess, reason, estimate, seconds: time.seconds, secondsMeasured: time.measured, speed, choices, candidates, alternatives, usual: usualModel(), switchedFrom, notes, reservation, inTok, inMax, maxOut: input.maxOut, capped, asked: input.asked, effortAsked, copies, cheapestId, optional: input.optional };
 }
@@ -686,7 +690,7 @@ const headerMode = (req: Request): Mode | undefined => {
   const v = req.headers.get("x-leanfare-mode")?.toLowerCase();
   return v === "save" || v === "balanced" || v === "best" ? v : undefined;
 };
-// x-leanfare-speed: cheapest, fastest, or a number of seconds to answer within.
+// x-leanfare-speed: cheapest, balanced, fastest, or a number of seconds to answer within.
 const headerSpeed = (req: Request): SpeedChoice | undefined => parseSpeed(req.headers.get("x-leanfare-speed")?.toLowerCase() ?? null) ?? undefined;
 
 function register(source: string, label: string, ac: AbortController) {

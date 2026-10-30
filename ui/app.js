@@ -211,7 +211,7 @@
   const failed = (e) => toast(String(e?.message ?? e), "error");
   const secondsText = (x) => (x < 1.5 ? "about a second" : x < 90 ? `about ${Math.round(x)} s` : `about ${Math.round(x / 60)} min`);
   // Speed at the same quality (Settings and the composer): the value, its Settings label, its composer label.
-  const SPEEDS = [["cheapest", "The cheapest, however long it takes", "Speed: cheapest"], [60, "The cheapest within about a minute", "Speed: within 1 min"],
+  const SPEEDS = [["cheapest", "The cheapest, however long it takes", "Speed: cheapest"], ["balanced", "A balance of time and cost", "Speed: balanced"], [60, "The cheapest within about a minute", "Speed: within 1 min"],
     [20, "The cheapest within about 20 seconds", "Speed: within 20 s"], [5, "The cheapest within about 5 seconds", "Speed: within 5 s"], ["fastest", "The fastest, whatever it costs", "Speed: fastest"]];
   const speedValue = (v) => (/^\d+$/.test(v) ? Number(v) : v);
   const speedOptions = (cur, col) => [...SPEEDS.map((x) => h("option", { value: String(x[0]), selected: x[0] === cur, text: x[col] })),

@@ -97,7 +97,7 @@ export function checkDelegate(b: any): DelegateInput | string {
   let speed: SpeedChoice | undefined;
   if (b.speed !== undefined && b.speed !== null && b.speed !== "") {
     const v = parseSpeed(b.speed);
-    if (v === null) return "speed must be cheapest, fastest, or a number of seconds from 1 to 3600.";
+    if (v === null) return "speed must be cheapest, balanced, fastest, or a number of seconds from 1 to 3600.";
     speed = v;
   }
   if (b.private !== undefined && typeof b.private !== "boolean") return "private must be true or false.";
@@ -116,8 +116,8 @@ export function nameOf(v: unknown): string | null | false {
 
 // The rating a task is judged by: the kind says it, or Auto's usual guess decides.
 export function taskFor(kind: Kind | null, messages: Msg[]): Guess {
-  const g = guessTask(messages);
-  const given = (task: string): Guess => ({ task, why: `the kind it was handed over as (${kind})`, alt: "overall" });
+  const g = { ...guessTask(messages), kind }; // the kind: what your grades for it say moves the ratings (learn.ts)
+  const given = (task: string): Guess => ({ task, why: `the kind it was handed over as (${kind})`, alt: "overall", kind });
   if (kind === "read") return given("longer_query");
   if (kind === "write") return g.task === "coding" || g.task === "creative_writing" ? g : given("instruction_following");
   if (kind === "reason") return g.task === "math" || g.task === "coding" ? g : given("hard_prompts");
