@@ -62,6 +62,15 @@ describe("each platform, and what is left before its nearest limit", () => {
     expect(row(v, "chatgpt")).toMatchObject({ ready: false, needs: "Add an OpenAI key, or let plans use Codex on your ChatGPT plan (Your ChatGPT plan, through Codex)." });
     expect(row(v, "local")).toMatchObject({ ready: false, needs: "Start Ollama (Settings, Local models)." });
   });
+
+  test("a free key's count takes the answers that came back empty, which Google counts too, and not the refused ones", async () => {
+    await keys("google");
+    saveSettings({ providers: { google: { on: true, free: true } } });
+    await ui(url, "/api/delegate", { task: "Summarize the log. [empty1]", files: [LOG], kind: "read", effort: "low", check: "never" }); // empty, then asked again
+    await ui(url, "/api/delegate", { task: "Summarize it again. [fail@google 429]", files: [LOG], kind: "read", effort: "low", check: "never" }); // refused
+    const v = (await ui(url, "/api/platforms")).json;
+    expect(row(v, "google").limit).toBe("Free key: 2 requests through Leanfare today (Google sets its free limits and does not say them ahead).");
+  });
 });
 
 describe("a platform turned off", () => {
