@@ -15,6 +15,7 @@ import { modelStats, type ModelStat } from "./modelstats";
 import { modelName, planFor } from "./planner";
 import { recentEntries, recentPrompts } from "./plans";
 import { now } from "./util";
+import { scoreOf } from "./score";
 
 export const RANGES = ["1h", "6h", "today", "7d", "30d", "year"] as const;
 export type Range = (typeof RANGES)[number];
@@ -323,13 +324,14 @@ export async function report(q: ReportQuery, inner = false): Promise<Report> {
     // Quality three ways: the outside answers (the app's grades, else the blind checks), the whole results together,
     // and the app alone where sampled.
     three: {
-      outside: { graded, good: counts.good },
-      together: { graded: shown.filter((p) => p.together).length, good: shown.filter((p) => p.together === "good").length },
-      alone: { sampled: ps.filter((x) => x.alone).length, graded: ps.filter((x) => x.alone?.grade).length, good: ps.filter((x) => x.alone?.grade === "good").length },
+      // Each with its score out of 100 and range (score.ts, 0.11): good 1, partly half, wrong 0.
+      outside: { graded, good: counts.good, score: scoreOf(counts) },
+      together: { graded: shown.filter((p) => p.together).length, good: shown.filter((p) => p.together === "good").length, score: scoreOf(countOf(shown.map((p) => p.together))) },
+      alone: { sampled: ps.filter((x) => x.alone).length, graded: ps.filter((x) => x.alone?.grade).length, good: ps.filter((x) => x.alone?.grade === "good").length, score: scoreOf(countOf(ps.map((x) => x.alone?.grade))) },
     },
     // What the outside models used, measured (0.10 on): the parts that have it, and how many do not (older ones).
     outside: { ...(sumUsed(ps.map((x) => x.used)) ?? { read: 0, thought: 0, wrote: 0, calls: 0, failed: 0, estimated: false }), byRole: undefined, measured: ps.filter((x) => x.used).length, notMeasured: ps.filter((x) => !x.used).length },
-    quality: { ...counts, graded, goodShare: graded ? counts.good / graded : null, blind: blind.length, judge: [...judges.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null },
+    quality: { ...counts, graded, goodShare: graded ? counts.good / graded : null, score: scoreOf(counts), blind: blind.length, judge: [...judges.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null },
   };
 
   // Tokens over time: kept by Leanfare's models against the new tokens of the apps whose use is known.
@@ -356,24 +358,26 @@ export async function report(q: ReportQuery, inner = false): Promise<Report> {
     const xs = ps.filter((x) => x.model === id);
     const g = xs.filter((x) => x.grade), good = xs.filter((x) => x.grade === "good").length;
     return { id, label: xs[0].label, where: xs[0].where, provider: xs[0].provider, read: xs.reduce((a, x) => a + x.read, 0), parts: xs.length,
-      cost: xs.reduce((a, x) => a + (x.cost ?? 0), 0), graded: g.length, goodShare: g.length ? good / g.length : null };
+      cost: xs.reduce((a, x) => a + (x.cost ?? 0), 0), graded: g.length, goodShare: g.length ? good / g.length : null, score: scoreOf(countOf(xs.map((x) => x.grade))) };
   }).sort((a, b) => b.read - a.read || b.parts - a.parts);
   const byKind = [...new Set(ps.map((x) => x.kind ?? "other"))].map((kind) => {
     const xs = ps.filter((x) => (x.kind ?? "other") === kind);
     const c = { good: xs.filter((x) => x.grade === "good").length, partly: xs.filter((x) => x.grade === "partly").length, wrong: xs.filter((x) => x.grade === "wrong").length };
     const models = [...new Set(xs.map((x) => x.model))].map((id) => { const g = xs.filter((x) => x.model === id && x.grade); return { id, label: labelOf(id), n: g.length, share: g.length ? g.filter((x) => x.grade === "good").length / g.length : 0, parts: xs.filter((x) => x.model === id).length }; })
       .filter((m) => m.n >= 2).sort((a, b) => b.share - a.share || b.parts - a.parts);
-    return { kind, parts: xs.length, ...c, best: models[0] ? { id: models[0].id, label: models[0].label } : null };
+    return { kind, parts: xs.length, ...c, score: scoreOf(c), best: models[0] ? { id: models[0].id, label: models[0].label } : null };
   }).sort((a, b) => b.parts - a.parts || KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind));
 
   // Speed, failures, cost and quality per model: every call in the span (modelstats.ts), with its grades from the parts.
   const speed: SpeedRow[] = modelStats({ from: q.from, to: q.to, provider: q.provider, model: q.model })
-    .map((m) => { const b = byModel.find((x) => x.id === m.id); return { ...m, graded: b?.graded ?? 0, goodShare: b?.goodShare ?? null }; });
+    .map((m) => { const b = byModel.find((x) => x.id === m.id); return { ...m, graded: b?.graded ?? 0, goodShare: b?.goodShare ?? null, score: b?.score ?? null }; });
 
   return { from: new Date(q.from).toISOString(), to: new Date(q.to).toISOString(), step, tiles, series, byModel, byKind, speed, prompts: shown.slice(0, 200), more: Math.max(0, shown.length - 200), options };
 }
 
-export type SpeedRow = ModelStat & { graded: number; goodShare: number | null };
+export type SpeedRow = ModelStat & { graded: number; goodShare: number | null; score: ReturnType<typeof scoreOf> };
+// Good, partly and wrong among some grades (the rest not graded).
+const countOf = (gs: (string | null | undefined)[]) => ({ good: gs.filter((g) => g === "good").length, partly: gs.filter((g) => g === "partly").length, wrong: gs.filter((g) => g === "wrong").length });
 export type Report = { from: string; to: string; step: number; tiles: any; series: { at: string; kept: number; used: number }[]; byModel: any[]; byKind: any[]; speed: SpeedRow[]; prompts: ReportPrompt[]; more: number; options: any };
 
 // Prompt ids: PRM and a number (PRM-1042), one count for every app, in the order of the prompts' times. Each is given

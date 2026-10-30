@@ -166,7 +166,7 @@ describe("the tools", () => {
       expect(t).toContain("grade it with grade (good, partly or wrong, with the plan's id and the part)");
       const g = await rpc("tools/call", { name: "grade", arguments: { id, part: 1, verdict: "partly" } });
       expect(g.result.isError).toBeUndefined();
-      expect(g.result.content[0].text).toMatch(/^Graded partly\. .+ for reading: 1 partly of its last 1 \(it moves down below half good, from 3 grades on\)\.$/);
+      expect(g.result.content[0].text).toMatch(/^Graded partly\. .+ for reading: 50 of 100 \(7 to 93, 1 grade\): 1 partly \(it moves down below 50, from 3 grades on\)\.$/);
       expect(g.result.structuredContent).toMatchObject({ kind: "read", n: 1, partly: 1, down: false });
       const mine = await rpc("tools/call", { name: "grade", arguments: { id, part: 2, verdict: "good" } });
       expect(mine.result.isError).toBe(true);
@@ -268,7 +268,7 @@ describe("the tools", () => {
       expect(gradeIt).toBe(`(Once you have used it: grade, with model deepseek/deepseek-v4-flash, kind read and handoff ${row}.)`);
       // Graded without its handoff (an older app): the grade still finds its hand off, the last one of that model and kind.
       const g = await rpc("tools/call", { name: "grade", arguments: { model: "deepseek/deepseek-v4-flash", kind: "read", verdict: "good" } });
-      expect(g.result.content[0].text).toBe("Graded good. DeepSeek V4 Flash for reading: 1 good of its last 1 (it moves down below half good, from 3 grades on).");
+      expect(g.result.content[0].text).toBe("Graded good. DeepSeek V4 Flash for reading: 100 of 100 (27 to 100, 1 grade): 1 good (it moves down below 50, from 3 grades on).");
       const work = (await ui(url, "/api/savings")).json.work;
       expect(work).toMatchObject({ tasks: 1, kept: 9, back: 8, grades: { good: 1, partly: 0, wrong: 0 } });
       expect(work.recent[0]).toMatchObject({ plan: false, kinds: ["reading"], files: 1, models: [{ label: "DeepSeek V4 Flash", where: "paid" }], grades: ["good"] });
@@ -316,7 +316,7 @@ describe("the tools", () => {
     const t = r.result.content[0].text;
     expect(t).toStartWith("Leanfare's report, today: 20k tokens kept out of your plans.");
     expect(t).toContain("Your apps' own use: Claude: not known.");
-    expect(t).toContain("Quality: 100% good (0 partly, 0 wrong; 0 judged blind).");
+    expect(t).toContain("Quality: 100 of 100 (27 to 100, 1 grade): 1 good, 0 partly, 0 wrong; 0 judged blind.");
     expect(t).toContain("Last prompts:\n- PRM-1, 2026-10-21 11:00 UTC, Claude (Claude Opus 5.5): Gemini 3.8 Flash, 20k kept out, good");
     expect(t).toMatch(/The full report: Leanfare, Savings \(http:\/\/127\.0\.0\.1:\d+\/#report\)\.$/);
     expect(r.result.structuredContent).toMatchObject({ range: "today", prompts: [{ id: "PRM-1", app: "Claude", model: "Claude Opus 5.5", parts: ["Gemini 3.8 Flash"], kept: 20000, grade: "good" }] });

@@ -124,7 +124,7 @@ describe("in the report", () => {
     for (let i = 0; i < 160 && !doc.querySelector("#reportCard .sp-table"); i++) await Bun.sleep(50);
     const rows = [...doc.querySelectorAll("#reportCard .sp-table tbody tr")].map((tr: any) => [...tr.querySelectorAll("td")].map((td: any) => td.textContent.trim()));
     expect(rows).toEqual([
-      ["Gemini 3.8 Flashfree · Google Gemini", "6", "2 failed1 busy · 1 timed out", "2.1 s · 2.1 s", "9 s · 9 s", "217 /s", "$0", "100%", "ready"],
+      ["Gemini 3.8 Flashfree · Google Gemini", "6", "2 failed1 busy · 1 timed out", "2.1 s · 2.1 s", "9 s · 9 s", "217 /s", "$0", "100 / 100", "ready"],
       ["DeepSeek V4 Flashpaid · DeepSeek", "1", "none", "1.8 s · 1.8 s", "11 s · 11 s", "22 /s", "$0.00040", "not graded", "ready"],
     ]);
     const dots = [...doc.querySelectorAll("#reportCard .sp-chart circle.spd")];

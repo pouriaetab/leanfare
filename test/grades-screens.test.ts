@@ -47,7 +47,7 @@ describe("the Plan tab", () => {
     await waitFor(() => !!row()?.textContent.includes("You graded it partly."));
     expect(row().textContent).toContain("You graded it partly.");
     expect(buttons(doc, "#planResult .grade-row").find((b) => b.textContent === "Partly").getAttribute("aria-pressed")).toBe("true");
-    expect(toasts(doc)).toContain("for reading: 1 partly of its last 1");
+    expect(toasts(doc)).toContain("for reading: 50 of 100 (7 to 93, 1 grade): 1 partly");
     expect(standings().map((s) => [s.kind, s.n, s.partly])).toEqual([["read", 1, 1]]);
   }, 30000);
 });
