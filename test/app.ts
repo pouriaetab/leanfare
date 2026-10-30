@@ -11,6 +11,7 @@ import { ANSWER_TIME, forgetHistoryCache, setPaused, stopRunning } from "../src/
 import { forgetSpeeds } from "../src/speed";
 import { forgetGrades } from "../src/grades";
 import { forgetRests } from "../src/rest";
+import { forgetNoQuota } from "../src/quota";
 import { sideBySideIdle, stopSideBySide } from "../src/sidebyside";
 import { stopTrial } from "../src/trial";
 import { forgetTests } from "../src/localtest";
@@ -42,9 +43,10 @@ export async function reset(patch: Partial<Settings> = {}) {
   setPaused(false);
   setNow("2026-10-21T12:00:00Z");
   await stopTrial();
-  db.exec("DELETE FROM ledger; DELETE FROM messages; DELETE FROM chats; DELETE FROM settings; DELETE FROM files; DELETE FROM delegations; DELETE FROM trials; DELETE FROM grades; DELETE FROM comparisons; DELETE FROM prompts; DELETE FROM rests;");
+  db.exec("DELETE FROM ledger; DELETE FROM messages; DELETE FROM chats; DELETE FROM settings; DELETE FROM files; DELETE FROM delegations; DELETE FROM trials; DELETE FROM grades; DELETE FROM comparisons; DELETE FROM prompts; DELETE FROM rests; DELETE FROM noquota;");
   forgetGrades();
   forgetRests();
+  forgetNoQuota();
   Object.assign(ANSWER_TIME, { start: 0, idle: 90_000 });
   resetSettingsCache();
   resetBudget();
