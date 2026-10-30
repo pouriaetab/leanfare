@@ -1,8 +1,14 @@
 # Leanfare
 
+[![Latest release](https://img.shields.io/github/v/release/pouriaetab/leanfare)](https://github.com/pouriaetab/leanfare/releases/latest) [![Tests](https://github.com/pouriaetab/leanfare/actions/workflows/ci.yml/badge.svg)](https://github.com/pouriaetab/leanfare/actions/workflows/ci.yml) [![License](https://img.shields.io/github/license/pouriaetab/leanfare)](LICENSE)
+
 Leanfare makes the AI apps you already use cost less. It works inside them and hands simple work, like reading files and drafting, to cheaper or free models. You keep working as before.
 
-It works with Claude Desktop, Claude Code, Cursor, Codex, Gemini CLI, Windsurf, VS Code and LM Studio.
+It works with Claude Desktop, Cowork, Claude Code, Cursor, Codex, Gemini CLI, Windsurf, VS Code and LM Studio.
+
+![Leanfare's report: what it saved your app, what the outside models used, your app's own use, and how good the answers were](docs/savings.png)
+
+> Leanfare is early and changes every week. If something breaks, [report a bug](https://github.com/pouriaetab/leanfare/issues/new?template=bug_report.yml); Settings, **Report a problem**, fills in your version. Questions and ideas go to [Discussions](https://github.com/pouriaetab/leanfare/discussions).
 
 ## Get started
 
