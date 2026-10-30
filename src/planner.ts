@@ -54,6 +54,12 @@ export const MAX_TASK = 20_000; // characters
 // An app waits about a minute for a tool's answer (Cowork's link to this computer: 60 seconds), so a model
 // that has not split the task by then is let go, and the rules split it. LEANFARE_SPLIT_SECONDS for tests.
 export const splitSeconds = () => { const n = Number(process.env.LEANFARE_SPLIT_SECONDS); return n > 0 ? n : 40; };
+// The split goes to the cheapest model within 80 points of the best (Save's margin: splitting is a small, structured
+// job) that answers within about 15 seconds by its own record here (speed.ts), and each try must start within 12: a
+// slow or busy model is passed over in time for another to split it (0.11; Gemini 3.8 Flash took 3 minutes to start,
+// so every split ran out of time and fell to the rules).
+export const SPLIT_WITHIN = 15;
+export const splitStart = () => Math.min(12_000, Math.floor(splitSeconds() * 400)); // ms: three tries fit in the 40 seconds
 const LISTED = 200; // files named one by one to the split model; past it, the folders they are in
 const CONTEXT = "The whole task, for context:";
 
@@ -77,6 +83,7 @@ export interface Part {
   risk?: string | null; // a free tier whose terms let its company read or train on what is sent (platforms.ts: readRisk)
   guess?: boolean; // its size is a guess: a reading part with no files named (the sources a search finds, say)
   keep?: boolean; // the whole task is small enough to answer yourself: it is not split
+  keepWhy?: string; // why a part stays with you when it is not for its size: questions are answered where the context is
 }
 type Split = Omit<Part, "where" | "model" | "use" | "seconds" | "tokens" | "cost" | "why" | "risk" | "guess">;
 export interface PlanResult {
@@ -175,12 +182,26 @@ export function readSplit(text: string, given: (PlanFile | Shown | string)[]): S
 // With no model to split it, a split by rules, from what the task looks like.
 const BUILDS = /\b(build|implement|add|fix|refactor|port|migrate|rewrite|reverse[- ]engineer|clone|debug|optimi[sz]e|integrate)\b/i;
 const RESEARCH = /\b(research|compare|find out|look up|survey|review the (market|options)|what are the best|sources?|competitors?)\b/i;
+// Questions to answer, not work to do: two or more question marks, or one ending a short task, and no sentence that
+// starts by asking to build or change something (0.11: a list of questions was split like code: "Map the code", "Make
+// the changes and run the tests").
+const ASKS_TO_DO = /(^|[.!?\n]\s*)(please\s+)?(build|implement|add|fix|refactor|port|migrate|rewrite|write|create|make|change|update|remove|delete|rename|move)\b/i;
+export const QUESTIONS_WHY = "questions are answered best where the conversation and its context are";
+export function isQuestions(task: string): boolean {
+  const t = task.trim();
+  const marks = (t.match(/\?/g) ?? []).length;
+  return (marks >= 2 || (marks === 1 && t.endsWith("?") && t.length <= 600)) && !ASKS_TO_DO.test(t);
+}
 export function rulesSplit(task: string, files: (PlanFile | Shown)[]): Split[] {
   const coding = guessTask([{ role: "user", content: task }]).task === "coding";
   const all = files.map((f) => f.name);
   const big: Size = files.length ? "medium" : "large";
   const p = (n: number, title: string, kind: PartKind, effort: Effort, needs: number[], size: Size, what: string, fl: string[] = []) =>
     ({ n, title, kind, effort, needs, size, files: fl, task: `${what}\n\n${CONTEXT} ${task}` });
+  if (isQuestions(task) && !RESEARCH.test(task)) return files.length ? [
+    p(1, "Gather the facts the questions need", "read", "low", [], big, "From the files, pull out the facts each question needs, each with its file and line number. Say which question each fact is for, and say so when no file holds one.", all),
+    { ...p(2, "Answer the questions", "reason", "medium", [1], "small", "Answer each question in order from the facts, with the reasoning, and a recommendation where one is asked."), keep: true, keepWhy: QUESTIONS_WHY },
+  ] : [{ ...p(1, "Answer the questions", "reason", "medium", [], "small", "Answer each question in order, with the reasoning, and a recommendation where one is asked."), keep: true, keepWhy: QUESTIONS_WHY }];
   if (coding || BUILDS.test(task)) return [
     p(1, "Map the code: its parts and how they fit", "read", "low", [], big, "List the modules, the entry points and how they call each other, one line each.", all),
     p(2, "Read the parts that matter closely", "read", "medium", [1], "medium", "Explain what the parts this task touches do and how, with file:line for each claim.", all),
@@ -291,7 +312,7 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
   const work = { private: priv, files: r.named > 0 };
   const filesTo = settings().filesTo ?? "any";
   const stay = (why: string): Part => ({ ...part, where: "you", model: null, use: modelInYourApp(part, manager), seconds: null, tokens: r.tokens + OUT_YOU, cost: null, why });
-  if (part.keep) return stay(KEEP_WHY);
+  if (part.keep) return stay(part.keepWhy ?? KEEP_WHY);
   // Reading, drafting and working out can run on your ChatGPT plan through Codex, before anything paid.
   // Codex moved down by the manager's grades for this kind takes only a part no model can take.
   const codexCan = codex && !priv && !(work.files && filesTo === "local") && platformOn("chatgpt") && !!DELEGATE_KIND[part.kind];
@@ -435,7 +456,7 @@ export function tableOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
     "|---|---|---|---|---|---|---|---|---|",
     ...rows.map((x) => `| ${x} |`),
     "",
-    `${totalsText(t)} ${timeLine(t)}Pay per use: ${usd(t.cost)}.${t.out ? "" : ` ${r.parts.every((p) => p.keep) ? "It is small enough to answer yourself: handing it off would cost more than it saves." : nothingOut(r.parts)}`}${r.codex ? ` Codex took no part: ${r.codex}.` : ""}${r.local ? ` ${localLine(r.local)}` : ""}${r.parts.some((p) => p.risk) ? ` Parts on a free tier: ${[...new Set(r.parts.map((p) => p.risk).filter(Boolean))].join("; ")}. For anything private, plan it with private: it stays on this computer.` : ""}${r.private ? " This plan stays on this computer." : ""}`,
+    `${totalsText(t)} ${timeLine(t)}Pay per use: ${usd(t.cost)}.${t.out ? "" : ` ${r.parts.every((p) => p.keep) ? (r.parts.some((p) => p.keepWhy) ? `Answer it yourself: ${QUESTIONS_WHY}.` : "It is small enough to answer yourself: handing it off would cost more than it saves.") : nothingOut(r.parts)}`}${r.codex ? ` Codex took no part: ${r.codex}.` : ""}${r.local ? ` ${localLine(r.local)}` : ""}${r.parts.some((p) => p.risk) ? ` Parts on a free tier: ${[...new Set(r.parts.map((p) => p.risk).filter(Boolean))].join("; ")}. For anything private, plan it with private: it stays on this computer.` : ""}${r.private ? " This plan stays on this computer." : ""}`,
   ].join("\n");
 }
 
@@ -464,7 +485,7 @@ function nextOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
   const later = out.filter((p) => p.needs.length && !yoursFirst.has(p.n));
   if (later.length) s.push(`Then ${list(later.map((p) => p.n))}, each once the parts it needs are back, with their answers in its task.`);
   if (out.some((p) => p.kind === "search")) s.push("A search part goes to ask with the model in the table.");
-  if (mine.length && mine.every((p) => p.keep)) s.push("Answer it yourself: it is too small to hand off.");
+  if (mine.length && mine.every((p) => p.keep)) s.push(mine.some((p) => p.keepWhy) ? `Answer ${out.length ? "the questions" : "it"} yourself${out.length ? " once the facts are back" : ""}: ${QUESTIONS_WHY}.` : "Answer it yourself: it is too small to hand off.");
   else if (mine.length) {
     const on = mine.map((p) => `part ${p.n}${picksPerPart(r.manager) || !r.you?.label ? ` on ${p.use?.label ?? "your strongest model"}` : ""}`);
     // Claude Code runs a part on another model with a subagent (its Agent tool takes model: opus, sonnet, haiku or fable).
@@ -558,7 +579,7 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
     input.signal?.addEventListener("abort", stop, { once: true });
     const timer = setTimeout(stop, wait * 1000);
     let r: Awaited<ReturnType<typeof runChat>>;
-    try { r = await runChat(ask, "auto-balanced", box.signal, () => {}, "Plan", { system: SPLIT_SYSTEM, source: "plan", guess: { task: "hard_prompts", why: "splitting a task into parts", alt: "overall" }, maxOut: 3000, effort: "low", only: input.private ? (m) => !!m.local && modelOn(m) : modelOn }); } // a private plan's task goes only to a model here
+    try { r = await runChat(ask, "auto-save", box.signal, () => {}, "Plan", { system: SPLIT_SYSTEM, source: "plan", guess: { task: "hard_prompts", why: "splitting a task into parts", alt: "overall" }, maxOut: 3000, effort: "low", speed: SPLIT_WITHIN, startWithin: splitStart(), only: input.private ? (m) => !!m.local && modelOn(m) : modelOn }); } // a private plan's task goes only to a model here
     finally { clearTimeout(timer); input.signal?.removeEventListener("abort", stop); }
     if (r.status === "stopped" && input.signal?.aborted) throw new UserError(499, "Stopped.", "stopped");
     split.cost = r.meta?.spent ?? r.meta?.cost ?? null;

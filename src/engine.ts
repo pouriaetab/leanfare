@@ -213,6 +213,7 @@ export interface Plan {
   cheapestId: string | null; // the cheapest model this request could use (the only one allowed past the budget)
   optional?: boolean; // never sent past the budget, not even on the cheapest model
   job?: string | null; // the hand off this request is for (delegate.ts): each of its calls is marked with it in the ledger
+  startWithin?: number | null; // ms: each try must start answering within this, when shorter than its own wait (a plan's split)
 }
 
 const AUTO = /^(leanfare\/)?(auto|leanfare)(-(save|balanced|best))?$/i;
@@ -953,6 +954,7 @@ export interface ChatOptions {
   optional?: boolean; // work that can be skipped: never sent past the budget
   speed?: SpeedChoice; // cheapest, fastest or within N seconds (the delegate passes its own)
   job?: string; // the hand off this is for: the ledger marks each of its calls with it (delegate.ts)
+  startWithin?: number; // ms: each try must start answering within this, or Auto passes it to the next pick (a plan's split)
 }
 
 // The chat's instructions go first, as a system message (Claude's translation moves it to "system").
@@ -974,6 +976,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
     return { text: "", meta, status: status === 499 ? "stopped" : "error" };
   }
   p.job = opts.job ?? null;
+  p.startWithin = opts.startWithin ?? null;
   const rid = register(source, `${label} · ${p.model.label}`, ac);
   emit({ type: "meta", plan: planView(p) });
   const body = { messages: withSystem(messages, opts.system) };
@@ -987,7 +990,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
     const notesBefore = p.notes.length;
     p.capOverride = cap;
     const tc = linked(ac.signal); // this try's own stop: Stop, or its time running out
-    const wait = startWait(p.model, effortFor(p.model, p.effortAsked));
+    const wait = Math.min(startWait(p.model, effortFor(p.model, p.effortAsked)), p.startWithin ?? Infinity);
     let timer = setTimeout(() => { t.timedOut = "start"; tc.abort(); }, wait);
     const quiet = () => { clearTimeout(timer); timer = setTimeout(() => { t.timedOut = "idle"; tc.abort(); }, ANSWER_TIME.idle); };
     try {
