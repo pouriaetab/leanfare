@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.10.0
+
+- Both sides of each hand off. The report shows what the outside models used, measured from the providers' own counts: what they read, thought and wrote, for every call of a hand off (its answer, a second try, its check, side by side). Next to it, what your app would have used doing the part alone, as an estimate with its range; what handing it off cost your app (the task it wrote, the answer and receipt it read back); and the saving. Your app's own use of the whole prompt is measured where its files say (Claude Code's), and not known elsewhere.
+- Quality three ways: the outside answers (your app's grades, else the blind checks), the whole result of a prompt, your app and the hand offs together (your app grades it with the `grade` tool, or you do in the report), and your app alone, where side by side could run your app's own model on a sample.
+- Speed and failures for each model: a dot for each model (time for an answer against how often it was graded good) and a table of its calls, failures by kind (busy, rate limited, timed out, out of reach), its first word and whole answer (the middle one and the slowest 1 in 10), how fast it writes, its cost a call and its grades. Claude gets a line of it in the report.
+- A model that keeps failing rests: when 3 of its last 6 tries in 30 minutes failed, Auto picks others for 30 minutes (5 for rate limits, longer if it keeps failing), and the receipt says why. A try that does not start answering in time is given up and passed to the next pick. The report shows each rest, with **Try it now**.
+- Picks that learn from your history: your grades and the blind checks move a model's rating for each kind of work (up to 60 points), a model's time is learned by the size of the input and its recent failures, and a new speed, **A balance of time and cost**, picks the quick one among models as good and as cheap.
+- Free plans for Groq and Mistral, next to Google's: tick it for a free key, and its answers count as $0. Groq's free plan takes only work that fits its 8,000 tokens a minute; Mistral's free plan may train on what is sent, and says so.
+- Perplexity through its Agent API: Sonar's chat completions moved there, so searches go to `perplexity/sonar` with web search on.
+
+Fixed from 0.9.0:
+
+- The trial's test of an answer's own time holds on a busy computer.
+- A prompt's time in the report reads the same on every computer ("Oct 20, 10:05 AM"); some showed "Oct 20 at 10:05 AM".
+
 ## 0.9.0
 
 - The report: Savings opens with what Leanfare did for your apps over any span, from the last hour to a year: the tokens kept out of your plans, your apps' own use where it is known (Claude Code's, from its own files; Claude's chats and Cowork do not share theirs, so they show as not known), the cost and the quality. Tokens over time, work by model, quality by kind of work, and each prompt with the models it handed work to and how good their answers were, under an id that is kept (PRM-41, and PRM-41.2 for a part). Filters by app, provider, model, kind of work and thread, and Export CSV. Ask Claude for Leanfare's report (the new `report` tool) and Claude Desktop and Cowork show it as a card in the chat.
