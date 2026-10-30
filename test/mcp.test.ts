@@ -53,7 +53,7 @@ const modern = (extra: Record<string, unknown> = {}) => ({ ...extra, _meta: { "i
 describe("the protocol", () => {
   test("an older client opens with initialize and gets the version it asked for", async () => {
     const r = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "old", version: "1" } });
-    expect(r.result).toMatchObject({ protocolVersion: "2025-06-18", serverInfo: { name: "leanfare" }, capabilities: { tools: { listChanged: false } } });
+    expect(r.result).toMatchObject({ protocolVersion: "2025-06-18", serverInfo: { name: "leanfare" }, capabilities: { tools: { listChanged: true } } }); // a door older than the app says when its tools change (0.11)
     write({ jsonrpc: "2.0", method: "notifications/initialized" }); // never answered
     const unknown = await rpc("initialize", { protocolVersion: "2019-01-01", capabilities: {} });
     expect(unknown.result.protocolVersion).toBe("2025-11-25");
