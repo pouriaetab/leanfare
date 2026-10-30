@@ -50,7 +50,16 @@ export interface Settings {
   sideBySide: number; // one hand off in this many is also answered by the top model and judged blind against it (sidebyside.ts); 0: off
   sideBySideCap: number; // US dollars a month side by side may spend, from your budget
   whoWrote: boolean; // a test: answers handed back to apps mark which model wrote each paragraph (mcp.ts: markedBy)
+  jobs: Jobs; // where each kind of job goes in plans (0.11): to Leanfare, to Leanfare when your plan runs low (modes.ts), or your app
+  paidCap: number; // US dollars a hand off may spend on a paid model (0.11); a cheaper or free one first, or it stays with your app
 }
+export type JobKind = "read" | "search" | "write" | "reason";
+export type JobRule = "leanfare" | "low" | "app";
+export type Jobs = Record<JobKind, JobRule>;
+export const JOB_KINDS: JobKind[] = ["read", "search", "write", "reason"];
+// From his grades (0.11): reading did best on the free models, working things out worst, so working things out stays with
+// your app and drafting goes out when your plan runs low; change them in Settings, Jobs. Changes to files always stay.
+export const JOB_DEFAULTS: Jobs = { read: "leanfare", search: "leanfare", write: "low", reason: "app" };
 
 export const DEFAULTS: Settings = {
   mode: "balanced",
@@ -80,6 +89,8 @@ export const DEFAULTS: Settings = {
   sideBySide: 10,
   sideBySideCap: 1,
   whoWrote: false,
+  jobs: JOB_DEFAULTS,
+  paidCap: 0.1,
 };
 
 // What a short answer is, given to the chat screen's models before the chat's own instructions
@@ -160,6 +171,21 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
     const v = typeof p.sideBySideCap === "number" || (typeof p.sideBySideCap === "string" && p.sideBySideCap.trim() !== "") ? Number(p.sideBySideCap) : NaN;
     if (!Number.isFinite(v) || v < 0 || v > 1000) return { error: "sideBySideCap must be a dollar amount from 0 to 1,000" };
     out.sideBySideCap = Math.round(v * 100) / 100;
+  }
+  if ("jobs" in p) {
+    if (p.jobs === null || typeof p.jobs !== "object" || Array.isArray(p.jobs)) return { error: "jobs must be an object like {\"read\": \"leanfare\"}" };
+    const jobs: Jobs = { ...JOB_DEFAULTS, ...settings().jobs };
+    for (const [k, v] of Object.entries(p.jobs)) {
+      if (!JOB_KINDS.includes(k as JobKind)) return { error: `jobs can hold ${JOB_KINDS.join(", ")}` };
+      if (!["leanfare", "low", "app"].includes(v as string)) return { error: "each job goes to leanfare, low or app" };
+      jobs[k as JobKind] = v as JobRule;
+    }
+    out.jobs = jobs;
+  }
+  if ("paidCap" in p) {
+    const v = typeof p.paidCap === "number" || (typeof p.paidCap === "string" && p.paidCap.trim() !== "") ? Number(p.paidCap) : NaN;
+    if (!Number.isFinite(v) || v < 0 || v > 100) return { error: "paidCap must be a dollar amount from 0 to 100" };
+    out.paidCap = Math.round(v * 100) / 100;
   }
   if ("filesTo" in p) { if (!["any", "notFree", "local"].includes(p.filesTo)) return { error: "filesTo must be any, notFree or local" }; out.filesTo = p.filesTo; }
   if ("planAuto" in p) {
