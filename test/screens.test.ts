@@ -1235,7 +1235,7 @@ describe("Speed: in Settings and beside the message box", () => {
     await waitFor(() => !!doc.querySelector(".setting select[aria-label='Speed']"));
     const sel = doc.querySelector(".setting select[aria-label='Speed']");
     expect(sel.value).toBe("cheapest");
-    expect([...sel.options].map((o: any) => o.textContent)).toEqual(["The cheapest, however long it takes", "The cheapest within about a minute", "The cheapest within about 20 seconds", "The cheapest within about 5 seconds", "The fastest, whatever it costs"]);
+    expect([...sel.options].map((o: any) => o.textContent)).toEqual(["The cheapest, however long it takes", "A balance of time and cost", "The cheapest within about a minute", "The cheapest within about 20 seconds", "The cheapest within about 5 seconds", "The fastest, whatever it costs"]);
     sel.value = "fastest";
     sel.dispatchEvent(new win.Event("change", { bubbles: true }));
     await waitFor(() => toasts(doc).includes("Speed: the fastest, whatever it costs."));
