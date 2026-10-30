@@ -6,6 +6,7 @@
 // Every pick carries its reason, so a wrong guess is visible at a glance.
 import { secondsText, type SpeedChoice } from "./speed";
 import { costOf, mediaOf, promptTokens, textOfContent } from "./cost";
+import { onFreePlan } from "./freeplans";
 import { TASKS, allModels, getModel, isRetired, type Model } from "./data";
 import { MODES, type Mode } from "./settings";
 import { localDay } from "./util";
@@ -94,7 +95,10 @@ export interface Pick {
   eligible: number; // how many of the candidates, from the first, are within the margin
 }
 
+// What a model's answer would cost you: its list price, or $0 on a key you said is on a free plan (freeplans.ts), as
+// the ledger counts it (0.11: Auto picked by list price, so a free Gemini key lost to a cheap paid model).
 export function estimateFor(m: Model, inTokens: number, outTokens: number): number | null {
+  if (onFreePlan(m.provider)) return 0;
   return costOf(m, { uncached: inTokens, cacheRead: 0, cacheWrite: 0, output: outTokens });
 }
 
