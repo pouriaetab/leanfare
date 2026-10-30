@@ -977,6 +977,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
   }
   p.job = opts.job ?? null;
   p.startWithin = opts.startWithin ?? null;
+  const picks = p.auto ? [...p.candidates] : []; // Auto's picks in order, to pass the request on
   const rid = register(source, `${label} · ${p.model.label}`, ac);
   emit({ type: "meta", plan: planView(p) });
   const body = { messages: withSystem(messages, opts.system) };
@@ -1078,6 +1079,25 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
         p.notes.push(`${why.note.replace(/, so Leanfare .*$/, ".")} The budget does not leave room to ask again.`);
         written = first;
       }
+    }
+  }
+  // Still empty, or cut off again, after the same model was asked once more (0.11.1): Auto passes the request to its
+  // next pick, once, as it does a try that does not start in time, so a hand off is not lost to one model's empty
+  // answers. A model you named is not swapped.
+  if (retried && p.auto && !ac.signal.aborted && t.answered && t.timedOut !== "start" && (t.failed || (!t.text.trim() && t.finish !== "content_filter"))) {
+    passedOver.add(t.model.id);
+    const at = picks.findIndex((m) => m.id === t.model.id);
+    const next = picks.slice(at + 1).find((m) => !passedOver.has(m.id));
+    if (next && reserveAgain(p, next, p.maxOut)) {
+      const again = recordTry(t, "error", t.failed ? `cut off: ${t.failed}` : t.finish === "length" ? "spent the answer limit thinking" : "came back empty", "cut");
+      const cost = again ? again.cost : 0;
+      firstSpent = firstSpent === null || cost === null ? null : firstSpent + cost;
+      const note = `${t.model.label} ${t.failed ? "was cut off again" : "came back empty again"}, so Auto passed the request to its next pick.`;
+      p.notes.push(note);
+      p.model = next; p.candidates = picks.slice(picks.indexOf(next)).filter((m) => !passedOver.has(m.id));
+      emit({ type: "retry", message: note });
+      emit({ type: "meta", plan: planView(p) });
+      t = leaked(await attempt(opts.maxOut ?? null));
     }
   }
   let { text, thinking, usage, firstMs, failed, finish: finishReason, model, t0 } = t;

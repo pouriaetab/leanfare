@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.1
+
+Fixed from 0.11.0:
+
+- An answer still empty, or cut off again, after Leanfare asked the same model once more now goes to Auto's next pick, once, and the receipt says so. Before, the hand off failed even when another model you ticked could take it (some Gemini answers come back empty twice in a row). A model you named is still not swapped.
+
 ## 0.11.0
 
 - Plan modes: plenty, low and very low, from how much of your Claude plan is used and how fast. Low (70% used, or running out before it resets at this week's pace) tells Claude to hand off all reading, searching and drafting it will not change, reminds it sooner before big reads, and sends a plan's high effort parts out too; very low (90%) sends out everything that can go. Nothing is ever stopped. Settings shows the mode.
