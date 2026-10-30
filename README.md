@@ -38,6 +38,7 @@ Leanfare needs a model to hand work to. It uses an API key your computer already
 - **Inside Claude:** ask for Leanfare's report, and Claude Desktop and Cowork show it as a card in the chat. A plan shows there as a table, with each part's model, your app's own included.
 - **Fair grades:** a sample of the answers is checked blind, by a model of another company when one can take it, and now and then compared with the best model you ticked.
 - **Picks that learn:** your grades move each model's rating for each kind of work, its time is learned from its own answers, and a model that keeps failing rests while Auto picks others.
+- **Your plan's mode and your rules:** as your Claude plan runs low, Leanfare pushes more work out of it (Settings shows the mode), and Settings, Jobs, says where each kind of job goes, with a cap for paid work. Grades show as a score out of 100 with its range.
 - **Your own models:** Settings, Local models says where they are and tests one on your computer. One that passes takes reading work first, for free. **Where Leanfare may send work** turns each platform off or on, with what is left before its nearest limit.
 - The [guide](https://github.com/pouriaetab/leanfare/blob/main/docs/GUIDE.md) explains each part.
 
