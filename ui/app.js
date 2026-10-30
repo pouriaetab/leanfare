@@ -2814,6 +2814,22 @@
       h("p", { text: `When Claude Code or another app runs Leanfare's parts of a plan (plan_run), parts on local and free models run at once. Paid parts run without asking while they come to at most ${money(s.planAuto || 0)} a plan; above that, Leanfare asks you first (in Claude Code, a question in Claude Code). Your monthly budget holds either way.` }));
   }
 
+  // ---- Jobs (Settings, 0.11): where each kind of job goes in plans, and a cap for paid work ----------------------
+  const JOB_ROWS = [["read", "Reading"], ["search", "Searching"], ["write", "Drafting"], ["reason", "Working things out"]];
+  const JOB_CHOICES = [["leanfare", "Leanfare"], ["low", "When low"], ["app", "Your app"]];
+  function jobsSettingEl(s) {
+    const jobs = { read: "leanfare", search: "leanfare", write: "low", reason: "app", ...(s.jobs ?? {}) };
+    const cap = moneyInput(s.paidCap ?? 0.1, "Paid work, at most a hand off");
+    return h("div", { class: "setting", id: "jobsCard" }, h("h3", { text: "Jobs" }),
+      h("p", { class: "note", text: "Where each kind of job goes in a plan: to Leanfare's models, to them only when your Claude plan runs low (Settings, Where Leanfare may send work, shows the mode), or kept with your app. Changes to files always stay with your app." }),
+      ...JOB_ROWS.map(([k, label]) => h("div", { class: "job-row" }, h("span", { class: "pname", text: label }),
+        h("div", { class: "seg", role: "group", "aria-label": label }, ...JOB_CHOICES.map(([v, word]) => h("button", { type: "button", "aria-pressed": String(jobs[k] === v), text: word,
+          onclick: () => patchSettings({ jobs: { [k]: v } }, `${label}: ${v === "leanfare" ? "to Leanfare" : v === "low" ? "to Leanfare when your plan runs low" : "kept with your app"}.`) }))))),
+      h("div", { class: "row" }, h("span", { text: "Paid work: at most, for one hand off" }), cap,
+        h("button", { class: "btn", type: "button", text: "Save", onclick: () => patchSettings({ paidCap: cap.querySelector("input").value || 0 }, "Saved.") })),
+      h("p", { class: "fine", text: `A hand off goes to a free or cheaper model first; one that would cost more than ${money(s.paidCap ?? 0.1)} on a paid model stays with your app, and so does a check above it. Free and local models have no cap.` }));
+  }
+
   // ---- Where Leanfare may send work (Settings) --------------------------------------------------------
   // Each platform on or off for plans and the delegate, and what is left before its nearest limit (platforms.ts).
   async function loadPlatforms() { try { S.platforms = await api("/api/platforms"); } catch { S.platforms = { rows: [] }; } renderSettings(); }
@@ -3059,7 +3075,7 @@
         h("div", { class: "seg", role: "group", "aria-label": "Thinking effort" }, ...[["auto", "Model's default"], ["low", "Low"], ["medium", "Medium"], ["high", "High"]].map(([k, label]) =>
           h("button", { type: "button", "aria-pressed": String((s.effort ?? "auto") === k), text: label, onclick: () => patchSettings({ effort: k }, k === "auto" ? "Thinking models think as they do by default." : `Thinking effort: ${label.toLowerCase()}.`) }))),
         h("p", { text: "For models that think before they answer, at the levels each one takes. Thinking is billed as output, so a higher effort costs more and takes longer; the estimate learns from your answers at each level." })),
-      planCapSettingEl(s), platformsSettingEl(), codexSettingEl(s), gradesSettingEl(), sideBySideSettingEl(s), whoWroteSettingEl(s),
+      planCapSettingEl(s), jobsSettingEl(s), platformsSettingEl(), codexSettingEl(s), gradesSettingEl(), sideBySideSettingEl(s), whoWroteSettingEl(s),
       h("div", { class: "setting" }, h("h3", { text: "Your usual model" }), usualSel,
         h("p", { text: "The model you would use without Leanfare. Savings are measured against it." })),
       h("div", { class: "setting", id: "budgetSetting" }, h("h3", { text: "Monthly budget" }),
