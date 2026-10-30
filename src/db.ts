@@ -112,6 +112,11 @@ CREATE TABLE IF NOT EXISTS prompts(n INTEGER PRIMARY KEY, key TEXT NOT NULL UNIQ
 -- and why (kinds: busy, limit, timeout...), and when you ended it early. No words.
 CREATE TABLE IF NOT EXISTS rests(id INTEGER PRIMARY KEY, model TEXT NOT NULL, start TEXT NOT NULL, until TEXT NOT NULL, fails INTEGER NOT NULL, tries INTEGER NOT NULL, kinds TEXT NOT NULL, ended TEXT);
 CREATE INDEX IF NOT EXISTS rests_model ON rests(model);
+-- Models a key has no quota for (quota.ts, 0.11): which, its provider, since when, how many tries were refused, why
+-- ("said": the provider said its limit is 0; "refused": every try refused as rate limited), and when it was cleared
+-- (Try again, or a new key). No words.
+CREATE TABLE IF NOT EXISTS noquota(id INTEGER PRIMARY KEY, model TEXT NOT NULL, provider TEXT NOT NULL, since TEXT NOT NULL, tries INTEGER NOT NULL, why TEXT NOT NULL, cleared TEXT);
+CREATE INDEX IF NOT EXISTS noquota_model ON noquota(model);
 `;
 
 // Columns added after 0.1: an older file gets them on its first start.
