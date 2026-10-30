@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.2
+
+Fixed from 0.11.1:
+
+- Cowork is called Cowork in the report and in plans (its door gave the name local-agent-mode-leanfare), and is one of Claude's apps there: a plan names your Claude plan and Anthropic's models for the parts that stay with you, and follows your plan's mode. Hand offs saved under the old name read Cowork.
+- An app on Leanfare's OpenAI address that asks Auto for a whole answer gets the next pick's answer when one model's answer comes back empty twice, as the chat and the delegate do since 0.11.1.
+- A free key's requests through Leanfare today count every answer it sent, empty ones too, as the provider counts them.
+- A model the provider no longer serves to your key (Google answers "This model ... is no longer available to new users") is left out of Auto, plans and checks, with the reason and Try again in Settings, and a request that reached it goes to Auto's next pick instead of failing.
+
 ## 0.11.1
 
 Fixed from 0.11.0:
