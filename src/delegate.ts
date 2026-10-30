@@ -173,15 +173,8 @@ export function verdictOf(text: string): { verdict: "pass" | "fail" | "unclear";
   return { verdict: "pass", why: "" };
 }
 
-// Wilson's interval for a pass rate: it stays inside 0 to 100% and keeps its coverage with
-// few checks, where the plain p ± z·se does not. z is the normal quantile for a 90% range.
-export function wilson(k: number, n: number, z = 1.6448536269514722): { lo: number; hi: number } | null {
-  if (n <= 0) return null;
-  const p = k / n, z2 = z * z;
-  const centre = (p + z2 / (2 * n)) / (1 + z2 / n);
-  const half = (z * Math.sqrt((p * (1 - p)) / n + z2 / (4 * n * n))) / (1 + z2 / n);
-  return { lo: Math.max(0, centre - half), hi: Math.min(1, centre + half) };
-}
+// Wilson's interval for a pass rate (score.ts): it stays inside 0 to 100% and keeps its coverage with few checks.
+export { wilson } from "./score";
 
 // The share of every handed over answer that would pass, from the checked ones, each
 // weighted by one over its chance of being checked (Hajek's estimator): high effort
