@@ -7,7 +7,13 @@ import { selfCommand } from "./self";
 
 export interface App { base: string; token: string }
 
+// Inside the app itself (server.ts startServer): its own address and token, so a call the app runs for a door older
+// than it (mcp.ts) reaches this app, never another copy found through the files.
+let self: App | null = null;
+export const setSelf = (a: App | null) => { self = a; };
+
 export function where(): App {
+  if (self) return self;
   if (process.env.LEANFARE_URL) return { base: process.env.LEANFARE_URL.replace(/\/+$/, ""), token: process.env.LEANFARE_TOKEN ?? "" };
   let port = PORT;
   try { port = JSON.parse(readFileSync(paths.pid, "utf8")).port ?? PORT; } catch {}
@@ -15,8 +21,17 @@ export function where(): App {
   return { base: `http://127.0.0.1:${port}`, token };
 }
 
+// The running app's version, as its last health check said (0.11): a door older than its app hands calls to the app.
+let seen: string | null = null;
+export const seenVersion = () => seen;
 export async function healthy(base: string): Promise<boolean> {
-  try { const r = await fetch(`${base}/healthz`, { signal: AbortSignal.timeout(1500) }); return (await r.json())?.app === "leanfare"; } catch { return false; }
+  try {
+    const r = await fetch(`${base}/healthz`, { signal: AbortSignal.timeout(1500) });
+    const j = await r.json();
+    if (j?.app !== "leanfare") return false;
+    if (typeof j.version === "string") seen = j.version;
+    return true;
+  } catch { return false; }
 }
 
 let starting: Promise<App> | null = null;
