@@ -289,7 +289,9 @@ function reading(part: { size: Size; files: string[]; task: string }, files: Pla
 // cheapest of them rated well enough for the part's kind at its effort (high: within 15 points of the
 // best, medium: 40, low: 80). For Claude Code that is Opus for the hardest judgement, Sonnet for most
 // code, Haiku for light work, as the ratings and prices stand.
-const MAKERS: [RegExp, string[]][] = [[/claude/i, ["anthropic"]], [/codex|chatgpt|openai/i, ["openai"]], [/gemini/i, ["google"]], [/grok/i, ["xai"]],
+// Claude's apps: Claude Code, Claude (Desktop, web, phone) and Cowork, all on your Claude plan.
+export const CLAUDE_APPS = /claude|cowork/i;
+const MAKERS: [RegExp, string[]][] = [[CLAUDE_APPS, ["anthropic"]], [/codex|chatgpt|openai/i, ["openai"]], [/gemini/i, ["google"]], [/grok/i, ["xai"]],
   [/cursor|windsurf|vs ?code|copilot/i, ["anthropic", "openai", "google"]]];
 export const makersOf = (manager: string): string[] => MAKERS.find(([re]) => re.test(manager))?.[1] ?? [];
 const CLAUDE_ALIAS = /^Claude (Opus|Sonnet|Haiku|Fable)\b/; // Claude Code's names for its models: opus, sonnet, haiku, fable
@@ -527,7 +529,7 @@ export function modelName(id: string): string {
 export function planFor(manager: string): string | null {
   const p = settings().plans ?? {};
   if (/codex|chatgpt/i.test(manager)) return p.chatgpt?.name ?? null;
-  if (/claude/i.test(manager)) return p.claude?.name ?? null;
+  if (CLAUDE_APPS.test(manager)) return p.claude?.name ?? null;
   return null;
 }
 const FULL_PATH = /^(~|\/|[A-Za-z]:[\\/]|\\\\)/; // ~/..., /..., C:\..., \\server
@@ -608,7 +610,7 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
   const known = limits.five !== null || limits.week !== null;
   // Claude's plan low or very low (modes.ts, 0.11: 70% used, or running out before it resets at this week's pace): more
   // parts go out. Another app's plan (Codex): near its limit, 85%.
-  const mode = /claude|^you$/i.test(manager) ? planMode() : null;
+  const mode = CLAUDE_APPS.test(manager) || /^you$/i.test(manager) ? planMode() : null;
   const nearText = mode ? (mode.mode === "plenty" ? null : mode.mode === "low" && (mode.five ?? 0) < MODE_AT.low && (mode.week ?? 0) < MODE_AT.low && mode.runsOut !== null
       ? `at this week's pace it runs out before it resets` : [mode.five !== null && mode.five >= MODE_AT.low ? `the 5 hours at ${Math.round(mode.five)}%` : "", mode.week !== null && mode.week >= MODE_AT.low ? `the week at ${Math.round(mode.week)}%` : ""].filter(Boolean).join(", "))
     : [limits.five !== null && limits.five >= NEAR ? `the 5 hours at ${Math.round(limits.five)}%` : "", limits.week !== null && limits.week >= NEAR ? `the week at ${Math.round(limits.week)}%` : ""].filter(Boolean).join(", ") || null;

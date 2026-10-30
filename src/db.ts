@@ -151,10 +151,17 @@ function addColumns(d: Database) {
   }
 }
 
+// Names an app gave before Leanfare knew it, as the report shows them now (0.11.2: Cowork's door said
+// local-agent-mode-leanfare). Only the label changes: the hand offs and their numbers stay as they are.
+export function renameApps(d: Database) {
+  try { d.exec("UPDATE delegations SET app = 'Cowork' WHERE app LIKE 'local-agent-mode%'"); } catch {} // the database busy: next start
+}
+
 function configure(d: Database) {
   d.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=250; PRAGMA foreign_keys=ON;");
   d.exec(SCHEMA);
   addColumns(d);
+  renameApps(d);
   d.exec("CREATE INDEX IF NOT EXISTS ledger_job ON ledger(job)"); // after its column, which an older file gets just above
 }
 
