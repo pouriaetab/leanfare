@@ -271,7 +271,7 @@ Quality stays the same: speed only chooses among the models within reach of the 
 
 - **Files.** Drop, paste or attach images, PDFs and text or code files. Images go to models that see images, PDFs to models that read them; Auto picks among those.
 - **Edit, again, another model.** Change any question and send it again, or ask another model and keep both answers, with how many times cheaper or dearer the new one was.
-- **Instructions, thinking, second tries.** Each chat can have its own instructions; a thinking model's thoughts are shown folded; an answer that comes back empty or cut off is asked for once more.
+- **Instructions, thinking, second tries.** Each chat can have its own instructions; a thinking model's thoughts are shown folded; an answer that comes back empty or cut off is asked for once more, and one still empty or cut off goes to Auto's next pick, once.
 - **Your chats.** Search them, export one or all, and import your history from ChatGPT or Claude. History can be turned off; the cost ledger never keeps what you wrote.
 
 ## Use it from your scripts
@@ -293,7 +293,7 @@ reply = client.chat.completions.create(model="auto", messages=[{"role": "user", 
 
 1. **Task guess.** Rules read the conversation: code gives *coding*, equations *math*, "write a story" *creative writing*, a long paste or a PDF *long prompts*, and so on; otherwise *everyday questions*. The guess and its reason are shown on every answer.
 2. **Best value pick.** Among the models you ticked, the cheapest whose Arena rating for that task is within the mode's margin of the best one: 80 points for Save more, 40 for Balanced, 15 for Best quality. For a hand off's kind of work, your own grades move each rating first (see [Grades](#grades)). With a speed chosen, the cheapest within that time, a balance of time and cost, or the fastest, among the same models. A model resting after failing too often is left out while another can take it.
-3. **Fallback.** If the pick is busy, unreachable or does not start answering in time, Auto passes the request to its next pick, at most twice, and says so.
+3. **Fallback.** If the pick is busy, unreachable or does not start answering in time, Auto passes the request to its next pick, at most twice, and says so. An answer that comes back empty from the same model twice goes to the next pick too, once.
 4. **What it never picks:** a model you did not tick, a retired one, one without a rating, or one that cannot take the files you attached.
 
 ## Privacy
