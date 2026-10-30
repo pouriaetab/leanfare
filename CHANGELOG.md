@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.3
+
+- Report a problem, in Settings, opens a bug report on GitHub with your Leanfare version and system filled in. You read it and send it yourself; Leanfare sends nothing.
+- The repository has bug and feature forms, Discussions for questions and ideas, a pull request template, and a README that says how to report a problem.
+
 ## 0.11.2
 
 Fixed from 0.11.1:
