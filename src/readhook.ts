@@ -9,6 +9,8 @@ import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { paths } from "./config";
 import { switchedOn } from "./switch";
+import { READ_SIZES, planMode } from "./modes";
+import { clock } from "./statusline";
 
 export const BIG = { data: 40 * 1024, other: 200 * 1024, most: 2 * 1024 * 1024, slice: 400 };
 const DATA = /\.(log|txt|text|out|err|trace|csv|tsv|jsonl|ndjson|json|xml|ya?ml|md|markdown|rst|html?|sql|har)$/i;
@@ -32,7 +34,7 @@ const sizeText = (b: number) => (b >= 1024 * 1024 ? `${(b / (1024 * 1024)).toFix
 const tokText = (b: number) => { const t = b / 4; return t >= 1e6 ? `${(t / 1e6).toFixed(1)}M` : t >= 1e3 ? `${Math.round(t / 1e3)}k` : String(Math.round(t)); };
 
 // What Claude Code is told before a read, or null to let it through (the hook's whole decision; tested on its own).
-export function readReminder(input: any, now = Date.now()): string | null {
+export function readReminder(input: any, now = clock()): string | null {
   if (input?.tool_name !== "Read") return null;
   const given = input?.tool_input?.file_path;
   if (typeof given !== "string" || !given.trim()) return null;
@@ -42,7 +44,8 @@ export function readReminder(input: any, now = Date.now()): string | null {
   if (NOT_TEXT.test(path)) return null; // Leanfare's delegate reads text
   let size = 0;
   try { const st = statSync(path); if (!st.isFile()) return null; size = st.size; } catch { return null; }
-  if (size > BIG.most || size < (DATA.test(path) ? BIG.data : BIG.other)) return null;
+  const sizes = READ_SIZES[planMode(now).mode]; // sooner as your Claude plan runs low (modes.ts)
+  if (size > BIG.most || size < (DATA.test(path) ? sizes.data : sizes.other)) return null;
   const s = load();
   const key = `${String(input.session_id ?? "")}|${path}`;
   if (now - (s.at[key] ?? 0) < DAY) return null; // reminded once already: this read goes through
@@ -56,7 +59,7 @@ export function readReminder(input: any, now = Date.now()): string | null {
 }
 
 // How often it reminded lately (Settings): reminders in the last 7 days, and their files' size.
-export function remindersLately(now = Date.now()): { n: number; kb: number } {
+export function remindersLately(now = clock()): { n: number; kb: number } {
   if (!existsSync(readsFile())) return { n: 0, kb: 0 };
   const s = load();
   const from = localDay(now - 6 * DAY);

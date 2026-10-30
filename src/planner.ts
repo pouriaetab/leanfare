@@ -29,6 +29,7 @@ import { LOCAL_CONTEXT, allModels, fitsText, getModel, localNeed, type Model } f
 import { fitsFree } from "./freeplans";
 import { chargeOf, plan as route, runChat, usableModels } from "./engine";
 import { addGrade, movedDown, standing, standingText, type GradedKind, type Verdict } from "./grades";
+import { MODE_AT, planMode } from "./modes";
 import { gb, suggestLocal } from "./local";
 import { passedLocal } from "./localpass";
 import { mayTake, modelOn, platformOn, readRisk } from "./platforms";
@@ -596,7 +597,12 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
   const limits = await limitsFor(manager);
   const codex = await codexFor(manager);
   const known = limits.five !== null || limits.week !== null;
-  const nearText = [limits.five !== null && limits.five >= NEAR ? `the 5 hours at ${Math.round(limits.five)}%` : "", limits.week !== null && limits.week >= NEAR ? `the week at ${Math.round(limits.week)}%` : ""].filter(Boolean).join(", ") || null;
+  // Claude's plan low or very low (modes.ts, 0.11: 70% used, or running out before it resets at this week's pace): more
+  // parts go out. Another app's plan (Codex): near its limit, 85%.
+  const mode = /claude|^you$/i.test(manager) ? planMode() : null;
+  const nearText = mode ? (mode.mode === "plenty" ? null : mode.mode === "low" && (mode.five ?? 0) < MODE_AT.low && (mode.week ?? 0) < MODE_AT.low && mode.runsOut !== null
+      ? `at this week's pace it runs out before it resets` : [mode.five !== null && mode.five >= MODE_AT.low ? `the 5 hours at ${Math.round(mode.five)}%` : "", mode.week !== null && mode.week >= MODE_AT.low ? `the week at ${Math.round(mode.week)}%` : ""].filter(Boolean).join(", "))
+    : [limits.five !== null && limits.five >= NEAR ? `the 5 hours at ${Math.round(limits.five)}%` : "", limits.week !== null && limits.week >= NEAR ? `the week at ${Math.round(limits.week)}%` : ""].filter(Boolean).join(", ") || null;
   const placed: Part[] = [];
   // A reading part with no files named reads what an earlier part finds (a search's sources): its size is a guess.
   const guessed = (p: Split) => p.kind === "read" && p.size !== "none" && reading(p, input.files).named === 0;

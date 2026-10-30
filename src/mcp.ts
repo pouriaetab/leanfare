@@ -648,11 +648,12 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
       v.byModel?.length ? `By model: ${v.byModel.slice(0, 5).map((r: any) => `${r.label} ${usd(r.cost)} (${r.answers})`).join(", ")}.` : "",
       workLines(v.work),
       pv.lines?.length ? `Where Leanfare may send work, and what is left before each one's nearest limit:\n${pv.lines.map((l: string) => `- ${l}`).join("\n")}` : "",
+      pv.mode ? `Leanfare's mode for your Claude plan: ${pv.mode.mode} (${pv.mode.why}).${pv.mode.mode === "plenty" ? "" : " Hand off all reading, searching and drafting you will not change yourself."}` : "",
       s.paused ? "Leanfare is paused: new requests wait." : "",
     ].filter(Boolean);
     const w = v.work;
     return text(lines.join("\n"), { today_usd: s.today, month_usd: s.month, answers: s.answers, budget: s.budget, saved_usd: v.saved?.amount ?? 0, top: s.top,
-      platforms: (pv.rows ?? []).map((r: any) => ({ id: r.id, label: r.label, on: r.on, ready: r.ready, windows: r.windows, limit: r.limit })),
+      platforms: (pv.rows ?? []).map((r: any) => ({ id: r.id, label: r.label, on: r.on, ready: r.ready, windows: r.windows, limit: r.limit })), plan_mode: pv.mode ? { mode: pv.mode.mode, why: pv.mode.why } : null,
       work: w ? { tasks: w.tasks, kept_share: w.keptPct, tokens_kept_out: w.kept, tokens_came_back: w.back, cost_usd: w.cost, grades: w.grades, checks: { passed: w.checks.passed, failed: w.checks.failed } } : null });
   }
   if (name === "models") {
