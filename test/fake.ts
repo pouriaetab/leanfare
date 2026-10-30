@@ -16,6 +16,8 @@
 //   [fail 429]              answer with this HTTP status ([fail@xai 400]: only that provider; [slow@...] too)
 //   [quota0@google argon]   answer 429 as Google's free tier does for a model it gives no quota ("... limit: 0, model: ..."),
 //                           only for models whose name has "argon" in it (no name: every model)
+//   [gone@google flash]     answer 404 as Google does for a model it no longer serves to new keys ("This model ... is no
+//                           longer available to new users"), only for models whose name has "flash" in it (no name: every model)
 //   [think]                 think first ("Let me think."), in each provider's own way
 //   [empty] [empty1]        answer nothing (always, or only the first time this prompt is seen)
 //   [cut1]                  the first time: stop sending after one piece, with no end marker
@@ -270,6 +272,8 @@ export function startFake() {
       if (fail?.[0]) return Response.json({ error: { message: `fake failure ${fail[0]}` } }, { status: fail[0] });
       const zero = /\[quota0(?:@([a-z]+))?(?: ([\w.:\/-]+))?\]/.exec(text);
       if (zero && (!zero[1] || zero[1] === provider) && (!zero[2] || String(body?.model ?? "").includes(zero[2]))) return Response.json({ error: { code: 429, status: "RESOURCE_EXHAUSTED", message: `You exceeded your current quota, please check your plan and billing details. * Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: ${String(body?.model ?? "x").replace(/^models\//, "")}` } }, { status: 429 });
+      const gone = /\[gone(?:@([a-z]+))?(?: ([\w.:\/-]+))?\]/.exec(text);
+      if (gone && (!gone[1] || gone[1] === provider) && (!gone[2] || String(body?.model ?? "").includes(gone[2]))) return Response.json({ error: { code: 404, status: "NOT_FOUND", message: `This model models/${String(body?.model ?? "x").replace(/^models\//, "")} is no longer available to new users. Please update your code to use a newer model.` } }, { status: 404 });
       const slow = directive(text, "slow", provider);
       if (slow?.[0]) await Bun.sleep(slow[0]);
       const slowHook = hooks.slow?.(text, provider) ?? 0;

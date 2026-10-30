@@ -14,7 +14,7 @@ import { successor } from "./retire";
 import { addSpent, budgetState, release, tryReserve, wouldFit } from "./budget";
 import { failOfStatus, failOfText, type FailKind } from "./fails";
 import { noteFailure, restOf, restText } from "./rest";
-import { noQuota, noQuotaNow, noQuotaText, noteRefusal } from "./quota";
+import { SAYS_GONE, noQuota, noQuotaNow, noQuotaText, noteRefusal } from "./quota";
 import { fitsFree, onFreePlan } from "./freeplans";
 import { learnedShift } from "./learn";
 import { RESPONSES_PATH, ResponsesStreamTranslator, responsesToOpenAI, toResponses } from "./upstream";
@@ -539,8 +539,9 @@ async function sendWithFallback(p: Plan, source: string, body: any, stream: bool
       const msg = page ? `${def.name} sent a web page instead of an answer; a sign-in page or a proxy may be in the way.` : plainError(def, res.status, text, getKey(m.provider));
       record(p, m, source, null, { status: "error", error: msg, ms: performance.now() - t0, fail: page ? "other" : failOfStatus(res.status) });
       last = new UserError(page ? 502 : res.status === 401 || res.status === 403 ? 502 : res.status, msg, "provider_error");
-      if ((!page && !RETRYABLE.has(res.status)) || i === tries.length - 1) throw last;
-      p.notes.push(`${m.label} ${page ? "sent a web page instead of an answer" : `answered ${res.status}`}, so Auto passed the request to its next pick.`);
+      const gone = !page && (res.status === 404 || res.status === 400) && SAYS_GONE.test(msg); // no longer served to this key (quota.ts)
+      if ((!page && !RETRYABLE.has(res.status) && !gone) || i === tries.length - 1) throw last;
+      p.notes.push(`${m.label} ${page ? "sent a web page instead of an answer" : gone ? `is no longer served to your ${def.name} key` : `answered ${res.status}`}, so Auto passed the request to its next pick.`);
     } catch (e: any) {
       if (e instanceof UserError) throw e;
       if (signal.aborted) throw new UserError(499, "Stopped.", "stopped");
