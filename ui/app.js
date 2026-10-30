@@ -5,6 +5,8 @@
 (() => {
   // ---- small helpers ---------------------------------------------------------------
   const $ = (sel, root = document) => root.querySelector(sel);
+  // A bug report on GitHub with the version and the system filled in (the form's text fields, by their ids). You send it yourself.
+  const bugReportUrl = (st) => "https://github.com/pouriaetab/leanfare/issues/new?" + new URLSearchParams({ template: "bug_report.yml", version: st.version ?? "", system: st.system ?? "" }).toString();
   const store = {
     get(k, d) { try { const v = localStorage.getItem("leanfare." + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
     set(k, v) { try { localStorage.setItem("leanfare." + k, JSON.stringify(v)); } catch {} },
@@ -3100,6 +3102,9 @@
       h("div", { class: "setting" }, h("h3", { text: "New versions" }),
         h("label", { class: "check" }, h("input", { type: "checkbox", checked: s.updateCheck !== false, onchange: (e) => patchSettings({ updateCheck: e.target.checked }, e.target.checked ? "Leanfare will say when a new version is out." : "Leanfare will not look for new versions.") }), "Tell me when a new version is out"),
         h("p", { text: `You have Leanfare ${st.version}. Once a day it asks GitHub's public list of releases whether there is a newer one; nothing about you or your use is sent.` })),
+      h("div", { class: "setting" }, h("h3", { text: "Report a problem" }),
+        h("p", { text: "Opens a bug report on GitHub with your Leanfare version and system filled in. You read it and send it yourself: Leanfare sends nothing." }),
+        h("a", { class: "btn", id: "reportProblem", href: bugReportUrl(st), target: "_blank", rel: "noopener noreferrer", text: "Report a problem ↗" })),
       h("div", { class: "setting" }, h("h3", { text: "Use Leanfare from your other apps" }),
         h("p", { text: `Point any app or script that speaks OpenAI's or Anthropic's format here. ${lock.on ? "Use the access key below as its API key." : "Any API key works."} Model: auto, auto-save, auto-best, or a model id such as google/gemini-3.8-flash.` }),
         h("div", { class: "addr" }, h("span", { class: "grow", text: `OpenAI address: ${addr}/v1` }), copyBtn(`${addr}/v1`)),
