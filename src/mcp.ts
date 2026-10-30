@@ -10,7 +10,7 @@
 // stdout, one message per line; anything for a person goes to stderr.
 import { VERSION } from "./config";
 import { OFF_TEXT, switchedOn } from "./switch";
-import { call, where } from "./client";
+import { app, call, healthy, seenVersion, where } from "./client";
 import { secondsText } from "./util";
 import { FAIL_KINDS, FAIL_WORD } from "./fails";
 import { reportText } from "./trialtext";
@@ -23,11 +23,23 @@ import { join, resolve } from "node:path";
 
 const MODERN = ["2026-07-28"];
 const LEGACY = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
-const SERVER = { name: "leanfare", title: "Leanfare", version: VERSION };
+// The door's own version (LEANFARE_DOOR_VERSION: a test's older door). An app keeps the door it started running until
+// it restarts, so after an update the door can be older than the running Leanfare: it then hands each call, and the
+// list of tools, to the app, which runs them with its newer code (0.11; before, Cowork kept 0.9's tools after 0.10).
+export const DOOR = { version: process.env.LEANFARE_DOOR_VERSION || VERSION };
+const SERVER = { name: "leanfare", title: "Leanfare", version: DOOR.version };
+const newer = (a: string, b: string) => { const x = a.split(".").map(Number), y = b.split(".").map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); return false; };
+// The app's version when it is newer than this door, else null. start: start the app when it is not running.
+async function appNewer(start: boolean): Promise<string | null> {
+  try { if (start) await app(); else await healthy(where().base); } catch { return null; }
+  const v = seenVersion();
+  return v && newer(v, DOOR.version) ? v : null;
+}
+let told = false; // the app was said to be newer, and the tool list to have changed, once
 const META = { "io.modelcontextprotocol/serverInfo": SERVER };
 const INSTRUCTIONS = "Leanfare runs every top AI model on this computer with the user's own keys, shows what each answer costs, and keeps a monthly budget. At the start of a task with several parts, call plan: it splits the task and says, in a short table, which parts to hand to Leanfare and on which model, and which to do yourself. Use delegate to hand work that reads a lot (big files, logs, many documents) to a cheaper model: Leanfare reads the files itself, so their text stays out of your context, and returns a short answer with a receipt. Use ask to hand a question to another model (Auto picks the cheapest one that rates well for the task); spend to see what was spent and saved; models to see which models and prices are available; estimate to price a prompt before sending it; trial to measure how well delegate answers on the user's models before relying on it.";
 
-const TOOLS = [
+export const TOOLS = [
   {
     name: "plan",
     title: "Split a task across models",
@@ -313,9 +325,9 @@ export const setClient = (name: unknown) => { client = clientLabel(name); };
 // .leanfare/plans/<id>/: plan.md (the task and the table), part-<n>.md (an answer and its receipt),
 // status.md. The folder holds a .gitignore of its own, so git leaves it out without your .gitignore
 // changing. Only in a project: never in the computer's top folder or straight in your home folder.
-export function sharedFolder(given?: unknown): string | null {
-  let dir = process.cwd();
-  if (typeof given === "string" && given.trim()) { try { dir = resolvePath(given, process.cwd()); } catch { return null; } }
+export function sharedFolder(given?: unknown, base = process.cwd()): string | null {
+  let dir = base;
+  if (typeof given === "string" && given.trim()) { try { dir = resolvePath(given, base); } catch { return null; } }
   dir = resolve(dir);
   if (dir === resolve("/") || dir === resolve(homedir())) return null;
   try { if (!statSync(dir).isDirectory()) return null; } catch { return null; }
@@ -439,12 +451,17 @@ function pullLine(p: any): string {
 // The tools that hand work over. While Leanfare is switched off (switch.ts) each says so, and the app does it itself.
 const HANDS_OVER = new Set(["plan", "plan_run", "ask", "delegate"]);
 
-async function runTool(name: string, args: any, signal: AbortSignal): Promise<any> {
+// Who a tool call is for: the app on the other side, the folder relative paths start from, and whether Leanfare can ask
+// that app's person a question (elicitation). The door's own, or one the app was handed (a door older than the app).
+export interface ToolCtx { client: string | null; cwd: string; canAsk: boolean }
+const here = (): ToolCtx => ({ client, cwd: process.cwd(), canAsk });
+export const runToolFor = (ctx: ToolCtx, name: string, args: any, signal: AbortSignal) => runTool(name, args, signal, ctx);
+async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCtx = here()): Promise<any> {
   if ((HANDS_OVER.has(name) || (name === "trial" && args?.action === "start")) && !switchedOn()) return text(OFF_TEXT, { off: true });
   if (name === "grade") {
     if (!["good", "partly", "wrong"].includes(args?.verdict)) return failure("grade needs a verdict: good, partly or wrong.");
     if (args.whole === true) { // the prompt's whole result: kept with this app's last hand off, so the report shows it on that prompt
-      const { j } = await call("/api/grades/together", { method: "POST", json: { verdict: args.verdict, app: client } }, signal);
+      const { j } = await call("/api/grades/together", { method: "POST", json: { verdict: args.verdict, app: ctx.client } }, signal);
       return text(j.ok ? `Graded the whole result ${args.verdict}. The report shows it as the prompt's "together" grade.` : "No hand off from this app in the last 6 hours to keep that grade with.", j);
     }
     const body = typeof args.id === "string" && Number.isInteger(args.part) ? { id: args.id, part: args.part, verdict: args.verdict }
@@ -482,8 +499,8 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
     if (!sg) return failure(s.why);
     // An app that can show Leanfare's question always gets it (a yes from the model is not the user's);
     // one that cannot says yes only once the user agreed in the chat.
-    let yes = !canAsk && args?.yes === "yes";
-    if (canAsk) {
+    let yes = !ctx.canAsk && args?.yes === "yes";
+    if (ctx.canAsk) {
       const a = await askUser({
         message: `Download ${sg.name} (${gbText(sg.size)}) with Ollama? It runs free, on this computer, and Leanfare's Auto and plans can then use it for reading and drafting. ${sg.license}: free to use for work.`,
         requestedSchema: { type: "object", properties: { download: { type: "boolean", title: `Download ${sg.name}`, description: `${gbText(sg.size)} of disk.`, default: false } }, required: ["download"] },
@@ -499,7 +516,7 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
     if (typeof args?.id !== "string" || !PLAN_ID.test(args.id)) return failure("plan_run needs the plan's id, from plan.");
     const yes = args.paid === "yes";
     let { j: v } = await call("/api/plan/run", { method: "POST", json: { id: args.id, paid: yes } }, signal);
-    if (v.asks && !yes && canAsk) {
+    if (v.asks && !yes && ctx.canAsk) {
       const yesTo = (a: any) => a?.action === "accept" && a.content?.run === true;
       const a = await askUser({
         message: `Leanfare's plan has paid parts (${v.asks.parts.map((n: number) => `part ${n}`).join(", ")}), about ${usd(v.asks.estimate)} on pay per use, over your cap of ${usd(v.asks.cap)}. The free and local parts are running. Run the paid ones too?`,
@@ -529,17 +546,17 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
     const key = (x: any) => x.parts.map((r: any) => r.status).join(",");
     const first = key(v);
     for (let t = 0; t < wait && v.running && key(v) === first && !signal.aborted; t++) { await Bun.sleep(1000); v = await look(); }
-    const folder = sharedFolder(args.folder);
+    const folder = sharedFolder(args.folder, ctx.cwd);
     const saved = folder ? writeShared(folder, args.id, sharedFiles(v)) : null;
     return text(statusText(v, saved), { id: v.id, running: v.running, cost_usd: v.cost, asks: v.asks, saved_in: saved, parts: v.parts.map((r: any) => ({ n: r.n, title: r.title, status: r.status, model: r.model, cost_usd: r.cost, seconds: r.seconds, answer: r.answer, receipt: r.receipt, error: r.error })) });
   }
   if (name === "plan") {
     if (typeof args?.task !== "string" || !args.task.trim()) return failure("plan needs a task.");
-    const files = sizesForPlan(args.files, args.folder);
+    const files = sizesForPlan(args.files, args.folder, ctx.cwd);
     if (typeof files === "string") return failure(files);
-    const { j } = await call("/api/plan", { method: "POST", json: { task: args.task, files, manager: client, split: args.split === "rules" ? "rules" : "auto", ...(args.private === true ? { private: true } : {}), ...(typeof args.your_model === "string" ? { your_model: args.your_model } : {}) } }, signal);
+    const { j } = await call("/api/plan", { method: "POST", json: { task: args.task, files, manager: ctx.client, split: args.split === "rules" ? "rules" : "auto", ...(args.private === true ? { private: true } : {}), ...(typeof args.your_model === "string" ? { your_model: args.your_model } : {}) } }, signal);
     const note = j.split?.note ? `\n\n(${j.split.note})` : j.split?.model ? `\n\n(Split by ${j.split.model.label}${typeof j.split.cost === "number" ? `, ${usd(j.split.cost)}` : ""}.)` : "";
-    const folder = sharedFolder(args.folder);
+    const folder = sharedFolder(args.folder, ctx.cwd);
     const saved = folder ? writeShared(folder, j.id, { "plan.md": `# Plan ${j.id}\n\n${args.task.trim()}\n\n${j.table}\n\n${j.next}\n` }) : null;
     const runNote = j.totals.out - (j.totals.later ?? 0) > 0 ? `\n\nOr call plan_run with id ${j.id} to run Leanfare's parts in the background, then plan_status for their answers.${saved ? ` The plan is saved in ${saved}/plan.md.` : ""}` : "";
     return text(`${j.table}\n\n${j.next}${runNote}${note}`, {
@@ -573,10 +590,10 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
       ({ j } = await call(`/api/delegate?id=${encodeURIComponent(args.id)}&wait=${wait}`, {}, signal));
     } else {
       if (typeof args?.task !== "string" || !args.task.trim()) return failure("delegate needs a task, or the id of one still working.");
-      const files = readForDelegate(args.files, args.folder);
+      const files = readForDelegate(args.files, args.folder, ctx.cwd);
       if (typeof files === "string") return failure(files);
       const body = { task: args.task, files, kind: args.kind ?? null, effort: args.effort ?? "medium", check: args.check ?? "auto", wait, ...(args.max_tokens !== undefined ? { max_tokens: args.max_tokens } : {}), ...(args.speed !== undefined ? { speed: args.speed } : {}), ...(args.private === true ? { private: true } : {}),
-        ...(client ? { app: client } : {}), ...(typeof args.your_model === "string" ? { your_model: args.your_model } : {}) };
+        ...(ctx.client ? { app: ctx.client } : {}), ...(typeof args.your_model === "string" ? { your_model: args.your_model } : {}) };
       ({ j } = await call("/api/delegate", { method: "POST", json: body }, signal));
     }
     if (j.running) return text(`Still working in Leanfare (${j.seconds} seconds so far). Call delegate again with id "${j.id}" and nothing else to get the answer.`, { running: true, id: j.id, seconds: j.seconds });
@@ -708,28 +725,39 @@ export async function handleMessage(msg: any, send = { reply, error }): Promise<
     setClient(params?.clientInfo?.name);
     canAsk = !!params?.capabilities?.elicitation;
     const asked = params?.protocolVersion;
-    return send.reply(id, { protocolVersion: LEGACY.includes(asked) ? asked : LEGACY[0], capabilities: { tools: { listChanged: false }, resources: {} }, serverInfo: SERVER, instructions: INSTRUCTIONS });
+    return send.reply(id, { protocolVersion: LEGACY.includes(asked) ? asked : LEGACY[0], capabilities: { tools: { listChanged: true }, resources: {} }, serverInfo: SERVER, instructions: INSTRUCTIONS });
   }
-  if (method === "server/discover") return send.reply(id, { resultType: "complete", supportedVersions: [...MODERN, ...LEGACY], capabilities: { tools: {}, resources: {} }, _meta: META, instructions: INSTRUCTIONS });
+  if (method === "server/discover") return send.reply(id, { resultType: "complete", supportedVersions: [...MODERN, ...LEGACY], capabilities: { tools: { listChanged: true }, resources: {} }, _meta: META, instructions: INSTRUCTIONS });
   // The plan's page (an MCP App): listed and read like any resource.
   if (method === "resources/list") return done({ resources: [
     { uri: PLAN_APP_URI, name: "Leanfare plan", title: "Leanfare plan", description: "The plan as a table with a Run button, for apps that show MCP Apps.", mimeType: APP_MIME },
     { uri: REPORT_APP_URI, name: "Leanfare report", title: "Leanfare report", description: "The report as a card with spans to pick, for apps that show MCP Apps.", mimeType: APP_MIME },
   ] });
+  if (method === "resources/read" && (await appNewer(false))) {
+    const { j } = await call("/api/mcp/resource", { method: "POST", json: { uri: params?.uri } });
+    if (!j?.contents) return send.error(id, -32002, `Leanfare has no resource ${String(params?.uri)}.`);
+    return done({ contents: j.contents });
+  }
   if (method === "resources/read") {
     const page = params?.uri === PLAN_APP_URI ? PLAN_APP_HTML : params?.uri === REPORT_APP_URI ? REPORT_APP_HTML : null;
     if (!page) return send.error(id, -32002, `Leanfare has no resource ${String(params?.uri)}.`);
     return done({ contents: [{ uri: params.uri, mimeType: APP_MIME, text: page, _meta: { ui: { csp: { connectDomains: [], resourceDomains: [] }, prefersBorder: true } } }] });
   }
   if (method === "ping") return done({});
-  if (method === "tools/list") return done({ tools: TOOLS });
+  if (method === "tools/list") {
+    if (await appNewer(false)) { const { j } = await call("/api/mcp/tools"); if (Array.isArray(j?.tools)) return done({ tools: j.tools }); }
+    return done({ tools: TOOLS });
+  }
   if (method === "tools/call") {
     const name = params?.name;
-    if (!TOOLS.some((t) => t.name === name)) return send.error(id, -32602, `Leanfare has no tool named ${String(name)}.`);
     const ac = new AbortController();
     inflight.set(id, ac);
+    const later = await appNewer(true);
+    if (!later && !TOOLS.some((t) => t.name === name)) { inflight.delete(id); return send.error(id, -32602, `Leanfare has no tool named ${String(name)}.`); }
     try {
-      const result = await runTool(name, params?.arguments ?? {}, ac.signal);
+      // A door older than the app: the app runs the call with its newer code, for this app and this folder. It cannot
+      // ask this app's person a question (elicitation): a tool that would asks in its answer instead.
+      const result = later ? await forward(name, params?.arguments ?? {}, ac.signal, later) : await runTool(name, params?.arguments ?? {}, ac.signal);
       if (!ac.signal.aborted) done(result);
     } catch (e: any) {
       if (!ac.signal.aborted) done(failure(String(e?.message ?? e)));
@@ -737,6 +765,23 @@ export async function handleMessage(msg: any, send = { reply, error }): Promise<
     return;
   }
   return send.error(id, -32601, `Leanfare's MCP door has no method ${method}.`);
+}
+
+// The app's side of a door older than it (server.ts /api/mcp/resource): the page for an MCP App's resource.
+export function resourceContents(uri: unknown): any[] | null {
+  const page = uri === PLAN_APP_URI ? PLAN_APP_HTML : uri === REPORT_APP_URI ? REPORT_APP_HTML : null;
+  return page ? [{ uri, mimeType: APP_MIME, text: page, _meta: { ui: { csp: { connectDomains: [], resourceDomains: [] }, prefersBorder: true } } }] : null;
+}
+
+async function forward(name: string, args: unknown, signal: AbortSignal, version: string): Promise<any> {
+  const { j } = await call("/api/mcp/call", { method: "POST", json: { name, arguments: args, client, folder: process.cwd() } }, signal);
+  if (!told) {
+    told = true;
+    out({ jsonrpc: "2.0", method: "notifications/tools/list_changed" }); // apps that follow it ask for the new tools
+    const note = `(Leanfare was updated to ${version} while ${client ?? "this app"} kept its ${DOOR.version} door running: this call went through the updated app. Quit and reopen ${client ?? "the app"} to see the new tools.)`;
+    return { ...j, content: [...(Array.isArray(j?.content) ? j.content : []), { type: "text", text: note }] };
+  }
+  return j;
 }
 
 export async function runMcp() {

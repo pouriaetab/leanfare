@@ -106,14 +106,14 @@ function readAtMost(path: string, limit: number): Buffer | null | "not a file" {
 }
 
 // The files, read, or one sentence saying what is wrong. Nothing is handed over unless every file can be.
-export function readForDelegate(list: unknown, folderGiven?: unknown): DelegateFile[] | string {
+export function readForDelegate(list: unknown, folderGiven?: unknown, base = process.cwd()): DelegateFile[] | string {
   if (list === undefined || list === null) return [];
   if (!Array.isArray(list) || list.some((p) => typeof p !== "string" || !p.trim())) return "files must be a list of file paths.";
   if (list.length > DELEGATE_LIMITS.count) return `At most ${DELEGATE_LIMITS.count} files go with one task.`;
   const named = typeof folderGiven === "string" && folderGiven.trim() !== "";
-  let folder = process.cwd();
+  let folder = base;
   if (named) {
-    const f = resolvePath(folderGiven as string, process.cwd());
+    const f = resolvePath(folderGiven as string, base);
     try { if (!statSync(f).isDirectory()) return `${folderGiven} is not a folder.`; } catch { return `The folder ${folderGiven} does not exist.`; }
     folder = realpathSync(f);
   }
@@ -162,14 +162,14 @@ export const PLAN_FILES = { list: 200, walk: 5000, depth: 6 };
 const SKIP_DIRS = new Set(["node_modules", "dist", "build", "target", "vendor", "out", "coverage", "__pycache__", "venv", "env"]);
 const BINARY = /\.(png|jpe?g|gif|webp|bmp|ico|icns|tiff?|psd|pdf|zip|gz|tgz|bz2|xz|zst|7z|rar|jar|war|so|dylib|dll|exe|bin|o|a|class|pyc|wasm|woff2?|ttf|otf|eot|mp3|mp4|mov|avi|mkv|wav|flac|ogg|sqlite|db|lock)$/i;
 export interface PlanSize { name: string; size: number; path: string }
-export function sizesForPlan(list: unknown, folderGiven?: unknown): PlanSize[] | string {
+export function sizesForPlan(list: unknown, folderGiven?: unknown, base = process.cwd()): PlanSize[] | string {
   if (list === undefined || list === null) return [];
   if (!Array.isArray(list) || list.some((p) => typeof p !== "string" || !p.trim())) return "files must be a list of file or folder paths.";
   if (list.length > PLAN_FILES.list) return `At most ${PLAN_FILES.list} paths go with one plan; name folders instead.`;
   const named = typeof folderGiven === "string" && folderGiven.trim() !== "";
-  let folder = process.cwd();
+  let folder = base;
   if (named) {
-    const f = resolvePath(folderGiven as string, process.cwd());
+    const f = resolvePath(folderGiven as string, base);
     try { if (!statSync(f).isDirectory()) return `${folderGiven} is not a folder.`; } catch { return `The folder ${folderGiven} does not exist.`; }
     folder = realpathSync(f);
   }
