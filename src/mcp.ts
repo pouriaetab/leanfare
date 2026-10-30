@@ -13,6 +13,7 @@ import { OFF_TEXT, switchedOn } from "./switch";
 import { app, call, healthy, seenVersion, where } from "./client";
 import { secondsText } from "./util";
 import { FAIL_KINDS, FAIL_WORD } from "./fails";
+import { scoreText } from "./score";
 import { reportText } from "./trialtext";
 import { APP_MIME, PLAN_APP_HTML, PLAN_APP_URI } from "./planapp";
 import { REPORT_APP_HTML, REPORT_APP_URI } from "./reportapp";
@@ -273,11 +274,11 @@ export function reportLines(r: any, range: string): string {
     `Your apps' own use: ${own}${t.own.cached ? `; ${tokShort(t.own.cached)} more read again from the cache` : ""}.`,
     `Cost of the hand offs: ${usd(t.cost.usd)}; ${pctOf(t.cost.freeShare)} of parts free or on this computer; ${t.cost.parts} parts in ${t.cost.prompts} prompts.`,
     t.both ? `Saved for ${t.both.app ?? "your apps"} (an estimate): about ${tokShort(Math.max(0, t.both.saved.mid))} tokens (${t.both.app ?? "your apps"} alone about ${tokShort(t.both.alone.mid)}, less the hand offs' own cost of about ${tokShort(t.both.spent)}; between ${tokShort(Math.max(0, t.both.saved.low))} and ${tokShort(Math.max(0, t.both.saved.high))}).` : "",
-    t.three ? `Quality three ways: the outside answers ${t.three.outside.graded ? `${pctOf(t.three.outside.good / t.three.outside.graded)} good` : "not graded"}; the whole results together ${t.three.together.graded ? `${pctOf(t.three.together.good / t.three.together.graded)} good (${t.three.together.graded} graded)` : "not graded"}; the app alone ${t.three.alone.graded ? `${pctOf(t.three.alone.good / t.three.alone.graded)} good (${t.three.alone.sampled} sampled)` : "not known"}.` : "",
+    t.three ? `Quality three ways, as scores out of 100 (good 1, partly half, wrong 0) with their 90% range: the outside answers ${scoreText(t.three.outside.score)}; the whole results together ${scoreText(t.three.together.score)}; the app alone ${scoreText(t.three.alone.score, "not known")}.` : "",
     t.outside?.measured ? `What the outside models used (measured): ${usedText(t.outside)}, in ${t.outside.calls} call${t.outside.calls === 1 ? "" : "s"}${t.outside.failed ? ` (${t.outside.failed} failed)` : ""}${t.outside.notMeasured ? `; ${t.outside.notMeasured} older part${t.outside.notMeasured === 1 ? "" : "s"} not measured` : ""}.` : "",
-    `Quality: ${t.quality.graded ? `${pctOf(t.quality.goodShare)} good (${t.quality.partly} partly, ${t.quality.wrong} wrong; ${t.quality.blind} judged blind)` : "not graded yet"}.`,
+    `Quality: ${t.quality.graded ? `${scoreText(t.quality.score)}: ${t.quality.good} good, ${t.quality.partly} partly, ${t.quality.wrong} wrong; ${t.quality.blind} judged blind` : "not graded yet"}.`,
     speedLine(r.speed),
-    r.byModel.length ? `Work by model: ${r.byModel.slice(0, 6).map((m: any) => `${m.label} ${tokShort(m.read)} tokens, ${m.parts} part${m.parts === 1 ? "" : "s"}${m.goodShare !== null ? `, ${pctOf(m.goodShare)} good` : ""}`).join("; ")}.` : "",
+    r.byModel.length ? `Work by model: ${r.byModel.slice(0, 6).map((m: any) => `${m.label} ${tokShort(m.read)} tokens, ${m.parts} part${m.parts === 1 ? "" : "s"}${m.score ? `, score ${scoreText(m.score)}` : ""}`).join("; ")}.` : "",
     `Last prompts:\n${r.prompts.slice(0, 6).map((p: any) => `- ${p.id ? `${p.id}, ` : ""}${new Date(p.ts).toISOString().slice(0, 16).replace("T", " ")} UTC, ${p.app}${p.model ? ` (${p.model.label}${p.plan ? `, ${planShort(p.plan)}` : ""})` : ""}: ${p.parts.length ? `${[...new Set(p.parts.map((x: any) => x.label))].join(", ")}, ${tokShort(p.kept)} kept out${p.saved !== null ? `, ${pctOf(p.saved)} saved` : ""}` : "nothing handed off"}${p.grade ? `, ${p.grade}` : ""}`).join("\n")}`,
     `The full report: Leanfare, Savings (${where().base}/#report).`,
   ];
@@ -299,9 +300,9 @@ export function promptLines(r: any): string {
 function compactReport(r: any, range: string, app: string | null = null) {
   return {
     range, app, from: r.from, to: r.to, step: r.step, tiles: r.tiles, series: r.series,
-    byModel: r.byModel.slice(0, 6).map((m: any) => ({ label: m.label, where: m.where, read: m.read, parts: m.parts, cost: m.cost, goodShare: m.goodShare })),
+    byModel: r.byModel.slice(0, 6).map((m: any) => ({ label: m.label, where: m.where, read: m.read, parts: m.parts, cost: m.cost, goodShare: m.goodShare, score: m.score ?? null })),
     byKind: r.byKind,
-    speed: (r.speed ?? []).slice(0, 6).map((m: any) => ({ label: m.label, where: m.where, calls: m.calls, failed: m.failed, fails: m.fails, first: m.first, whole: m.whole, goodShare: m.goodShare, rest: m.rest, noQuota: m.noQuota ?? null })),
+    speed: (r.speed ?? []).slice(0, 6).map((m: any) => ({ label: m.label, where: m.where, calls: m.calls, failed: m.failed, fails: m.fails, first: m.first, whole: m.whole, goodShare: m.goodShare, score: m.score ?? null, rest: m.rest, noQuota: m.noQuota ?? null })),
     prompts: r.prompts.slice(0, 6).map((p: any) => ({ id: p.id, ts: p.ts, app: p.app, model: p.model?.label ?? null, plan: planShort(p.plan), parts: [...new Set(p.parts.map((x: any) => x.label))], kept: p.kept, saved: p.saved, grade: p.grade, used: p.used ? { read: p.used.read, thought: p.used.thought, wrote: p.used.wrote } : null,
       both: p.both ? { alone: p.both.alone.mid, saved: p.both.saved.mid } : null, together: p.together ?? null })),
     open_url: `${where().base}/#report`,

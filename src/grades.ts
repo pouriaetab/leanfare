@@ -8,6 +8,7 @@ import { CODEX_ID, CODEX_LABEL } from "./codex";
 import { getModel } from "./data";
 import { db } from "./db";
 import { now } from "./util";
+import { scoreOf, scoreText } from "./score";
 
 export type Verdict = "good" | "partly" | "wrong";
 export const VERDICTS: Verdict[] = ["good", "partly", "wrong"];
@@ -68,7 +69,8 @@ export function giveAnotherChance(model: string, kind: string): number {
   return db.query("DELETE FROM grades WHERE model = ? AND kind = ?").run(model, kind).changes;
 }
 
+// "DeepSeek V4 Flash for reading: 75 of 100 (30 to 95, 4 grades): 2 good, 2 partly." (score.ts: good 1, partly half)
 export function standingText(s: Standing): string {
   const parts = [s.good ? `${s.good} good` : "", s.partly ? `${s.partly} partly` : "", s.wrong ? `${s.wrong} wrong` : ""].filter(Boolean).join(", ");
-  return `${s.label} for ${KIND_WORD[s.kind]}: ${parts} of its last ${s.n}${s.down ? ". Moved down: plans and the delegate skip it for this kind while another model can take it (Settings, How the models did for you, gives it another chance)" : s.n < MIN_GRADES ? ` (it moves down below half good, from ${MIN_GRADES} grades on)` : ""}.`;
+  return `${s.label} for ${KIND_WORD[s.kind]}: ${scoreText(scoreOf(s))}: ${parts}${s.down ? ". Moved down: plans and the delegate skip it for this kind while another model can take it (Settings, How the models did for you, gives it another chance)" : s.n < MIN_GRADES ? ` (it moves down below 50, from ${MIN_GRADES} grades on)` : ""}.`;
 }
