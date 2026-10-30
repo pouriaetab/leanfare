@@ -67,7 +67,7 @@ The installer downloads the one-file Leanfare for your computer from the latest 
 leanfare
 ```
 
-The app opens in your browser at `http://127.0.0.1:4747`. Run the installer again to update; Leanfare says when a new version is out.
+The app opens in your browser at `http://127.0.0.1:4747`. Run the installer again to update; Leanfare says when a new version is out. Something wrong? Settings, **Report a problem**, opens a bug report on GitHub with your version and system filled in; you read it and send it yourself.
 
 Paste one key, or start free:
 
