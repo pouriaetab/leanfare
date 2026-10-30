@@ -90,7 +90,7 @@ const TOOLS = [
   {
     name: "grade",
     title: "Grade an answer",
-    description: "After you used the answer of a part Leanfare ran (plan_status) or of delegate, say how good it was: good, partly or wrong. Leanfare keeps only the grade, with the model that answered and the kind of part, never the words. A model graded below good too often for a kind is moved down, so plans and delegate stop picking it for that kind. Grade a plan's part with id and part; a delegate answer with model (from its receipt) and kind.",
+    description: "After you used the answer of a part Leanfare ran (plan_status) or of delegate, say how good it was: good, partly or wrong. Leanfare keeps only the grade, with the model that answered and the kind of part, never the words. A model graded below good too often for a kind is moved down, so plans and delegate stop picking it for that kind. Grade a plan's part with id and part; a delegate answer with model (from its receipt) and kind. At the end of a prompt that handed work off, grade its whole result too, your work and the hand offs together: whole true and the verdict.",
     inputSchema: {
       type: "object",
       properties: {
@@ -100,6 +100,7 @@ const TOOLS = [
         model: { type: "string", description: "For a delegate answer: the model id its receipt named, such as deepseek/deepseek-v4-flash." },
         kind: { type: "string", enum: ["read", "write", "reason", "search"], description: "For a delegate answer: the kind you gave it." },
         handoff: { type: "integer", minimum: 1, description: "For a delegate answer: the hand off's number, from its receipt." },
+        whole: { type: "boolean", description: "true: grade the final result of the prompt you are on, your own work and Leanfare's parts together (once, at the end of a prompt that handed work off). Only the verdict is needed with it." },
       },
       required: ["verdict"],
       additionalProperties: false,
@@ -259,6 +260,8 @@ export function reportLines(r: any, range: string): string {
     `Leanfare's report, ${SPAN[range] ?? range}: ${tokShort(t.kept.tokens)} tokens kept out of your plans${t.kept.share !== null ? ` (${pctOf(t.kept.share)} of ${t.kept.measuredIn ?? "your apps"}'s use${t.kept.share === 0 ? ": nothing handed off there" : ""})` : ""}${t.kept.value !== null ? `; about ${usd(t.kept.value)} at ${t.kept.valueModel}'s prices` : ""}.`,
     `Your apps' own use: ${own}${t.own.cached ? `; ${tokShort(t.own.cached)} more read again from the cache` : ""}.`,
     `Cost of the hand offs: ${usd(t.cost.usd)}; ${pctOf(t.cost.freeShare)} of parts free or on this computer; ${t.cost.parts} parts in ${t.cost.prompts} prompts.`,
+    t.both ? `Saved for ${t.both.app ?? "your apps"} (an estimate): about ${tokShort(Math.max(0, t.both.saved.mid))} tokens (${t.both.app ?? "your apps"} alone about ${tokShort(t.both.alone.mid)}, less the hand offs' own cost of about ${tokShort(t.both.spent)}; between ${tokShort(Math.max(0, t.both.saved.low))} and ${tokShort(Math.max(0, t.both.saved.high))}).` : "",
+    t.three ? `Quality three ways: the outside answers ${t.three.outside.graded ? `${pctOf(t.three.outside.good / t.three.outside.graded)} good` : "not graded"}; the whole results together ${t.three.together.graded ? `${pctOf(t.three.together.good / t.three.together.graded)} good (${t.three.together.graded} graded)` : "not graded"}; the app alone ${t.three.alone.graded ? `${pctOf(t.three.alone.good / t.three.alone.graded)} good (${t.three.alone.sampled} sampled)` : "not known"}.` : "",
     t.outside?.measured ? `What the outside models used (measured): ${usedText(t.outside)}, in ${t.outside.calls} call${t.outside.calls === 1 ? "" : "s"}${t.outside.failed ? ` (${t.outside.failed} failed)` : ""}${t.outside.notMeasured ? `; ${t.outside.notMeasured} older part${t.outside.notMeasured === 1 ? "" : "s"} not measured` : ""}.` : "",
     `Quality: ${t.quality.graded ? `${pctOf(t.quality.goodShare)} good (${t.quality.partly} partly, ${t.quality.wrong} wrong; ${t.quality.blind} judged blind)` : "not graded yet"}.`,
     speedLine(r.speed),
@@ -277,8 +280,8 @@ export function promptLines(r: any): string {
   const when = new Date(p.ts).toISOString().slice(0, 16).replace("T", " ");
   const head = `Prompt ${p.id}: ${when} UTC, ${p.app}${p.model ? ` (${p.model.label}${p.plan ? `, ${planShort(p.plan)}` : ""})` : ""}.`;
   const own = p.own ? `Its own work: ${tokShort(p.own.fresh)} new tokens (measured)${p.own.cached ? `, ${tokShort(p.own.cached)} more read again from the cache` : ""}.` : "Its own work: not known (this app does not share it).";
-  const sum = p.parts.length ? `Kept out: ${tokShort(p.kept)} tokens${p.saved !== null ? ` (${pctOf(p.saved)} of its use)` : ""}; cost ${usd(p.cost)}${p.grade ? `; lowest grade ${p.grade}` : ""}.${p.used ? ` The outside models used ${usedText(p.used)} (measured).` : ""}` : "Nothing handed off.";
-  const parts = p.parts.map((x: any) => `- ${x.ref ?? `#${x.id}`} ${KIND_WORD[x.kind] ?? x.kind ?? "part"}: ${x.label}, ${tokShort(x.read)} read, ${tokShort(x.back)} back${x.used ? ` (the outside models used ${usedText(x.used)})` : ""}, ${x.where === "paid" ? usd(x.cost) : WHERE_WORD[x.where]}${x.ms ? `, ${Math.max(1, Math.round(x.ms / 1000))} s` : ""}${x.grade ? `, ${x.grade}${x.gradedBy === "check" ? ` (checked blind${x.checker ? ` by ${x.checker}` : ""})` : " (by your app)"}` : ""}${x.side ? `, side by side: ${x.side === "same" ? "as good as the top model's" : x.side === "better" ? "better than the top model's" : "the top model's was better"}` : ""} (hand off ${x.id})`);
+  const sum = p.parts.length ? `Kept out: ${tokShort(p.kept)} tokens${p.saved !== null ? ` (${pctOf(p.saved)} of its use)` : ""}; cost ${usd(p.cost)}${p.grade ? `; lowest grade ${p.grade}` : ""}.${p.used ? ` The outside models used ${usedText(p.used)} (measured).` : ""}${p.both ? ` ${p.app} alone: about ${tokShort(p.both.alone.mid)} (an estimate); saved about ${tokShort(Math.max(0, p.both.saved.mid))}.` : ""}${p.together ? ` The whole result: ${p.together} (graded by ${p.togetherBy === "you" ? "you" : p.app}).` : ""}` : "Nothing handed off.";
+  const parts = p.parts.map((x: any) => `- ${x.ref ?? `#${x.id}`} ${KIND_WORD[x.kind] ?? x.kind ?? "part"}: ${x.label}, ${tokShort(x.read)} read, ${tokShort(x.back)} back${x.used ? ` (the outside models used ${usedText(x.used)})` : ""}, ${x.where === "paid" ? usd(x.cost) : WHERE_WORD[x.where]}${x.ms ? `, ${Math.max(1, Math.round(x.ms / 1000))} s` : ""}${x.grade ? `, ${x.grade}${x.gradedBy === "check" ? ` (checked blind${x.checker ? ` by ${x.checker}` : ""})` : " (by your app)"}` : ""}${x.side ? `, side by side: ${x.side === "same" ? "as good as the top model's" : x.side === "better" ? "better than the top model's" : "the top model's was better"}` : ""}${x.both ? `, ${p.app} alone about ${tokShort(x.both.alone.mid)} (an estimate), saved about ${tokShort(Math.max(0, x.both.saved.mid))}` : ""} (hand off ${x.id})`);
   return [head, own, sum, parts.length ? `Parts:\n${parts.join("\n")}` : "", `The full report: Leanfare, Savings (${where().base}/#report).`].filter(Boolean).join("\n");
 }
 function compactReport(r: any, range: string, app: string | null = null) {
@@ -287,7 +290,8 @@ function compactReport(r: any, range: string, app: string | null = null) {
     byModel: r.byModel.slice(0, 6).map((m: any) => ({ label: m.label, where: m.where, read: m.read, parts: m.parts, cost: m.cost, goodShare: m.goodShare })),
     byKind: r.byKind,
     speed: (r.speed ?? []).slice(0, 6).map((m: any) => ({ label: m.label, where: m.where, calls: m.calls, failed: m.failed, fails: m.fails, first: m.first, whole: m.whole, goodShare: m.goodShare, rest: m.rest })),
-    prompts: r.prompts.slice(0, 6).map((p: any) => ({ id: p.id, ts: p.ts, app: p.app, model: p.model?.label ?? null, plan: planShort(p.plan), parts: [...new Set(p.parts.map((x: any) => x.label))], kept: p.kept, saved: p.saved, grade: p.grade, used: p.used ? { read: p.used.read, thought: p.used.thought, wrote: p.used.wrote } : null })),
+    prompts: r.prompts.slice(0, 6).map((p: any) => ({ id: p.id, ts: p.ts, app: p.app, model: p.model?.label ?? null, plan: planShort(p.plan), parts: [...new Set(p.parts.map((x: any) => x.label))], kept: p.kept, saved: p.saved, grade: p.grade, used: p.used ? { read: p.used.read, thought: p.used.thought, wrote: p.used.wrote } : null,
+      both: p.both ? { alone: p.both.alone.mid, saved: p.both.saved.mid } : null, together: p.together ?? null })),
     open_url: `${where().base}/#report`,
   };
 }
@@ -439,6 +443,10 @@ async function runTool(name: string, args: any, signal: AbortSignal): Promise<an
   if ((HANDS_OVER.has(name) || (name === "trial" && args?.action === "start")) && !switchedOn()) return text(OFF_TEXT, { off: true });
   if (name === "grade") {
     if (!["good", "partly", "wrong"].includes(args?.verdict)) return failure("grade needs a verdict: good, partly or wrong.");
+    if (args.whole === true) { // the prompt's whole result: kept with this app's last hand off, so the report shows it on that prompt
+      const { j } = await call("/api/grades/together", { method: "POST", json: { verdict: args.verdict, app: client } }, signal);
+      return text(j.ok ? `Graded the whole result ${args.verdict}. The report shows it as the prompt's "together" grade.` : "No hand off from this app in the last 6 hours to keep that grade with.", j);
+    }
     const body = typeof args.id === "string" && Number.isInteger(args.part) ? { id: args.id, part: args.part, verdict: args.verdict }
       : typeof args.model === "string" && typeof args.kind === "string" ? { model: args.model, kind: args.kind, verdict: args.verdict, ...(Number.isInteger(args.handoff) ? { handoff: args.handoff } : {}) } : null;
     if (!body) return failure("grade needs the plan's id and the part's number, or, for a delegate answer, the model and the kind.");

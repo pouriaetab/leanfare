@@ -131,6 +131,12 @@ const ADDED: [table: string, column: string, type: string][] = [
   ["ledger", "think_tokens", "INTEGER"], // of out_tokens, the thinking: as the provider said, else from its text; null: not known
   ["ledger", "think_source", "TEXT"], // reported (by the provider), text (about four characters a token), none (a model that does not think)
   ["ledger", "fail", "TEXT"], // why a try failed: busy, limit, timeout, unreachable, server, refused, cut or other (fails.ts)
+  // 0.10, both sides of a hand off (report.ts): what the app spent on it, and the grade of the prompt's whole result.
+  ["delegations", "ask_tokens", "INTEGER"], // the task the app wrote for a hand off, in tokens (its own output); null: before 0.10
+  ["delegations", "reply_tokens", "INTEGER"], // the receipt it read back with the answer, in tokens
+  ["delegations", "together", "TEXT"], // the prompt's whole result, the app and the hand offs together: good, partly or wrong
+  ["delegations", "together_by", "TEXT"], // who said so: the app (the grade tool), or you (the report)
+  ["comparisons", "app_alone", "INTEGER"], // 1: the top model was the app's own model, so this is a sample of the app alone
 ];
 
 function addColumns(d: Database) {

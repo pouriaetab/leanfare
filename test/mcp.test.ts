@@ -275,6 +275,10 @@ describe("the tools", () => {
       // Graded again with its handoff: that grade replaces the first.
       await rpc("tools/call", { name: "grade", arguments: { model: "deepseek/deepseek-v4-flash", kind: "read", verdict: "partly", handoff: row } });
       expect((await ui(url, "/api/savings")).json.work.grades).toEqual({ good: 0, partly: 1, wrong: 0 });
+      // The whole prompt's result, graded at its end: kept with this app's last hand off, for the report's "together".
+      const whole = await rpc("tools/call", { name: "grade", arguments: { verdict: "good", whole: true } });
+      expect(whole.result.content[0].text).toBe('Graded the whole result good. The report shows it as the prompt\'s "together" grade.');
+      expect(db.query("SELECT together, together_by FROM delegations WHERE id = ?").get(row)).toEqual({ together: "good", together_by: "app" });
       const spent = (await rpc("tools/call", { name: "spend", arguments: {} })).result;
       expect(spent.content[0].text).toMatch(/Work for your apps this month \(plan and delegate\): 1 task; Leanfare's models read 9 tokens your apps never had to, and 8 came back to them; \$[\d.e-]+\.\nQuality: 0 of 1 graded good, 1 partly, 0 wrong; checks: none yet\./);
       expect(spent.structuredContent.work).toMatchObject({ tasks: 1, tokens_kept_out: 9, tokens_came_back: 8, grades: { partly: 1 }, checks: { passed: 0, failed: 0 } });
@@ -326,7 +330,7 @@ describe("the tools", () => {
     expect(none.result.content[0].text).toBe("Leanfare's report, the last hour: nothing handed to Leanfare yet in this span.");
     expect(none.result.structuredContent).toMatchObject({ range: "1h", app: "Codex", prompts: [] }); // the card asks again for the same app
     const one = await rpc("tools/call", { name: "report", arguments: { prompt: "prm-1" } }); // one prompt by its id, with its parts
-    expect(one.result.content[0].text).toMatch(/^Prompt PRM-1: 2026-10-21 11:00 UTC, Claude \(Claude Opus 5\.5\)\.\nIts own work: not known \(this app does not share it\)\.\nKept out: 20k tokens; cost \$0; lowest grade good\.\nParts:\n- PRM-1\.1 reading: Gemini 3\.8 Flash, 20k read, 300 back, free, good \(by your app\) \(hand off \d+\)\n/);
+    expect(one.result.content[0].text).toMatch(/^Prompt PRM-1: 2026-10-21 11:00 UTC, Claude \(Claude Opus 5\.5\)\.\nIts own work: not known \(this app does not share it\)\.\nKept out: 20k tokens; cost \$0; lowest grade good\. Claude alone: about 20k \(an estimate\); saved about 20k\.\nParts:\n- PRM-1\.1 reading: Gemini 3\.8 Flash, 20k read, 300 back, free, good \(by your app\), Claude alone about 20k \(an estimate\), saved about 20k \(hand off \d+\)\n/);
     expect(one.result.structuredContent).toMatchObject({ range: "prompt", prompts: [{ id: "PRM-1" }] });
     const unknown = await rpc("tools/call", { name: "report", arguments: { prompt: "PRM-9" } });
     expect([unknown.result.isError, unknown.result.content[0].text]).toEqual([true, "No prompt PRM-9 yet: an id the report gave, like PRM-41."]);

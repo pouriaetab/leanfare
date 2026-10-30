@@ -1780,26 +1780,43 @@
       : !d.prompts.length && !d.speed?.length ? h("div", { class: "empty", text: "Nothing in this span yet. Hand offs and plan parts from your apps, and Claude Code's prompts, show here." })
       : !d.prompts.length ? h("div", { class: "rp-body" }, h("div", { class: "empty", text: "No prompts in this span yet. Hand offs and plan parts from your apps, and Claude Code's prompts, show here. The models' speed so far:" }), reportSpeedEl(d))
       : h("div", { class: "rp-body" + (S.report.loading ? " busy" : "") }, reportTiles(d), reportChartEl(d),
-          h("div", { class: "rp-two" }, reportModelsEl(d), reportKindsEl(d)), reportSpeedEl(d), reportPromptsEl(d));
+          h("div", { class: "rp-two" }, reportModelsEl(d), reportKindsEl(d)), reportSpeedEl(d), reportPromptsEl(d), reportHowEl(d));
     return h("section", { class: "rp", id: "reportCard" },
       h("div", { class: "sv-head" }, h("h2", { text: "Report" }), h("span", { class: "muted", text: "what Leanfare did for your apps" })),
       filters, body);
   }
 
-  function rtile(label, value, sub, cls = "") { return h("div", { class: "rp-tile" }, h("div", { class: "lbl", text: label }), h("div", { class: "val " + cls, text: value }), h("div", { class: "sub" }, sub)); }
+  function rtile(label, value, sub, cls = "") { return h("div", { class: "rp-tile" }, h("div", { class: "lbl" }, label), h("div", { class: "val " + cls, text: value }), h("div", { class: "sub" }, sub)); }
+  // How sure a number is: measured from records, an estimate with its method and range, or not known.
+  const BADGE = { m: ["b-m", "measured"], e: ["b-e", "estimate"], n: ["b-n", "not known"] };
+  const badge = (k) => h("span", { class: "badge " + BADGE[k][0], text: BADGE[k][1] });
+  // The app the report is about, for its words: Claude (its chats, Cowork and Claude Code), one other app, or your app.
+  function appWord(d) {
+    const apps = [...new Set(d.prompts.map((p) => p.app))];
+    return apps.length && apps.every((a) => /^Claude/.test(a)) ? "Claude" : apps.length === 1 && apps[0] !== "Unknown app" ? apps[0] : "Your app";
+  }
+  const approx = (n) => `≈ ${tokShort(Math.max(0, n))}`;
   function reportTiles(d) {
-    const t = d.tiles;
-    const apps = t.own.byApp.map((a) => (a.measured ? `${a.app} ${tokShort(a.fresh)}, measured` : `${a.app}: not known`)).join(" · ");
+    const t = d.tiles, app = appWord(d), b = t.both, o = t.outside, q = t.three;
+    const apps = t.own.byApp.map((a) => (a.measured ? `${a.app}, from its own files` : [h("span", { text: `${a.app}: ` }), h("span", { class: "nk", text: "not known" })]));
+    const sep = (xs) => xs.flatMap((x, i) => (i ? [" · ", x] : [x]));
+    const share = (n, of) => (of ? n / of : null);
+    const qrow = (label, s, none) => [h("span", { text: label }), h("span", { class: "bar" }, h("i", { style: { width: `${Math.round((s ?? 0) * 100)}%` } })), s === null ? h("span", { class: "nk", text: none }) : h("span", { text: `${pctText(s)} good` })];
     return h("div", { class: "rp-tiles" },
-      rtile("Kept out of your plans", `${tokShort(t.kept.tokens)} tokens`, [
-        t.kept.share !== null ? [h("b", { text: pctText(t.kept.share) }), ` of ${t.kept.measuredIn ?? "your apps"}'s use${t.kept.share === 0 ? ": nothing handed off there" : ""}`] : "read by Leanfare's models, not your apps",
-        t.kept.value !== null ? ` · about ${money(t.kept.value)} at ${t.kept.valueModel}'s prices` : ""], t.kept.tokens > 0 ? "good" : ""),
-      rtile("Your apps' own use", t.own.measured ? `${tokShort(t.own.fresh)} new tokens` : "Not known",
-        [apps || "no prompts", t.own.cached ? ` · ${tokShort(t.own.cached)} more read again from the cache` : ""]),
-      rtile("Cost of the hand offs", money(t.cost.usd), `${pctText(t.cost.freeShare)} of parts free or on this computer · ${plural(t.cost.parts, "part")} in ${plural(t.cost.prompts, "prompt")}`),
-      rtile("Quality", t.quality.graded ? `${pctText(t.quality.goodShare)} good` : "Not graded yet",
-        t.quality.graded ? `${num(t.quality.partly)} partly, ${num(t.quality.wrong)} wrong · ${num(t.quality.blind)} judged blind${t.quality.judge ? `, mostly by ${t.quality.judge}` : ""}` : "your app grades the answers it uses; checks judge a sample blind",
-        t.quality.graded && t.quality.goodShare >= 0.8 ? "good" : ""));
+      rtile([`Saved for ${app} `, badge(b ? "e" : "n")], b ? approx(b.saved.mid) : "Not known",
+        b ? `${app} alone ≈ ${tokShort(b.alone.mid)}, minus the hand offs' own cost ≈ ${tokShort(b.spent)} (the tasks, and the answers read back). Range ${tokShort(Math.max(0, b.saved.low))} to ${tokShort(Math.max(0, b.saved.high))}.` : "Nothing handed off in this span.", b ? "est" : ""),
+      rtile(["Outside models used ", badge(o.measured ? "m" : "n")], o.measured ? `${tokShort(o.read + (o.thought ?? 0) + o.wrote)} tokens` : "Not measured yet",
+        [o.measured ? `${tokShort(o.read)} read · ${o.thought === null ? "thinking not split" : `${tokShort(o.thought)} thinking`} · ${tokShort(o.wrote)} written · ` : "",
+          `${money(t.cost.usd)}${t.cost.freeShare === 1 ? ", all on free models" : t.cost.freeShare !== null ? `, ${pctText(t.cost.freeShare)} of parts free` : ""}`,
+          o.notMeasured ? ` · ${plural(o.notMeasured, "older part")} not measured` : ""]),
+      rtile([`${app}'s own use `, badge(t.own.measured ? "m" : "n")], t.own.measured ? `${tokShort(t.own.fresh)} new tokens` : "Not known",
+        [sep(apps), t.own.cached ? ` · ${tokShort(t.own.cached)} more read again from the cache` : ""]),
+      h("div", { class: "rp-tile" }, h("div", { class: "lbl", text: "Quality, three ways" }),
+        h("div", { class: "q3" },
+          qrow("Outside answers", share(q.outside.good, q.outside.graded), "not graded"),
+          qrow("Together", share(q.together.good, q.together.graded), "not graded"),
+          qrow(`${app} alone`, share(q.alone.good, q.alone.graded), "not known")),
+        h("div", { class: "sub", text: `${plural(q.outside.graded, "outside answer")} graded, ${plural(q.together.graded, "prompt")} graded together, ${plural(q.alone.sampled, "sampled run")} of ${app} alone` })));
   }
 
   // Tokens over time, drawn at the width it gets: kept out by Leanfare against what your apps used (new tokens).
@@ -2011,49 +2028,81 @@
       : `${tokShort(u.read)} read, ${tokShort(u.thought)} thinking${u.estimated ? " (partly from its text)" : ""}, ${tokShort(u.wrote)} written`;
   }
   function gradeChip(g, blind) { return g ? h("span", { class: `chip ${g === "good" ? "good" : g === "wrong" ? "bad" : "warn"}`, title: blind ? "judged blind by another model" : "graded by your app", text: RP_GRADE[g] }) : h("span", { class: "none", text: "—" }); }
+  const SIDE_WORD = { same: "as good", worse: "better", better: "not as good" }; // side by side's verdict is the hand off's side; here, the app alone's
   function reportPromptsEl(d) {
+    const app = appWord(d);
     const long = Date.parse(d.to) - Date.parse(d.from) > 86_400_000;
-    const when = (iso) => { const t = new Date(iso); return long ? t.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : t.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }); };
+    // The day and the time apart, joined with a comma: asked for both at once, some versions of the system's date
+    // library write "Oct 20 at 10:05 AM" and others "Oct 20, 10:05 AM".
+    const when = (iso) => { const t = new Date(iso), time = t.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }); return long ? `${t.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${time}` : time; };
     const secs = (ms) => (ms === null || ms === undefined ? "" : ` · ${ms < 1500 ? "1 s" : ms < 90_000 ? Math.round(ms / 1000) + " s" : Math.round(ms / 60_000) + " min"}`);
+    const two = (main, sub, cls = "") => h("td", { class: "num " + cls }, main, sub ? h("span", { class: "tiny", text: sub }) : null);
+    const usedCell = (u, none) => (u ? two(`${tokShort(u.read)} read`, u.thought === null ? `${tokShort(u.wrote)} written, thinking not split` : `${tokShort(u.thought)} thinking · ${tokShort(u.wrote)} written`)
+      : h("td", { class: "num muted", text: none }));
+    const muted = (text) => h("td", { class: "muted", text });
     const rows = [];
     for (const p of d.prompts.slice(0, S.report.shown)) {
       const open = !!S.report.open[p.key];
       const toggle = () => { S.report.open[p.key] = !open; const old = $("#reportCard"); if (old) old.replaceWith(reportCardEl()); };
-      const labels = [...new Set(p.parts.map((x) => x.label))];
-      rows.push(h("tr", { class: "pr" + (open ? " open" : ""), onclick: p.parts.length || p.own ? toggle : null },
-        h("td", { class: "pid" }, (p.parts.length || p.own) ? h("span", { class: "tw", text: open ? "▾" : "▸" }) : null, p.id ?? "—"),
+      const handed = p.parts.length > 0;
+      rows.push(h("tr", { class: "pr" + (open ? " open" : ""), onclick: handed || p.own ? toggle : null },
+        h("td", { class: "pid" }, (handed || p.own) ? h("span", { class: "tw", text: open ? "▾" : "▸" }) : null, p.id ?? "—"),
         h("td", { class: "when", text: when(p.ts) }),
-        h("td", { class: "nw", text: p.app }),
-        h("td", { class: "nw" }, p.model ? h("b", { text: p.model.label }) : "—", p.plan ? ` · ${shortPlan(p.plan)}` : ""),
-        h("td", { class: "num", text: p.own ? `${tokShort(p.prompt ?? 0)} → ${tokShort(p.own.output)}` : "not known" }),
-        h("td", {}, labels.length ? labels.map((l) => h("span", { class: "chip", text: l })) : h("span", { class: "muted", text: "nothing handed off" })),
-        h("td", { class: "num", text: tokShort(p.kept) }),
-        h("td", { class: "num", text: p.saved === null ? "—" : pctText(p.saved) }),
-        h("td", { class: "num", text: money(p.cost) }),
-        h("td", {}, gradeChip(p.grade, p.parts.some((x) => x.gradedBy === "check")))));
+        h("td", { class: "nw" }, `${p.app}${p.model ? ` · ${p.model.label}` : ""}${p.plan ? ` · ${shortPlan(p.plan)}` : ""}`),
+        handed ? usedCell(p.used, "not measured") : h("td", { class: "num muted", text: "nothing handed off" }),
+        p.both ? two(approx(p.both.alone.mid), `range ${tokShort(Math.max(0, p.both.alone.low))} to ${tokShort(p.both.alone.high)}`, "est") : h("td", { class: "num muted", text: "—" }),
+        p.both ? two(approx(p.both.saved.mid), null, "est") : h("td", { class: "num", text: "0" }),
+        p.own ? two(`${tokShort(p.own.fresh)} new`, "measured") : h("td", { class: "num muted", text: "not known" }),
+        h("td", {}, handed ? gradeChip(p.grade, p.parts.some((x) => x.gradedBy === "check")) : h("span", { class: "none", text: "—" })),
+        h("td", {}, p.together ? gradeChip(p.together) : h("span", { class: "muted", text: handed ? "not graded" : "—" })),
+        h("td", {}, p.alone?.grade ? gradeChip(p.alone.grade, true) : h("span", { class: "muted", text: handed ? "not known" : "—" }))));
       if (!open) continue;
       p.parts.forEach((x, i) => rows.push(h("tr", { class: "part" },
         h("td", { class: "ind pid", text: x.ref ?? `${i + 1}` }), h("td", { class: "when", text: when(x.ts) }),
-        h("td", { class: "nw", text: (RP_KIND[x.kind] ?? x.kind ?? "part").toLowerCase() }),
-        h("td", { text: x.label }),
-        h("td", { class: "num", text: `${tokShort(x.read)} read → ${tokShort(x.back)}` }),
-        h("td", { class: "muted", text: `${RP_WHERE[x.where]}${secs(x.ms)}${x.side ? ` · side by side: ${x.side === "worse" ? "the top model's was better" : x.side === "better" ? "better than the top model's" : "as good as the top model's"}` : ""}${x.used ? ` · the outside models used ${usedText(x.used)}` : ""}` }),
-        h("td", { class: "num", text: tokShort(x.read) }), h("td", {}),
-        h("td", { class: "num", text: money(x.cost) }),
-        h("td", {}, gradeChip(x.grade, x.gradedBy === "check")))));
+        h("td", {}, `${(RP_KIND[x.kind] ?? x.kind ?? "part").toLowerCase()} · ${x.label}`, h("span", { class: "tiny", text: `${RP_WHERE[x.where]}${secs(x.ms)}` })),
+        usedCell(x.used, "not measured (before 0.10)"),
+        two(approx(x.both.alone.mid), `reads what it read, thinks and writes as ${x.label} did (from its numbers)`, "est"),
+        two(approx(x.both.saved.mid), `minus ${tokShort(x.back)} read back, ${tokShort(x.both.spent - x.back)} for the call`, "est"),
+        h("td", {}),
+        h("td", {}, gradeChip(x.grade, x.gradedBy === "check"), x.grade ? h("span", { class: "tiny", text: x.gradedBy === "check" ? `checked blind${x.checker ? ` by ${x.checker}` : ""}` : `by ${p.app}` }) : null),
+        h("td", {}),
+        h("td", {}, x.alone ? [h("span", { class: "tiny", text: "sampled" }), h("span", { class: x.alone.verdict === "better" ? "gw" : "gg", text: SIDE_WORD[x.alone.verdict] }),
+          x.alone.used !== null ? h("span", { class: "tiny", text: `${x.alone.label} used ${tokShort(x.alone.used)}` }) : null]
+          : h("span", { class: "muted", text: x.side ? `the best model you have: ${x.side === "worse" ? "better" : x.side === "better" ? "not as good" : "as good"}` : "not sampled" })))));
       rows.push(h("tr", { class: "part own" },
         h("td", {}), h("td", {}), h("td", { class: "nw", text: p.app }),
-        h("td", { text: p.model ? `${p.model.label}${p.plan ? ` · ${shortPlan(p.plan)}` : ""}` : "—" }),
-        h("td", { colspan: 6, class: "muted", text: p.own ? `prompt ${tokShort(p.prompt ?? 0)}, its own work ${tokShort(p.own.fresh)} new tokens (measured)${p.own.cached ? `, ${tokShort(p.own.cached)} more read again from the cache` : ""}` : "its own work: not known (this app does not share it)" })));
+        h("td", { colspan: 7, class: "muted", text: p.own ? `prompt ${tokShort(p.prompt ?? 0)}, its own work ${tokShort(p.own.fresh)} new tokens (measured)${p.own.cached ? `, ${tokShort(p.own.cached)} more read again from the cache` : ""}` : "its own work: not known (this app does not share it)" })));
+      if (handed) {
+        const last = p.parts[p.parts.length - 1];
+        const grade = async (v) => { try { await api("/api/grades/together", { body: { verdict: v, handoff: last.id } }); } catch {} loadReport(); };
+        rows.push(h("tr", { class: "part own" }, h("td", {}), h("td", {}),
+          h("td", { colspan: 8 }, h("span", { class: "muted", text: `The whole result, ${p.app} and the hand offs together${p.together ? ` (${p.togetherBy === "you" ? "you said" : `${p.app} said`} ${p.together})` : ""}: ` }),
+            ...["good", "partly", "wrong"].map((v) => h("button", { class: "btn small" + (p.together === v ? " on" : ""), type: "button", "aria-pressed": String(p.together === v), text: RP_GRADE[v], onclick: () => grade(v) })))));
+      }
     }
     const left = d.prompts.length - S.report.shown + d.more;
+    const th = (t, cls = "") => h("th", { class: cls, text: t });
     return h("div", { class: "card rp-card" }, h("h3", { text: "Prompts" }),
-      h("p", { class: "muted", text: "Each prompt with its id, the app it came from, its main model and your plan, and every part Leanfare ran. Open one for its parts (PRM-41.1, PRM-41.2…)." }),
-      h("div", { class: "scroll" }, h("table", { class: "trial-table rp-table" },
-        h("thead", {}, h("tr", {}, ...["ID", "When", "App", "Main model", "Prompt → answer", "Handed off", "Kept out", "Saved", "Cost", "Grade"].map((c) => h("th", { text: c })))),
+      h("p", { class: "muted", text: `Each prompt with both sides: what the outside models used, what ${app} would have used doing it alone (an estimate), and the grades. Open one for its parts (PRM-41.1, PRM-41.2…).` }),
+      h("div", { class: "scroll" }, h("table", { class: "trial-table rp-table both" },
+        h("thead", {},
+          h("tr", {}, h("th", { rowspan: 2, text: "ID" }), h("th", { rowspan: 2, text: "When" }), h("th", { rowspan: 2, text: "App · main model" }), h("th", { colspan: 4, class: "grp", text: "Tokens" }), h("th", { colspan: 3, class: "grp", text: "Grades" })),
+          h("tr", {}, th("Outside used", "num"), th(`${app} alone`, "num"), th("Saved", "num"), th(`${app} used, whole prompt`, "num"), th("Outside"), th("Together"), th(`${app} alone`))),
         h("tbody", {}, ...rows))),
       left > 0 ? h("button", { class: "btn small", type: "button", text: `Show ${Math.min(20, left)} more`, onclick: () => { S.report.shown += 20; const old = $("#reportCard"); if (old) old.replaceWith(reportCardEl()); } }) : null,
       h("p", { class: "fine", text: "Claude Code's own tokens come from its own files: numbers only, never your words. New tokens: what it did not read again from its cache. Claude's chats and Cowork do not share theirs, so they show as not known." }));
+  }
+
+  // How the app alone is worked out: the step in use, and the ones to come.
+  function reportHowEl(d) {
+    const app = appWord(d), sampled = d.tiles.three.alone.sampled;
+    const step = (n, title, when, text, on) => h("div", { class: "step" + (on ? " on" : "") }, h("b", { text: `${n}. ${title}` }), h("span", { class: "when", text: when }), h("span", { text }));
+    return h("div", { class: "card rp-card" }, h("h3", { text: `How "${app} alone" is worked out` }),
+      h("p", { class: "muted", text: "Each number says which step it came from. Estimates show with ≈ and a range." }),
+      h("div", { class: "rp-how" },
+        step(1, "From the outside model's numbers", "in use, from the start", `What it read, thought and wrote, as ${app} would have. Rough: shown with ≈ and a wide range.`, true),
+        step(2, `Learned from your own ${app === "Claude" ? "Claude Code" : app}`, "to come (sizes only, never words)", `How much of a file ${app} reads, and how much it thinks and writes for each kind of work, from prompts where it did the reading itself. The range narrows as it learns.`, false),
+        step(3, "Measured on a sample", sampled ? `in use: ${plural(sampled, "sample")} so far` : `needs ${app}'s own model in Leanfare (an API key)`, `Now and then side by side runs ${app}'s own model on a hand off too, within its monthly limit: its real tokens, and its grade judged blind against the outside answer. These also check step 1.`, sampled > 0)));
   }
 
   // The prompts and their parts as rows of a CSV file.
@@ -2061,13 +2110,15 @@
     // A text that starts like a formula (=, +, -, @) is kept as text, so a spreadsheet never runs it.
     const cell = (v) => { let s = v === null || v === undefined ? "" : String(v); if (typeof v === "string" && /^[=+\-@\t\r]/.test(s)) s = "'" + s; return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
     const head = ["prompt_id", "time", "app", "thread", "project", "main_model", "plan", "prompt_tokens", "own_new_tokens", "own_cache_reads", "part_id", "handoff", "kind", "model", "where", "tokens_read", "tokens_back", "kept_out", "saved", "cost_usd", "grade", "graded_by", "side_by_side",
-      "outside_read", "outside_thinking", "outside_written"]; // what the outside models used, measured (empty: not measured; thinking empty: not known)
+      "outside_read", "outside_thinking", "outside_written", // what the outside models used, measured (empty: not measured; thinking empty: not known)
+      "app_alone_est", "app_alone_low", "app_alone_high", "app_spent", "saved_est", "together", "app_alone_grade"]; // both sides (estimates) and the grades
     const used = (u) => (u ? [u.read, u.thought, u.wrote] : ["", "", ""]);
+    const both = (b) => (b ? [b.alone.mid, b.alone.low, b.alone.high, b.spent, b.saved.mid] : ["", "", "", "", ""]);
     const lines = [head.join(",")];
     for (const p of d.prompts) {
       const base = [p.id, p.ts, p.app, p.thread, p.project, p.model?.label, p.plan, p.prompt, p.own?.fresh, p.own?.cached];
-      lines.push([...base, "", "", "", "", "", "", "", p.kept, p.saved === null ? "" : p.saved.toFixed(4), p.cost.toFixed(6), p.grade, "", "", ...used(p.used)].map(cell).join(","));
-      p.parts.forEach((x, i) => lines.push([...base, x.ref ?? i + 1, x.id, x.kind, x.label, x.where, x.read, x.back, x.read, "", x.cost === null ? "" : x.cost.toFixed(6), x.grade, x.gradedBy, x.side, ...used(x.used)].map(cell).join(",")));
+      lines.push([...base, "", "", "", "", "", "", "", p.kept, p.saved === null ? "" : p.saved.toFixed(4), p.cost.toFixed(6), p.grade, "", "", ...used(p.used), ...both(p.both), p.together, p.alone?.grade].map(cell).join(","));
+      p.parts.forEach((x, i) => lines.push([...base, x.ref ?? i + 1, x.id, x.kind, x.label, x.where, x.read, x.back, x.read, "", x.cost === null ? "" : x.cost.toFixed(6), x.grade, x.gradedBy, x.side, ...used(x.used), ...both(x.both), x.together, x.alone?.grade].map(cell).join(",")));
     }
     return lines.join("\n") + "\n";
   }

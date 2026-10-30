@@ -37,7 +37,12 @@ export interface SideInput {
   handoff: number; kind: string; effort: string; guess: Guess; messages: Msg[]; system: string; maxOut: number;
   task: string; block: string; doer: Model; answer: string; allowed: (m: Model) => boolean;
   job?: string; // the hand off's mark: the top model's answer and the judge's are its calls too (ledger.job)
+  appModel?: string | null; // the model the app that asked runs on (claude-opus-5-5): when you have it here, it is the top
 }
+
+// The app's own model among yours, by its name however each provider writes it (claude-opus-5-5, claude-opus-5.5).
+const plainId = (id: string) => id.toLowerCase().replace(/^.*\//, "").replace(/[^a-z0-9]/g, "");
+export const isAppModel = (m: Pick<Model, "id">, appModel: string | null | undefined) => !!appModel && plainId(m.id) === plainId(appModel);
 
 const running = new Set<{ ac: AbortController; done: Promise<void> }>();
 let held = 0; // what the comparisons still running are expected to cost: counted against the month's limit until they end
@@ -67,7 +72,10 @@ export function sideBySidePick(x: SideInput): { top: Model; judge: Model; cost: 
   const ready = (m: Model) => m.id !== x.doer.id && m.id !== CODEX_ID && !isRetired(m, day) && x.allowed(m) && !resting(m.id); // not one resting after failing (rest.ts)
   const best = (ms: Model[]) => ms.sort((a, b) => (rating(b, task) ?? 0) - (rating(a, task) ?? 0))[0] ?? null;
   const above = (m: Model) => { const r = rating(m, task); return r !== null && (r0 === null || r > r0); }; // an unrated model (most local ones): any rated one
-  const top = best(usableModels((m) => ready(m) && fits(m, chars, x.maxOut) && above(m)));
+  // The app's own model, when you have it here: the comparison is then a sample of the app doing the part alone (its
+  // real tokens and its grade against the hand off's answer). Else the best rated model above the one that answered.
+  const own = x.appModel ? usableModels((m) => ready(m) && fits(m, chars, x.maxOut) && isAppModel(m, x.appModel))[0] ?? null : null;
+  const top = own ?? best(usableModels((m) => ready(m) && fits(m, chars, x.maxOut) && above(m)));
   if (!top) return null; // the model that answered is the best you ticked for this
   const outGuess = Math.min(x.maxOut, Math.ceil(x.answer.length / 3) * 2);
   const judgeChars = chars + x.answer.length + outGuess * 3 + JUDGE_SYSTEM.length;
@@ -97,8 +105,8 @@ async function compare(x: SideInput, top: Model, judge: Model, signal: AbortSign
   const charged = (r: { meta: any; status: string }): number | null => (r.meta?.spent !== undefined ? r.meta.spent : r.meta?.cost ?? (r.status === "ok" ? null : 0));
   const write = (verdict: SideVerdict, first: string | null, topCost: number | null, judgeCost: number | null, judgeId: string | null) => {
     const d = now();
-    db.query("INSERT INTO comparisons(ts, month, day, handoff, kind, effort, model, top_model, judge, shown_first, verdict, top_cost, judge_cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(d.toISOString(), localMonth(d), localDay(d), x.handoff, x.kind, x.effort, x.doer.id, top.id, judgeId, first, verdict, topCost, judgeCost);
+    db.query("INSERT INTO comparisons(ts, month, day, handoff, kind, effort, model, top_model, judge, shown_first, verdict, top_cost, judge_cost, app_alone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(d.toISOString(), localMonth(d), localDay(d), x.handoff, x.kind, x.effort, x.doer.id, top.id, judgeId, first, verdict, topCost, judgeCost, isAppModel(top, x.appModel) ? 1 : 0);
   };
   const t = await runChat(x.messages, top.id, signal, () => {}, "Side by side", { system: x.system, source: "sidebyside", guess: x.guess, only: (m) => m.id === top.id, maxOut: x.maxOut, optional: true, job: x.job });
   if (t.status !== "ok") { write("failed", null, charged(t), null, null); return; }

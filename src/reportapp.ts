@@ -30,6 +30,8 @@ export const REPORT_APP_HTML = `<!doctype html>
   .tile .l { color: var(--muted); font-size: 12px; }
   .tile .v { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
   .tile .s { color: var(--muted); font-size: 12px; }
+  .tile .v.est { color: #6b4fd6; } /* an estimate: purple, as in Leanfare's report */
+  :root[data-theme="dark"] .tile .v.est { color: #a796f7; }
   .box { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; min-width: 0; }
   .box h2 { font-size: 13px; margin: 0 0 6px; }
   .legend { display: flex; gap: 14px; color: var(--muted); font-size: 12px; }
@@ -90,8 +92,10 @@ export const REPORT_APP_HTML = `<!doctype html>
     return d.toLocaleDateString(undefined, { weekday: "short" }) + " " + d.getDate();
   }
   function when(iso, d) {
+    // The day and the time apart, joined with a comma, so every computer shows the same "Oct 20, 10:05 AM".
     const t = new Date(iso), long = Date.parse(d.to) - Date.parse(d.from) > 86400000;
-    return long ? t.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : t.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    const time = t.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    return long ? t.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + ", " + time : time;
   }
   function chart(d) {
     const box = el("div", { class: "chart" });
@@ -140,9 +144,10 @@ export const REPORT_APP_HTML = `<!doctype html>
       const max = Math.max(1, ...d.byModel.map((m) => m.read));
       kids.push(
         el("div", { class: "tiles" },
-          el("div", { class: "tile" }, el("div", { class: "l", text: "Kept out" }), el("div", { class: "v", text: tok(t.kept.tokens) }), el("div", { class: "s", text: t.kept.share !== null ? pct(t.kept.share) + " of " + (t.kept.measuredIn || "your apps") + "'s use" + (t.kept.share === 0 ? ": nothing handed off there" : "") : "read by Leanfare's models, not your apps" })),
+          t.both ? el("div", { class: "tile" }, el("div", { class: "l", text: "Saved (estimate)" }), el("div", { class: "v est", text: "≈ " + tok(Math.max(0, t.both.saved.mid)) }), el("div", { class: "s", text: (t.both.app || "your apps") + " alone ≈ " + tok(t.both.alone.mid) + ", minus the hand offs' own cost ≈ " + tok(t.both.spent) }))
+            : el("div", { class: "tile" }, el("div", { class: "l", text: "Kept out" }), el("div", { class: "v", text: tok(t.kept.tokens) }), el("div", { class: "s", text: t.kept.share !== null ? pct(t.kept.share) + " of " + (t.kept.measuredIn || "your apps") + "'s use" + (t.kept.share === 0 ? ": nothing handed off there" : "") : "read by Leanfare's models, not your apps" })),
           el("div", { class: "tile" }, el("div", { class: "l", text: "Cost" }), el("div", { class: "v", text: usd(t.cost.usd) }), el("div", { class: "s", text: pct(t.cost.freeShare) + " free or on this computer" })),
-          el("div", { class: "tile" }, el("div", { class: "l", text: "Quality" }), el("div", { class: "v", text: t.quality.graded ? pct(t.quality.goodShare) + " good" : "not graded" }), el("div", { class: "s", text: t.quality.blind ? t.quality.blind + " judged blind" : "graded by your app" }))),
+          el("div", { class: "tile" }, el("div", { class: "l", text: "Quality" }), el("div", { class: "v", text: t.quality.graded ? pct(t.quality.goodShare) + " good" : "not graded" }), el("div", { class: "s", text: (t.quality.blind ? t.quality.blind + " judged blind" : "graded by your app") + (t.three && t.three.together.graded ? " · together " + pct(t.three.together.good / t.three.together.graded) + " good" : "") }))),
         el("div", { class: "box" }, el("div", { class: "legend" }, el("span", { class: "k1", text: "Kept out" }), t.own.measured ? el("span", { class: "k2", text: "Used by your apps (measured)" }) : null), chart(d)),
         el("div", { class: "box" }, el("h2", { text: "Work by model" }), d.byModel.map((m) => el("div", { class: "bar" },
           el("span", { class: "n" }, m.label, el("small", { text: m.where === "paid" ? usd(m.cost) : WHERE[m.where] })),

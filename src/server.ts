@@ -22,7 +22,7 @@ import { CODEX_ID, codexState } from "./codex";
 import { GRADED_KINDS, VERDICTS, addGrade, giveAnotherChance, standing, standingText, standings } from "./grades";
 import { plansBrief, plansView } from "./plans";
 import { meterViews, setStatusline } from "./meter";
-import { checkDelegate, gradeRow, runDelegate, startDelegate, stopDelegates, waitDelegate } from "./delegate";
+import { checkDelegate, gradeRow, gradeTogether, runDelegate, startDelegate, stopDelegates, waitDelegate } from "./delegate";
 import { sideMonth, sideStandings, sideText, stopSideBySide } from "./sidebyside";
 import { endRest } from "./rest";
 import { checkReport, report } from "./report";
@@ -477,6 +477,13 @@ async function api(req: Request, url: URL): Promise<Response> {
     const b = await readBody(req);
     if (typeof b?.model !== "string" || b.model.length > 200) return fail(400, "model is needed.");
     return json({ ended: endRest(b.model) });
+  }
+  // A prompt's whole result, the app and its hand offs together (report.ts): from the app (its last hand off in the
+  // last 6 hours), or from you in the report (a hand off of that prompt, by its number).
+  if (p === "/api/grades/together" && m === "POST") {
+    const b = await readBody(req);
+    if (!VERDICTS.includes(b?.verdict)) return fail(400, "verdict must be good, partly or wrong.");
+    return json({ ok: gradeTogether(b.verdict, Number.isInteger(b.handoff) ? { row: b.handoff, by: "you" } : { app: typeof b.app === "string" ? b.app.slice(0, 60) : null, by: "app" }) });
   }
   if (p === "/api/grades/reset" && m === "POST") {
     const b = await readBody(req);

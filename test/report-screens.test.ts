@@ -1,7 +1,7 @@
 // The report at the top of the Savings tab (report.ts, ui/app.js): four tiles, tokens over time, work by model,
 // quality by kind, each prompt with its parts and its app's own row, a span or a filter asked again, and the CSV.
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { db } from "../src/db";
 import { forgetLogs } from "../src/plans";
@@ -43,25 +43,26 @@ beforeEach(async () => {
 });
 
 describe("the report", () => {
-  test("four tiles, tokens over time, work by model, quality by kind and the prompts", async () => {
+  test("four tiles (both sides), tokens over time, work by model, quality by kind and the prompts", async () => {
     const doc = await open(url);
     await goReport(doc);
     const tiles = [...doc.querySelectorAll("#reportCard .rp-tile")].map((t: any) => t.textContent);
-    expect(tiles[0]).toContain("Kept out of your plans40k tokens");
-    expect(tiles[0]).toContain("91% of Claude Code's use"); // 30k of 30k + 3k measured; the Claude chat's is not known
-    expect(tiles[1]).toContain("3k new tokens");
-    expect(tiles[1]).toContain("Claude: not known · Claude Code 3k, measured · 40k more read again from the cache");
-    expect(tiles[2]).toContain("50% of parts free or on this computer · 2 parts in 2 prompts");
-    expect(tiles[3]).toContain("50% good");
+    // Saved, an estimate: Claude alone (30.5k and 10.9k: the files read, the answers written), less what handing them off
+    // cost it (the tasks and receipts at a typical size before 0.10, and the answers read back: 0.7k and 1.1k).
+    expect(tiles[0]).toBe("Saved for Claude estimate≈ 40kClaude alone ≈ 41k, minus the hand offs' own cost ≈ 2k (the tasks, and the answers read back). Range 27k to 54k.");
+    expect(tiles[1]).toBe("Outside models used not knownNot measured yet$0.0030, 50% of parts free · 2 older parts not measured");
+    expect(tiles[2]).toBe("Claude's own use measured3k new tokensClaude: not known · Claude Code, from its own files · 40k more read again from the cache");
+    expect(tiles[3]).toBe("Quality, three waysOutside answers50% goodTogethernot gradedClaude alonenot known2 outside answers graded, 0 prompts graded together, 0 sampled runs of Claude alone");
     expect(doc.querySelectorAll("#reportCard .rp-chart path.l1, #reportCard .rp-chart path.l2")).toHaveLength(2);
     expect([...doc.querySelectorAll("#reportCard .rp-bar .nm span")].map((e: any) => e.textContent)).toEqual(["Gemini 3.8 Flash", "DeepSeek V4 Flash"]);
     expect([...doc.querySelectorAll("#reportCard .rp-kind .nm b")].map((e: any) => e.textContent)).toEqual(["Reading", "Drafting"]);
     const rows = [...doc.querySelectorAll("#reportCard tr.pr")].map((r: any) => [...r.querySelectorAll("td")].map((td: any) => td.textContent.trim()));
-    expect(rows.map((r) => [r[0], r[2], r[3], r[4], r[6], r[7], r[9]])).toEqual([
-      ["▸PRM-2", "Claude", "Claude Opus 5.5", "not known", "10k", "—", "× wrong"],
-      ["▸PRM-1", "Claude Code", "Claude Opus 5.5", "100 → 1k", "30k", "91%", "✓ good"],
+    expect(rows.map((r) => r.filter((_, i) => i !== 1))).toEqual([
+      ["▸PRM-2", "Claude · Claude Opus 5.5", "not measured", "≈ 11krange 7k to 16k", "≈ 10k", "not known", "× wrong", "not graded", "not known"],
+      ["▸PRM-1", "Claude Code · Claude Opus 5.5", "not measured", "≈ 31krange 21k to 41k", "≈ 30k", "3k newmeasured", "✓ good", "not graded", "not known"],
     ]);
-    expect([...doc.querySelectorAll("#reportCard thead th")].map((th: any) => th.textContent).slice(0, 3)).toEqual(["ID", "When", "App"]);
+    expect([...doc.querySelectorAll("#reportCard thead th")].map((th: any) => th.textContent))
+      .toEqual(["ID", "When", "App · main model", "Tokens", "Grades", "Outside used", "Claude alone", "Saved", "Claude used, whole prompt", "Outside", "Together", "Claude alone"]);
     expect(bad(doc)).toBe(false);
   });
 
@@ -69,13 +70,17 @@ describe("the report", () => {
     const doc = await open(url);
     await goReport(doc);
     ([...doc.querySelectorAll("#reportCard tr.pr")] as any[])[1].click();
-    await waitFor(() => doc.querySelectorAll("#reportCard tr.part").length === 2);
+    await waitFor(() => doc.querySelectorAll("#reportCard tr.part").length === 3);
     const parts = [...doc.querySelectorAll("#reportCard tr.part")].map((r: any) => r.textContent);
     expect(doc.querySelector("#reportCard tr.part td.pid").textContent).toBe("PRM-1.1");
-    expect(parts[0]).toContain("reading");
-    expect(parts[0]).toContain("30k read → 500");
-    expect(parts[0]).toContain("free · 6 s");
+    expect(parts[0]).toBe("PRM-1.1Oct 20, 10:05 AMreading · Gemini 3.8 Flashfree · 6 snot measured (before 0.10)≈ 31kreads what it read, thinks and writes as Gemini 3.8 Flash did (from its numbers)≈ 30kminus 500 read back, 200 for the call✓ goodby Claude Codenot sampled");
     expect(parts[1]).toContain("prompt 100, its own work 3k new tokens (measured), 40k more read again from the cache");
+    // The whole result, graded here: kept with the prompt's last part, and shown on the prompt.
+    expect(parts[2]).toBe("The whole result, Claude Code and the hand offs together: ✓ good~ partly× wrong");
+    ([...doc.querySelectorAll("#reportCard tr.part button")] as any[]).find((b) => b.textContent === "~ partly").click();
+    await waitFor(() => doc.querySelector("#reportCard tr.pr:nth-child(2)")?.querySelectorAll("td")[8]?.textContent === "~ partly");
+    expect((db.query("SELECT together, together_by FROM delegations WHERE app = 'Claude Code'").get() as any)).toEqual({ together: "partly", together_by: "you" });
+    expect(doc.querySelector("#reportCard .rp-tile:nth-child(4)").textContent).toContain("1 prompt graded together");
   });
 
   test("a span or a filter is asked again, and the CSV holds the prompts and their parts", async () => {
@@ -103,7 +108,7 @@ describe("the report", () => {
     const doc = await open(url, { screen: "plan", hash: "#report" });
     await waitFor(() => !!doc.querySelector("#reportCard .rp-tiles"));
     expect(doc.querySelector('.tabs button[data-tab="savings"]').getAttribute("aria-selected")).toBe("true");
-    expect(doc.querySelector("#reportCard .rp-tile").textContent).toContain("Kept out of your plans");
+    expect(doc.querySelector("#reportCard .rp-tile").textContent).toContain("Saved for Claude");
   });
 
   test("a project's name that starts like a formula stays text in the CSV", async () => {
@@ -126,5 +131,11 @@ describe("the report", () => {
     doc.querySelector('.tabs button[data-tab="savings"]').click();
     await waitFor(() => !!doc.querySelector("#reportCard")?.textContent.includes("Nothing in this span yet"));
     expect(doc.querySelector("#reportCard").textContent).toContain("Nothing in this span yet.");
+  });
+  test("a prompt's day and time are written apart, so every computer shows the same \"Oct 20, 10:05 AM\"", () => {
+    // Asked for the day and the time in one call, some versions of the system's date library write "Oct 20 at
+    // 10:05 AM" and others "Oct 20, 10:05 AM", so the same page read differently on two computers.
+    const together = /toLocaleString\(undefined, \{[^}]*\bmonth\b[^}]*\bhour\b|toLocaleString\(undefined, \{[^}]*\bhour\b[^}]*\bmonth\b/;
+    for (const f of ["ui/app.js", "src/reportapp.ts"]) expect(readFileSync(join(import.meta.dir, "..", f), "utf8")).not.toMatch(together);
   });
 });

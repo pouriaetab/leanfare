@@ -31,7 +31,18 @@ export interface ReportPart {
   read: number; back: number; cost: number | null; ms: number | null;
   grade: Grade | null; gradedBy: "app" | "check" | null; check: "pass" | "fail" | null; checker: string | null; side: "same" | "better" | "worse" | null; plan: string | null;
   used: Used | null; // what the outside models used for it, measured from its calls (null: a hand off before 0.10, or a plan part run elsewhere)
+  both: Both; // the app's side: what it would have used doing the part alone (an estimate), what handing it off cost it, the saving
+  together: Grade | null; togetherBy: "app" | "you" | null; // the prompt's whole result, kept with this part
+  alone: AloneSample | null; // a sample of the app's own model doing the part, judged blind against this answer (side by side)
 }
+// A number Leanfare estimates: the middle, and how low or high it may be.
+export interface Est { mid: number; low: number; high: number }
+// Both sides of a hand off, in tokens the app would have used (new tokens, as its own use is counted). alone: the app
+// doing the part itself, from the outside model's numbers (v1): reading what it read, thinking as it did and writing
+// what it wrote; rough, so a wide range. spent: what the app used to hand it off, measured from sizes: the task it
+// wrote, the answer and receipt it read back. saved: alone less spent.
+export interface Both { alone: Est; spent: number; saved: Est; how: "outside" }
+export interface AloneSample { model: string; label: string; verdict: "same" | "better" | "worse"; grade: Grade | null; used: number | null }
 // Tokens the outside models used, measured from the provider's own counts: what they read (the task and files, every
 // call), their thinking where it is known, and what they wrote. thought null: not known for some call; estimated: from
 // a thinking text, about four characters a token. calls: answers, second tries, checks and side by side, failed ones too.
@@ -46,6 +57,9 @@ export interface ReportPrompt {
   own: Own | null; // null: the app does not say
   parts: ReportPart[]; kept: number; back: number; cost: number; saved: number | null; grade: Grade | null;
   used: Used | null; // what the outside models used for its parts, measured (null: none of them was)
+  both: { alone: Est; spent: number; saved: Est } | null; // its parts' both sides, summed (null: nothing handed off)
+  together: Grade | null; togetherBy: "app" | "you" | null; // its whole result, the app and the hand offs together
+  alone: { grade: Grade | null; samples: number } | null; // the app alone, from its parts' samples (null: none sampled)
 }
 
 // From and to of a range, by this computer's clock: today starts at local midnight.
@@ -125,11 +139,46 @@ export function sumUsed(us: (Used | null)[]): Used | null {
     calls: sum((u) => u.calls), failed: sum((u) => u.failed), estimated: xs.some((u) => u.estimated), byRole: {} };
 }
 
+// The app's side of a hand off (v1, from the outside model's numbers). A task or receipt not kept (before 0.10) is
+// taken at a typical size.
+const ASK_TYPICAL = 80, REPLY_TYPICAL = 120;
+export function bothOf(x: { read: number; back: number; used: Used | null; ask: number | null; reply: number | null }): Both {
+  const th = x.used?.thought ?? null, thought = th ?? 0;
+  const mid = x.read + thought + x.back;
+  // It may have read less of the files, or more, and thought far more or less than the outside model did; when its
+  // thinking is not known, the range leaves room for as much again as it wrote.
+  const low = Math.round(0.7 * x.read + 0.5 * (thought + x.back));
+  const high = Math.round(1.3 * x.read + 2 * (thought + x.back) + (th === null ? x.back : 0));
+  const spent = (x.ask ?? ASK_TYPICAL) + x.back + (x.reply ?? REPLY_TYPICAL);
+  return { alone: { mid, low, high }, spent, saved: { mid: mid - spent, low: low - spent, high: high - spent }, how: "outside" };
+}
+export const sumRanges = (rs: Est[]): Est => rs.reduce((a, r) => ({ mid: a.mid + r.mid, low: a.low + r.low, high: a.high + r.high }), { mid: 0, low: 0, high: 0 });
+// The app alone, sampled: the app's own model did the part too (side by side), judged blind against the hand off's
+// answer. Its grade follows the hand off's: as good, the same grade; better, good; not as good, one step down.
+const STEP_DOWN: Record<Grade, Grade> = { good: "partly", partly: "wrong", wrong: "wrong" };
+export function aloneGrade(outside: Grade | null, verdict: "same" | "better" | "worse"): Grade | null {
+  if (verdict === "worse") return "good"; // the app's own answer was the better one
+  if (!outside) return null;
+  return verdict === "same" ? outside : STEP_DOWN[outside];
+}
+// The tokens the app's own model used on its sample, from the ledger (the side by side call of that model).
+function sampleTokens(from: number, to: number): Map<string, number> {
+  const out = new Map<string, number>();
+  try {
+    const rows = db.query(`SELECT job, model, SUM(in_tokens + out_tokens) AS n FROM ledger WHERE source = 'sidebyside' AND job IS NOT NULL AND ts >= ? AND ts < ? GROUP BY job, model`)
+      .all(new Date(from).toISOString(), new Date(to + DAY).toISOString()) as any[];
+    for (const r of rows) out.set(`${r.job}|${r.model}`, r.n);
+  } catch {}
+  return out;
+}
+
 // The hand offs and plan parts in a span (finished ones), each with its grade: the app's, else the check's verdict.
 function partsIn(from: number, to: number): (ReportPart & { app: string | null; appModel: string | null; at: number })[] {
   const used = usedIn(from, to);
+  const samples = sampleTokens(from, to);
   const rows = db.query(`SELECT d.id, d.ts, d.kind, d.model, d.rerun, d.cost, d.check_cost, d.rerun_cost, d.file_tokens, d.task_tokens, d.answer_tokens, d.verdict, d.checker, d.grade, d.plan, d.app, d.app_model, d.ms, d.job,
-      c.verdict AS side, COALESCE(c.top_cost, 0) + COALESCE(c.judge_cost, 0) AS side_cost
+      d.ask_tokens, d.reply_tokens, d.together, d.together_by,
+      c.verdict AS side, COALESCE(c.top_cost, 0) + COALESCE(c.judge_cost, 0) AS side_cost, c.app_alone, c.top_model
     FROM delegations d LEFT JOIN comparisons c ON c.handoff = d.id AND c.verdict IN ('same', 'better', 'worse')
     WHERE d.status = 'ok' AND d.ts >= ? AND d.ts < ? ORDER BY d.ts, d.id`).all(new Date(from).toISOString(), new Date(to).toISOString()) as any[];
   const seen = new Set<number>();
@@ -137,20 +186,28 @@ function partsIn(from: number, to: number): (ReportPart & { app: string | null; 
     const model = r.rerun ?? r.model ?? "unknown";
     const grade: Grade | null = ["good", "partly", "wrong"].includes(r.grade) ? r.grade : r.verdict === "pass" ? "good" : r.verdict === "fail" ? "wrong" : null;
     const parts = [r.cost, r.check_cost, r.rerun_cost].filter((v) => v !== null && v !== undefined) as number[];
+    const used1 = r.job ? used.get(r.job) ?? null : null, read = (r.file_tokens ?? 0) + (r.task_tokens ?? 0), back = r.answer_tokens ?? 0;
+    const alone: AloneSample | null = r.app_alone && r.side ? { model: r.top_model, label: labelOf(r.top_model), verdict: r.side, grade: aloneGrade(grade, r.side), used: r.job ? samples.get(`${r.job}|${r.top_model}`) ?? null : null } : null;
     return {
       id: r.id, ref: null, ts: r.ts, at: Date.parse(r.ts), kind: r.kind, model, label: labelOf(model), provider: providerOf(model), where: whereOf(model, r.cost),
-      read: (r.file_tokens ?? 0) + (r.task_tokens ?? 0), back: r.answer_tokens ?? 0,
+      read, back,
       cost: r.cost === null && !parts.length ? null : parts.reduce((a, b) => a + b, 0) + (r.side_cost ?? 0), ms: r.ms ?? null,
       grade, gradedBy: grade === null ? null : ["good", "partly", "wrong"].includes(r.grade) ? "app" : "check",
       check: r.verdict === "pass" || r.verdict === "fail" ? r.verdict : null, checker: r.checker ? labelOf(r.checker) : null,
       side: r.side ?? null, plan: r.plan ? String(r.plan).split(":")[0] : null, app: r.app ?? null, appModel: r.app_model ?? null,
-      used: r.job ? used.get(r.job) ?? null : null,
+      used: used1,
+      both: bothOf({ read, back, used: used1, ask: r.ask_tokens ?? null, reply: r.reply_tokens ?? null }),
+      together: ["good", "partly", "wrong"].includes(r.together) ? r.together : null, togetherBy: r.together ? (r.together_by === "you" ? "you" : "app") : null,
+      alone,
     };
   });
 }
 
 const KIND_ORDER = ["read", "write", "reason", "search", "other"];
 const worst = (gs: (Grade | null)[]): Grade | null => (gs.includes("wrong") ? "wrong" : gs.includes("partly") ? "partly" : gs.includes("good") ? "good" : null);
+// A prompt's whole result: the last grade kept with any of its parts. The app alone: the lowest of its parts' samples.
+const togetherOf = (ps: ReportPart[]) => { const x = [...ps].reverse().find((p) => p.together); return { together: x?.together ?? null, togetherBy: x?.togetherBy ?? null }; };
+const aloneOf = (ps: ReportPart[]) => { const s = ps.filter((p) => p.alone); return s.length ? { grade: worst(s.map((p) => p.alone!.grade)), samples: s.length } : null; };
 
 export async function report(q: ReportQuery, inner = false): Promise<Report> {
   // The first report numbers every prompt it can find, oldest first, so the ids follow time from the start.
@@ -167,7 +224,7 @@ export async function report(q: ReportQuery, inner = false): Promise<Report> {
   for (const [file, ps] of bySession) {
     ps.forEach((p, i) => cc.push({
       key: `cc:${basename(file)}:${p.ts}`, id: null, ts: new Date(p.ts).toISOString(), app: "Claude Code", thread: sessionOf(file), project: p.project,
-      model: null, plan: ccPlan, prompt: Math.ceil(p.chars / 4), own: { fresh: 0, cached: 0, input: 0, output: 0 }, parts: [], kept: 0, back: 0, cost: 0, saved: null, grade: null, used: null,
+      model: null, plan: ccPlan, prompt: Math.ceil(p.chars / 4), own: { fresh: 0, cached: 0, input: 0, output: 0 }, parts: [], kept: 0, back: 0, cost: 0, saved: null, grade: null, used: null, both: null, together: null, togetherBy: null, alone: null,
       start: p.ts, end: ps[i + 1]?.ts ?? Infinity, models: new Map(),
     }));
   }
@@ -201,7 +258,7 @@ export async function report(q: ReportQuery, inner = false): Promise<Report> {
     const samePlan = open && part.plan && open.parts.some((x) => x.plan === part.plan);
     if (!open || open.app !== app || (!samePlan && part.at - open.last > GAP)) {
       open = { key: `h:${part.id}`, id: null, ts: part.ts, app, thread: null, project: null, model: part.appModel ? { id: part.appModel, label: modelName(part.appModel) } : null,
-        plan: planFor(app), prompt: null, own: null, parts: [], kept: 0, back: 0, cost: 0, saved: null, grade: null, used: null, last: part.at, appModel: part.appModel };
+        plan: planFor(app), prompt: null, own: null, parts: [], kept: 0, back: 0, cost: 0, saved: null, grade: null, used: null, both: null, together: null, togetherBy: null, alone: null, last: part.at, appModel: part.appModel };
       others.push(open);
     }
     open.parts.push(part); open.last = part.at;
@@ -230,7 +287,9 @@ export async function report(q: ReportQuery, inner = false): Promise<Report> {
       const kept = p.parts.reduce((n, x) => n + x.read, 0), back = p.parts.reduce((n, x) => n + x.back, 0);
       const out: ReportPrompt = { key: p.key, id: p.id, ts: p.ts, app: p.app, thread: p.thread, project: p.project, model: p.model, plan: p.plan, prompt: p.prompt, own: p.own, parts: p.parts,
         kept, back, cost: p.parts.reduce((n, x) => n + (x.cost ?? 0), 0), saved: p.own ? (kept + p.own.fresh > 0 ? kept / (kept + p.own.fresh) : null) : null, grade: worst(p.parts.map((x) => x.grade)),
-        used: sumUsed(p.parts.map((x) => x.used)) };
+        used: sumUsed(p.parts.map((x) => x.used)),
+        both: p.parts.length ? { alone: sumRanges(p.parts.map((x) => x.both.alone)), spent: p.parts.reduce((n, x) => n + x.both.spent, 0), saved: sumRanges(p.parts.map((x) => x.both.saved)) } : null,
+        ...togetherOf(p.parts), alone: aloneOf(p.parts) };
       return out;
     })
     .sort((a, b) => (a.ts < b.ts ? 1 : -1));
@@ -254,6 +313,20 @@ export async function report(q: ReportQuery, inner = false): Promise<Report> {
     own: { fresh: freshKnown, cached: known.reduce((n, p) => n + p.own!.cached, 0), measured: known.length, notKnown: shown.length - known.length,
       byApp: [...new Set(shown.map((p) => p.app))].map((app) => ({ app, measured: shown.some((p) => p.app === app && p.own), fresh: shown.filter((p) => p.app === app && p.own).reduce((n, p) => n + p.own!.fresh, 0) })) },
     cost: { usd: ps.reduce((n, x) => n + (x.cost ?? 0), 0), freeShare: ps.length ? ps.filter((x) => x.where !== "paid").length / ps.length : null, parts: ps.length, prompts: shown.length },
+    // Both sides (0.10): what the apps would have used doing the parts alone, what handing them off cost, the saving.
+    both: (() => {
+      const bs = shown.filter((p) => p.both);
+      if (!bs.length) return null;
+      const apps = [...new Set(bs.map((p) => p.app))];
+      return { alone: sumRanges(bs.map((p) => p.both!.alone)), spent: bs.reduce((n, p) => n + p.both!.spent, 0), saved: sumRanges(bs.map((p) => p.both!.saved)), app: apps.length === 1 ? apps[0] : null };
+    })(),
+    // Quality three ways: the outside answers (the app's grades, else the blind checks), the whole results together,
+    // and the app alone where sampled.
+    three: {
+      outside: { graded, good: counts.good },
+      together: { graded: shown.filter((p) => p.together).length, good: shown.filter((p) => p.together === "good").length },
+      alone: { sampled: ps.filter((x) => x.alone).length, graded: ps.filter((x) => x.alone?.grade).length, good: ps.filter((x) => x.alone?.grade === "good").length },
+    },
     // What the outside models used, measured (0.10 on): the parts that have it, and how many do not (older ones).
     outside: { ...(sumUsed(ps.map((x) => x.used)) ?? { read: 0, thought: 0, wrote: 0, calls: 0, failed: 0, estimated: false }), byRole: undefined, measured: ps.filter((x) => x.used).length, notMeasured: ps.filter((x) => !x.used).length },
     quality: { ...counts, graded, goodShare: graded ? counts.good / graded : null, blind: blind.length, judge: [...judges.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null },
