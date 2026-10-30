@@ -1929,6 +1929,16 @@
         h("span", { class: "tiny", text: `${m.rest.why[0].toUpperCase()}${m.rest.why.slice(1)}. Auto picks others until then.${notes.length ? ` Also ${notes.join("; ")}.` : ""}` }),
         h("button", { class: "btn small", type: "button", text: "Try it now", onclick: wake })];
     }
+    if (m.noQuota) { // your key has no quota for it (quota.ts): left out until Try again or a new key
+      const again = async (e) => {
+        e.target.disabled = true;
+        try { await api("/api/quota/clear", { body: { model: m.id } }); } catch {}
+        loadReport();
+      };
+      return [h("span", { class: "chip warn", text: "left out" }),
+        h("span", { class: "tiny", text: `${m.noQuota.why[0].toUpperCase()}${m.noQuota.why.slice(1)}. Auto leaves it out until you try it again or add another key.${notes.length ? ` Also ${notes.join("; ")}.` : ""}` }),
+        h("button", { class: "btn small", type: "button", text: "Try again", onclick: again })];
+    }
     return [h("span", { class: "chip good", text: "ready" }), notes.length ? h("span", { class: "tiny", text: notes.join("; ") }) : null];
   }
   function reportSpeedEl(d) {
@@ -1954,7 +1964,7 @@
           h("th", { class: "num" }, "First word", h("span", { class: "tiny", text: "middle · slowest 1 in 10" })),
           h("th", { class: "num" }, "Whole answer", h("span", { class: "tiny", text: "middle · slowest 1 in 10" })),
           h("th", { class: "num", text: "Writes" }), h("th", { class: "num", text: "Cost a call" }), h("th", { class: "num", text: "Good" }), h("th", { text: "Now" }))),
-        h("tbody", {}, ...rows.map((m) => h("tr", { class: m.rest ? "resting" : null },
+        h("tbody", {}, ...rows.map((m) => h("tr", { class: m.rest ? "resting" : m.noQuota ? "resting noquota" : null },
           h("td", { class: "nm" }, h("b", { text: m.label }), h("span", { class: "tiny", text: spWhere(m) })),
           h("td", { class: "num", text: num(m.calls) }),
           h("td", {}, m.failed ? [h("span", { class: "fail", text: `${num(m.failed)} failed` }), h("span", { class: "tiny", text: spFails(m) })] : h("span", { class: "muted", text: "none" })),
@@ -2551,9 +2561,17 @@
     if (m.retired) notes.push("retired " + m.retire);
     else if (m.retiringSoon) notes.push("retires " + m.retire);
     if (m.ratingFrom) notes.push("rating borrowed from " + m.ratingFrom);
-    return h("label", { class: "mrow", title: m.id },
+    // Left out because your key has no quota for it (quota.ts): why, and Try again.
+    const nq = (S.st.noQuota ?? []).find((q) => q.model === m.id);
+    if (nq) notes.push(`left out: ${nq.why}`);
+    const again = nq ? h("button", { class: "btn small", type: "button", text: "Try again", onclick: async (e) => {
+      e.preventDefault(); e.stopPropagation(); e.target.disabled = true;
+      try { const r = await api("/api/quota/clear", { body: { model: m.id } }); S.st = r.state; toast(`${m.label} may be picked again.`, "done"); } catch (err) { toast(err.message, "error"); }
+      renderSettings();
+    } }) : null;
+    return h("label", { class: "mrow" + (nq ? " noquota" : ""), title: m.id },
       h("input", { type: "checkbox", checked: m.ticked, onchange: (e) => tick([m.id], e.target.checked) }),
-      h("span", { class: "nm" }, m.label, notes.length ? h("small", { text: notes.join(" · ") }) : null),
+      h("span", { class: "nm" }, m.label, notes.length ? h("small", { text: notes.join(" · ") }) : null, again),
       h("span", { class: "facts" }, ...facts));
   }
 
