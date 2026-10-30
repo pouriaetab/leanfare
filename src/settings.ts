@@ -38,7 +38,7 @@ export interface Settings {
   effort: Effort; // how hard thinking models think on the chat screen
   accessKey: string | null; // when set, other apps must send it (see lock.ts); null: no key needed
   custom: CustomProvider[]; // providers you added: a name and an address that speaks OpenAI's format (providers.ts)
-  speed: SpeedChoice; // at the same quality: the cheapest, the fastest, or the cheapest expected within N seconds (speed.ts)
+  speed: SpeedChoice; // at the same quality: the cheapest, a balance of time and cost, the fastest, or the cheapest expected within N seconds (speed.ts)
   updateCheck: boolean; // ask GitHub once a day whether a newer Leanfare is out (update.ts)
   showValue: boolean; // Savings: also show what subscription use would cost per use (at API prices); off: tokens and limits only
   brief: boolean; // the chat screen's answers: short (the answer first, a table or a short list), more only when asked
@@ -146,7 +146,7 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
     }
     out.plans = plans;
   }
-  if ("speed" in p) { const v = parseSpeed(p.speed); if (v === null) return { error: "speed must be cheapest, fastest, or a number of seconds from 1 to 3600" }; out.speed = v; }
+  if ("speed" in p) { const v = parseSpeed(p.speed); if (v === null) return { error: "speed must be cheapest, balanced, fastest, or a number of seconds from 1 to 3600" }; out.speed = v; }
   if ("atLimit" in p) { if (p.atLimit !== "cheapest" && p.atLimit !== "stop") return { error: "atLimit must be cheapest or stop" }; out.atLimit = p.atLimit; }
   if ("history" in p) out.history = !!p.history;
   if ("updateCheck" in p) out.updateCheck = !!p.updateCheck;
