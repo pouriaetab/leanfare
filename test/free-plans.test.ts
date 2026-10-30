@@ -57,6 +57,20 @@ describe("a free plan, said in Settings", () => {
   });
 });
 
+describe("Auto counts a free plan's answers at $0 when it picks", () => {
+  test("a free Gemini key beats a cheaper paid model, as the ledger counts it; without the free plan, the list price", async () => {
+    const GEMINI = "google/gemini-3.8-flash";
+    await reset({ ticked: [GEMINI, DEEPSEEK], mode: "save" });
+    await keys("google", "deepseek");
+    const paid = await runChat([{ role: "user", content: "Hi" }], "auto", new AbortController().signal, () => {});
+    expect(paid.meta.model.id).toBe(DEEPSEEK); // the cheaper list price
+    saveSettings({ providers: { google: { on: true, free: true } } });
+    const free = await runChat([{ role: "user", content: "Hi" }], "auto", new AbortController().signal, () => {});
+    expect(free.meta.model.id).toBe(GEMINI);
+    expect(free.meta.reason).toContain("the cheapest of the 2 within reach");
+  });
+});
+
 describe("Groq's free plan takes only what fits its tokens a minute", () => {
   test("8,000 tokens a minute, the answer included", () => {
     saveSettings({ providers: { groq: { on: true, free: true } } });
