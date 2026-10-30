@@ -16,6 +16,7 @@ import { keepingFolderTimes } from "./foldertime";
 import { claudeSettingsFile, readClaudeSettings, writeClaudeSettings } from "./meter";
 import { selfCommand } from "./self";
 import { quote } from "./statusline";
+import { remindersLately } from "./readhook";
 
 const home = () => (process.platform === "win32" ? homedir() : process.env.HOME || homedir());
 const claudeDir = () => process.env.CLAUDE_CONFIG_DIR?.split(",")[0]?.trim() || join(home(), ".claude");
@@ -25,10 +26,17 @@ export const START = "<!-- leanfare:start -->";
 export const END = "<!-- leanfare:end -->";
 const OWN = "(Leanfare wrote this file. Take it out in Leanfare's Settings, In your apps.)";
 
+// What the app is told (0.11: by size and kind, not only "a task with several parts", which Claude judged most prompts
+// not to be: in a week of Plan by itself, Claude Code handed off nothing in 112 prompts).
+const BY_SIZE = `Before you read a file you will not change that is big (a log, data, docs or notes of about 40 KB or more, any other file over about 200 KB), or more than 5 files to answer one question, hand the reading to Leanfare's delegate tool (kind read, the files as full paths, and a task that says what to find): only the answer comes back, and the files stay out of your context. Keep for yourself the files you will change, short files, and anything you must quote exactly.`;
 const RULE_CLAUDE = `## Leanfare
 
-For a task with several parts (a feature, a fix across files, research across many files), call Leanfare's plan tool first and follow its table: run the parts it gives to Leanfare with delegate (several in the same turn) or with the leanfare-worker subagent (one per part, at once), or call plan_run to run them in the background and plan_status for their answers. Do the parts it leaves to you yourself. Once you have used an answer of Leanfare's, grade it with Leanfare's grade tool (good, partly or wrong), so the models that do badly are moved down. Leanfare's parts run on local, free or cheap models, so your Claude plan lasts longer.`;
+Leanfare hands reading and searching to free or cheap models, so your Claude plan lasts longer. ${BY_SIZE}
+
+For a task with several parts (a feature, a fix across files, research across many files), call Leanfare's plan tool first and follow its table: run the parts it gives to Leanfare with delegate (several in the same turn) or with the leanfare-worker subagent (one per part, at once), or call plan_run to run them in the background and plan_status for their answers. Do the parts it leaves to you yourself. Once you have used an answer of Leanfare's, grade it with Leanfare's grade tool (good, partly or wrong), so the models that do badly are moved down.`;
 const RULE_OTHER = `## Leanfare
+
+Leanfare hands reading and searching to free or cheap models, so your plan lasts longer. ${BY_SIZE}
 
 For a task with several parts (a feature, a fix across files, research across many files), call Leanfare's plan tool first and follow its table: run the parts it gives to Leanfare with delegate (several in the same turn), or call plan_run to run them in the background and plan_status for their answers. Do the parts it leaves to you yourself. Once you have used an answer of Leanfare's, grade it with Leanfare's grade tool (good, partly or wrong), so the models that do badly are moved down.`;
 
@@ -121,39 +129,51 @@ function setBlock(file: string, body: string | null) {
   writeAtomic(file, after); // a file left empty stays, empty: it may have been there before Leanfare
 }
 
-// ---- Claude Code's prompt hook ----------------------------------------------------------------
+// ---- Claude Code's hooks: the prompt hook, and the read hook (0.11) ---------------------------------
 
+// The prompt hook says how much of your Claude plan is left as each prompt goes; the read hook reminds Claude Code once
+// before it reads a big file itself (readhook.ts). Both are Leanfare's own entries in ~/.claude/settings.json.
 export const hookCommand = () => { const c = selfCommand(); return [c.command, ...c.args].map(quote).join(" ") + " hook prompt"; };
-const isOurHook = (cmd: unknown) => typeof cmd === "string" && /(^|[\s'"/\\])(leanfare(\.exe)?|cli\.ts)['"]?\s+hook\s+prompt\b/i.test(cmd);
-function hookIn(j: any): boolean {
-  const groups = j?.hooks?.UserPromptSubmit;
-  return Array.isArray(groups) && groups.some((g: any) => Array.isArray(g?.hooks) && g.hooks.some((h: any) => isOurHook(h?.command)));
-}
+export const readHookCommand = () => { const c = selfCommand(); return [c.command, ...c.args].map(quote).join(" ") + " hook read"; };
+const ourHook = (what: "prompt" | "read") => (cmd: unknown) => typeof cmd === "string" && new RegExp(`(^|[\\s'"/\\\\])(leanfare(\\.exe)?|cli\\.ts)['"]?\\s+hook\\s+${what}\\b`, "i").test(cmd);
+const isOurHook = ourHook("prompt"), isOurReadHook = ourHook("read");
+const HOOKS = [
+  { event: "UserPromptSubmit", ours: isOurHook, entry: () => ({ hooks: [{ type: "command", command: hookCommand(), timeout: 5 }] }), command: hookCommand },
+  { event: "PreToolUse", ours: isOurReadHook, entry: () => ({ matcher: "Read", hooks: [{ type: "command", command: readHookCommand(), timeout: 5 }] }), command: readHookCommand },
+];
+const has = (j: any, h: (typeof HOOKS)[number], exact = false) => {
+  const groups = j?.hooks?.[h.event];
+  return Array.isArray(groups) && groups.some((g: any) => Array.isArray(g?.hooks) && g.hooks.some((x: any) => (exact ? x?.command === h.command() : h.ours(x?.command))));
+};
+function hookIn(j: any): boolean { return HOOKS.every((h) => has(j, h)); }
+const hookAny = (j: any) => HOOKS.some((h) => has(j, h));
+const hookUpToDate = (j: any) => HOOKS.every((h) => has(j, h, true));
 function setHook(on: boolean) {
   const j = readClaudeSettings();
-  if (on === hookIn(j) && (!on || hookUpToDate(j))) return;
+  if (on ? hookIn(j) && hookUpToDate(j) : !hookAny(j)) return;
   const hooks = j.hooks && typeof j.hooks === "object" && !Array.isArray(j.hooks) ? j.hooks : {};
-  const groups: any[] = (Array.isArray(hooks.UserPromptSubmit) ? hooks.UserPromptSubmit : [])
-    .map((g: any) => (Array.isArray(g?.hooks) ? { ...g, hooks: g.hooks.filter((h: any) => !isOurHook(h?.command)) } : g))
-    .filter((g: any) => !Array.isArray(g?.hooks) || g.hooks.length);
-  if (on) groups.push({ hooks: [{ type: "command", command: hookCommand(), timeout: 5 }] });
-  if (groups.length) hooks.UserPromptSubmit = groups; else delete hooks.UserPromptSubmit;
+  for (const h of HOOKS) {
+    const groups: any[] = (Array.isArray(hooks[h.event]) ? hooks[h.event] : [])
+      .map((g: any) => (Array.isArray(g?.hooks) ? { ...g, hooks: g.hooks.filter((x: any) => !h.ours(x?.command)) } : g))
+      .filter((g: any) => !Array.isArray(g?.hooks) || g.hooks.length);
+    if (on) groups.push(h.entry());
+    if (groups.length) hooks[h.event] = groups; else delete hooks[h.event];
+  }
   if (Object.keys(hooks).length) j.hooks = hooks; else delete j.hooks;
   writeClaudeSettings(j);
 }
-const hookUpToDate = (j: any) => j.hooks.UserPromptSubmit.some((g: any) => Array.isArray(g?.hooks) && g.hooks.some((h: any) => h?.command === hookCommand()));
 
 export { hookLine } from "./statusline"; // the line itself lives with the status line's, so the hook starts as fast
 
 // ---- the apps ---------------------------------------------------------------------------------
 
-export interface AutoView { on: boolean; partly: boolean; what: string } // partly: some of it is there (Turn off takes it out)
+export interface AutoView { on: boolean; partly: boolean; what: string; reminders?: { n: number; kb: number } } // partly: some of it is there (Turn off takes it out); reminders: the read hook's last 7 days
 interface AutoDef { files: () => { rule: string; agent?: string }; hook?: boolean; rule: string; what: string }
 export const AUTO: Record<string, AutoDef> = {
   "claude-code": { files: () => ({ rule: join(claudeDir(), "CLAUDE.md"), agent: join(claudeDir(), "agents", "leanfare-worker.md") }), hook: true, rule: RULE_CLAUDE,
-    what: "Plan by itself: a line in CLAUDE.md, a worker subagent (leanfare-worker, on Haiku) for Leanfare's parts, and a prompt hook that says how much of your plan is left" },
-  codex: { files: () => ({ rule: join(codexDir(), "AGENTS.md") }), rule: RULE_OTHER, what: "Plan by itself: a line in AGENTS.md that has Codex call Leanfare's plan for a task with several parts" },
-  "gemini-cli": { files: () => ({ rule: join(home(), ".gemini", "GEMINI.md") }), rule: RULE_OTHER, what: "Plan by itself: a line in GEMINI.md that has Gemini CLI call Leanfare's plan for a task with several parts" },
+    what: "Plan by itself: a block in CLAUDE.md (hand off big reads, and plan tasks with several parts), a worker subagent (leanfare-worker, on Haiku) for Leanfare's parts, a prompt hook that says how much of your plan is left, and a reminder before Claude Code reads a big file itself" },
+  codex: { files: () => ({ rule: join(codexDir(), "AGENTS.md") }), rule: RULE_OTHER, what: "Plan by itself: a block in AGENTS.md that has Codex hand off big reads and call Leanfare's plan for a task with several parts" },
+  "gemini-cli": { files: () => ({ rule: join(home(), ".gemini", "GEMINI.md") }), rule: RULE_OTHER, what: "Plan by itself: a block in GEMINI.md that has Gemini CLI hand off big reads and call Leanfare's plan for a task with several parts" },
 };
 
 const ourWorker = (file: string) => { try { return readFileSync(file, "utf8").includes(OWN); } catch { return false; } };
@@ -162,10 +182,11 @@ export function autoView(id: string): AutoView | null {
   const d = AUTO[id];
   if (!d) return null;
   const f = d.files();
-  let hook = true;
-  if (d.hook) { try { hook = hookIn(readClaudeSettings()); } catch { hook = false; } }
+  let hook = true, some = true;
+  if (d.hook) { try { const j = readClaudeSettings(); hook = hookIn(j); some = hookAny(j); } catch { hook = false; some = false; } }
   const have = [hasBlock(f.rule), ...(f.agent ? [ourWorker(f.agent)] : []), ...(d.hook ? [hook] : [])];
-  return { on: have.every(Boolean), partly: have.some(Boolean) && !have.every(Boolean), what: d.what };
+  const any = have.some(Boolean) || (!!d.hook && some);
+  return { on: have.every(Boolean), partly: any && !have.every(Boolean), what: d.what, ...(id === "claude-code" ? { reminders: remindersLately() } : {}) };
 }
 
 export function setAuto(id: string, on: boolean): AutoView {
@@ -184,7 +205,7 @@ export function setAuto(id: string, on: boolean): AutoView {
     setBlock(f.rule, on ? d.rule : null);
     undo.push(() => { if (before !== null) writeAtomic(f.rule, before); });
     if (f.agent) {
-      if (on) writeAtomic(f.agent, WORKER);
+      if (on) { if (!existsSync(f.agent) || readFileSync(f.agent, "utf8") !== WORKER) writeAtomic(f.agent, WORKER); }
       else if (ourWorker(f.agent)) { const agent = f.agent; keepingFolderTimes([agent], () => unlinkSync(agent)); }
     }
   } catch (e) {
@@ -192,5 +213,15 @@ export function setAuto(id: string, on: boolean): AutoView {
     throw e;
   }
   return autoView(id)!;
+}
+
+// After an update (the app starts): Plan by itself, where you have it on, is brought up to this version's text and hooks
+// (0.11: the block by size, the read hook). Only where its block is there: Leanfare never turns it on by itself.
+export function refreshAuto(): string[] {
+  const done: string[] = [];
+  for (const id of Object.keys(AUTO)) {
+    try { if (hasBlock(AUTO[id].files().rule)) { setAuto(id, true); done.push(id); } } catch (e) { console.error(`leanfare: could not bring Plan by itself up to date in ${id}: ${String((e as Error)?.message ?? e)}`); }
+  }
+  return done;
 }
 

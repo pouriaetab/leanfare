@@ -2958,7 +2958,7 @@
       a.manual && a.status !== "added" ? h("div", { class: "note manual" }, "Or in Terminal: ", h("code", { text: a.manual }), " ", copyBtn(a.manual)) : null,
       // Plan by itself (workers.ts): once Leanfare's tools are in the app, from this copy or another.
       a.auto && (a.status === "added" || a.status === "old" || a.auto.on || a.auto.partly) ? h("div", { class: "row auto-row" },
-        h("span", { class: "grow note", text: `${a.auto.what}${a.auto.on ? " · on" : a.auto.partly ? " · partly on" : ""}.` }),
+        h("span", { class: "grow note", text: `${a.auto.what}${a.auto.on ? " · on" : a.auto.partly ? " · partly on" : ""}.${a.auto.reminders?.n ? ` In the last 7 days it reminded Claude Code ${a.auto.reminders.n} time${a.auto.reminders.n === 1 ? "" : "s"} before a big read (${a.auto.reminders.kb >= 1024 ? `${(a.auto.reminders.kb / 1024).toFixed(1)} MB` : `${a.auto.reminders.kb} KB`} of files).` : ""}` }),
         runButton(a.auto.on || a.auto.partly ? "Turn off" : "Turn on", (signal) => toggleAuto(a, !(a.auto.on || a.auto.partly), signal), a.auto.on || a.auto.partly ? "btn small" : "btn small primary")) : null);
     return h("div", { class: "setting apps", id: "appsSetting" }, h("h3", { text: "Use Leanfare in your apps" }),
       h("p", { text: "Adds Leanfare's tools (plan, delegate, ask, spend, models, estimate, trial) to the AI apps you already use, so they work as usual with Leanfare on top. Leanfare changes only its own entry in each app's settings, and keeps a copy of the file as it was." }),

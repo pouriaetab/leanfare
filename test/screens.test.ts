@@ -1129,7 +1129,7 @@ describe("Use Leanfare in your apps (Settings)", () => {
     expect(bad(doc)).toBe(false);
   }, 20000);
 
-  test("once Leanfare's tools are in Codex, Plan by itself is one press: a line in AGENTS.md, and the press undoes it", async () => {
+  test("once Leanfare's tools are in Codex, Plan by itself is one press: a block in AGENTS.md, and the press undoes it", async () => {
     const codex = process.env.CODEX_HOME!;
     const { rmSync } = require("node:fs") as typeof import("node:fs");
     rmSync(codex, { recursive: true, force: true });
@@ -1139,7 +1139,7 @@ describe("Use Leanfare in your apps (Settings)", () => {
     doc.querySelector('.tabs button[data-tab="settings"]').click();
     await waitFor(() => !!doc.querySelector(".apps .auto-row"));
     const row = () => [...doc.querySelectorAll(".apps .app-row")].find((r: any) => r.textContent.includes("Codex CLI")) as any;
-    expect(row().querySelector(".auto-row").textContent).toContain("Plan by itself: a line in AGENTS.md");
+    expect(row().querySelector(".auto-row").textContent).toContain("Plan by itself: a block in AGENTS.md");
     [...row().querySelectorAll(".auto-row button")].find((b: any) => b.textContent === "Turn on").click();
     await waitFor(() => toasts(doc).includes("Codex CLI now plans by itself with Leanfare."));
     expect(readFileSync(join(codex, "AGENTS.md"), "utf8")).toContain("call Leanfare's plan tool first");
@@ -1167,7 +1167,7 @@ describe("Plan by itself for tools another copy of Leanfare added", () => {
     const row = () => [...doc.querySelectorAll(".apps .app-row")].find((r: any) => r.textContent.includes("Codex CLI")) as any;
     await waitFor(() => !!row()?.querySelector(".auto-row"));
     expect(row().textContent).toContain("added from another copy of Leanfare");
-    expect(row().querySelector(".auto-row").textContent).toContain("Plan by itself: a line in AGENTS.md");
+    expect(row().querySelector(".auto-row").textContent).toContain("Plan by itself: a block in AGENTS.md");
     rmSync(codex, { recursive: true, force: true });
   }, 20000);
 });
