@@ -52,7 +52,7 @@ describe("the report", () => {
     expect(tiles[0]).toBe("Saved for Claude estimate≈ 40kClaude alone ≈ 41k, minus the hand offs' own cost ≈ 2k (the tasks, and the answers read back). Range 27k to 54k.");
     expect(tiles[1]).toBe("Outside models used not knownNot measured yet$0.0030, 50% of parts free · 2 older parts not measured");
     expect(tiles[2]).toBe("Claude's own use measured3k new tokensClaude: not known · Claude Code, from its own files · 40k more read again from the cache");
-    expect(tiles[3]).toBe("Quality, three waysOutside answers50% goodTogethernot gradedClaude alonenot known2 outside answers graded, 0 prompts graded together, 0 sampled runs of Claude alone");
+    expect(tiles[3]).toBe("Quality, three waysOutside answers50 / 100 12 to 88Togethernot gradedClaude alonenot knownScores out of 100 (good 1, partly half, wrong 0), with their 90% range. 2 outside answers graded, 0 prompts graded together, 0 sampled runs of Claude alone");
     expect(doc.querySelectorAll("#reportCard .rp-chart path.l1, #reportCard .rp-chart path.l2")).toHaveLength(2);
     expect([...doc.querySelectorAll("#reportCard .rp-bar .nm span")].map((e: any) => e.textContent)).toEqual(["Gemini 3.8 Flash", "DeepSeek V4 Flash"]);
     expect([...doc.querySelectorAll("#reportCard .rp-kind .nm b")].map((e: any) => e.textContent)).toEqual(["Reading", "Drafting"]);

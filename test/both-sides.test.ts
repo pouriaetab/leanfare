@@ -60,7 +60,7 @@ describe("in the report", () => {
     expect(gradeTogether("good", { app: "Codex", by: "app" })).toBe(false); // no hand off of that app
     let rep = await report(span());
     expect(rep.prompts[0]).toMatchObject({ together: "partly", togetherBy: "app" });
-    expect(rep.tiles.three.together).toEqual({ graded: 1, good: 0 });
+    expect(rep.tiles.three.together).toEqual({ graded: 1, good: 0, score: { score: 50, lo: 7, hi: 93, n: 1 } }); // partly counts half
     expect((await ui(url, "/api/grades/together", { verdict: "good", handoff: second.row })).json).toEqual({ ok: true });
     rep = await report(span());
     expect(rep.prompts[0]).toMatchObject({ together: "good", togetherBy: "you" });
@@ -81,7 +81,7 @@ describe("in the report", () => {
     expect(x.alone).toMatchObject({ model: SONNET, label: "Claude Sonnet 4.6", verdict: "same", grade: "good" });
     expect(x.alone!.used).toBe(2500); // its own call: 2,000 read and 500 written, as reported
     expect(rep.prompts[0].alone).toEqual({ grade: "good", samples: 1 });
-    expect(rep.tiles.three.alone).toEqual({ sampled: 1, graded: 1, good: 1 });
+    expect(rep.tiles.three.alone).toEqual({ sampled: 1, graded: 1, good: 1, score: { score: 100, lo: 27, hi: 100, n: 1 } });
   });
 
   test("an app whose model you do not have: side by side keeps to the best model you ticked, and the app alone stays not known", async () => {

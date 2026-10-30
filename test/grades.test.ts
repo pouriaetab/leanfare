@@ -46,8 +46,8 @@ describe("the standing of a model for a kind", () => {
     grade("deepseek/deepseek-v4-flash", "read", "good", "wrong", "wrong");
     grade("openai/gpt-5-mini", "read", "good");
     const st = standing("deepseek/deepseek-v4-flash", "read");
-    expect(standingText(st)).toBe("DeepSeek V4 Flash for reading: 1 good, 2 wrong of its last 3. Moved down: plans and the delegate skip it for this kind while another model can take it (Settings, How the models did for you, gives it another chance).");
-    expect(standingText(standing("openai/gpt-5-mini", "read"))).toBe("GPT-5 mini for reading: 1 good of its last 1 (it moves down below half good, from 3 grades on).");
+    expect(standingText(st)).toBe("DeepSeek V4 Flash for reading: 33 of 100 (8 to 75, 3 grades): 1 good, 2 wrong. Moved down: plans and the delegate skip it for this kind while another model can take it (Settings, How the models did for you, gives it another chance).");
+    expect(standingText(standing("openai/gpt-5-mini", "read"))).toBe("GPT-5 mini for reading: 100 of 100 (27 to 100, 1 grade): 1 good (it moves down below 50, from 3 grades on).");
     expect(standings().map((s) => [s.model, s.down])).toEqual([["deepseek/deepseek-v4-flash", true], ["openai/gpt-5-mini", false]]);
   });
   test("no words are kept: a grade is a model, a kind, an effort, a verdict, where it came from and when", () => {
@@ -127,7 +127,7 @@ describe("grading a plan's part", () => {
     const g = await ui(url, "/api/grades", { id: plan.id, part: 1, verdict: "wrong" });
     expect(g.status).toBe(200);
     expect(g.json.standing).toMatchObject({ model: done.modelId, kind: "read", n: 1, wrong: 1 });
-    expect(g.json.text).toContain("for reading: 1 wrong of its last 1");
+    expect(g.json.text).toContain("for reading: 0 of 100 (0 to 73, 1 grade): 1 wrong");
     const again = await ui(url, "/api/grades", { id: plan.id, part: 1, verdict: "good", source: "you" });
     expect(again.json.standing).toMatchObject({ n: 1, good: 1, wrong: 0 }); // replaced, not added
     expect((db.query("SELECT source FROM grades").all() as any[]).map((r) => r.source)).toEqual(["you"]); // one row: its verdict and grader replaced
@@ -157,7 +157,7 @@ describe("grading a plan's part", () => {
     for (let i = 0; i < 3; i++) await ui(url, "/api/grades", { model: "openai/gpt-5-mini", kind: "write", verdict: "wrong" });
     const list = (await ui(url, "/api/grades")).json.standings;
     expect(list[0]).toMatchObject({ model: "openai/gpt-5-mini", kind: "write", n: 3, down: true });
-    expect(list[0].text).toContain("GPT-5 mini for drafting: 3 wrong of its last 3. Moved down");
+    expect(list[0].text).toContain("GPT-5 mini for drafting: 0 of 100 (0 to 47, 3 grades): 3 wrong. Moved down");
     const after = (await ui(url, "/api/grades/reset", { model: "openai/gpt-5-mini", kind: "write" })).json.standings;
     expect(after).toEqual([]);
   });
