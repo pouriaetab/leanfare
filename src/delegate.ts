@@ -25,6 +25,8 @@ import { mayTake, modelOn, readRisk } from "./platforms";
 import { movedDown } from "./grades";
 import { fromAnotherCompany, masked } from "./judge";
 import { restOf, restText } from "./rest";
+import { noQuota, noQuotaWhy } from "./quota";
+import { provider } from "./config";
 import { fitsFree } from "./freeplans";
 import { startSideBySide } from "./sidebyside";
 import { plan, runChat, usableModels, type ChatOptions } from "./engine";
@@ -386,7 +388,9 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   const othersUp = !!namedRest && usableModels(within((m) => doFit.ok(m) && m.id !== named!.id && !restOf(m.id))).length > 0;
   const namedOk = !!named && usableModels(within(doFit.ok)).some((m) => m.id === named.id) && !(namedRest && othersUp);
   let swap: string | null = input.model && !namedOk
-    ? namedRest && othersUp ? `The plan named ${named!.label}, but ${restText(namedRest).replace(/^.*? is resting/, "it is resting")}, so Auto picked another.` : `The plan named ${named?.label ?? input.model}, which cannot take it here now, so Auto picked another.`
+    ? namedRest && othersUp ? `The plan named ${named!.label}, but ${restText(namedRest).replace(/^.*? is resting/, "it is resting")}, so Auto picked another.`
+      : named && noQuota(named.id) ? `The plan named ${named.label}, but ${noQuotaWhy(noQuota(named.id)!, provider(named.provider)?.name)}, so Auto picked another.`
+      : `The plan named ${named?.label ?? input.model}, which cannot take it here now, so Auto picked another.`
     : null;
   let first = await run(messages, namedOk ? named!.id : asked, "Delegate", opts);
   const tried: (number | null)[] = [];

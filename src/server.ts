@@ -25,6 +25,7 @@ import { meterViews, setStatusline } from "./meter";
 import { checkDelegate, gradeRow, gradeTogether, runDelegate, startDelegate, stopDelegates, waitDelegate } from "./delegate";
 import { sideMonth, sideStandings, sideText, stopSideBySide } from "./sidebyside";
 import { endRest } from "./rest";
+import { clearNoQuota, noQuotaNow, noQuotaWhy } from "./quota";
 import { checkReport, report } from "./report";
 import { checkPlan, gradePart, makePlan, runView, startRun, stopAllRuns, stopRun } from "./planner";
 import { setAuto } from "./workers";
@@ -138,6 +139,8 @@ export function state() {
     usual: usual ? { id: usual.id, label: usual.label } : null,
     readyCount: ready.length,
     usableCount: usableModels().length,
+    // Models left out because your key has no quota for them (quota.ts): which, and why, for Settings' model lists.
+    noQuota: noQuotaNow().map((q) => ({ model: q.model, since: q.since, why: noQuotaWhy(q, provider(q.provider as ProviderId)?.name) })),
     switchOn: switchedOn(), // Leanfare in your apps, on or off (switch.ts): the switch at the top of the page
     budget: b,
     month: (() => { const v = savings(); return { spent: v.spent, today: v.today, answers: v.answers }; })(),
@@ -372,6 +375,7 @@ async function readBody(req: Request): Promise<any> {
 // OpenRouter's list and balance, and tick the provider's short list.
 async function keySaved(id: ProviderId, signal?: AbortSignal, liveModels?: string[] | null) {
   removedKeys.delete(id);
+  clearNoQuota({ provider: id }); // a new key may have the quota the last one lacked
   if (liveModels && provider(id)?.more) store.live.set(id, new Set(liveModels));
   saveSettings({ providers: { ...settings().providers, [id]: { ...(settings().providers[id] ?? {}), on: true } } });
   if (id === "openrouter") {
@@ -477,6 +481,12 @@ async function api(req: Request, url: URL): Promise<Response> {
     const b = await readBody(req);
     if (typeof b?.model !== "string" || b.model.length > 200) return fail(400, "model is needed.");
     return json({ ended: endRest(b.model) });
+  }
+  // Try again for a model left out because the key had no quota for it (quota.ts): it may be picked again.
+  if (p === "/api/quota/clear" && m === "POST") {
+    const b = await readBody(req);
+    if (typeof b?.model !== "string" || b.model.length > 200) return fail(400, "model is needed.");
+    return json({ cleared: clearNoQuota({ model: b.model }) > 0, state: state() });
   }
   // A prompt's whole result, the app and its hand offs together (report.ts): from the app (its last hand off in the
   // last 6 hours), or from you in the report (a hand off of that prompt, by its number).

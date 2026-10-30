@@ -14,6 +14,7 @@ import { successor } from "./retire";
 import { addSpent, budgetState, release, tryReserve, wouldFit } from "./budget";
 import { failOfStatus, failOfText, type FailKind } from "./fails";
 import { noteFailure, restOf, restText } from "./rest";
+import { noQuota, noQuotaNow, noQuotaText, noteRefusal } from "./quota";
 import { fitsFree, onFreePlan } from "./freeplans";
 import { learnedShift } from "./learn";
 import { RESPONSES_PATH, ResponsesStreamTranslator, responsesToOpenAI, toResponses } from "./upstream";
@@ -41,8 +42,10 @@ export function notReadyMessage(id: ProviderId): string {
   return `There is no ${def.name} key in Leanfare yet. Add one in Settings at http://127.0.0.1:${runtime.port}.`;
 }
 
+// The models Auto, plans, checks and side by side may use: ticked, their provider ready, still served, and not one your key
+// has no quota for (quota.ts). A model you name yourself is asked anyway.
 export function usableModels(only?: (m: Model) => boolean): Model[] {
-  return settings().ticked.map((id) => getModel(id)).filter((m): m is Model => !!m && providerReady(m.provider) && served(m) && (!only || only(m)));
+  return settings().ticked.map((id) => getModel(id)).filter((m): m is Model => !!m && providerReady(m.provider) && served(m) && !noQuota(m.id) && (!only || only(m)));
 }
 
 // A provider you have but ticked none of the models of (a key just added, Ollama just found, or Set up's
@@ -301,6 +304,9 @@ export async function plan(input: PlanInput): Promise<Plan> {
     if (!usable.length && mediaWords && usableModels(byAddress).length) {
       throw new UserError(400, `None of the models you ticked takes ${mediaWords} through Leanfare. In Settings, tick one that does: ${media.pdfs ? "a Claude or GPT model reads PDFs" : "most Claude, GPT and Gemini models see images"}.`, "unsupported_attachment");
     }
+    // Every model that could take it is one your key has no quota for: say which, and what to do.
+    const leftOut = usable.length ? [] : noQuotaNow().filter((q) => settings().ticked.includes(q.model)).filter((q) => { const m = getModel(q.model); return !!m && (!only || only(m)); });
+    if (leftOut.length) throw new UserError(400, `${noQuotaText(leftOut[0], provider(leftOut[0].provider as ProviderId)?.name)}. Tick another model, or press Try again next to it in Settings.`, "no_model_ready");
     if (!usable.length) {
       throw new UserError(400, input.source === "anthropic"
         ? "No Claude model is ready. Add an Anthropic key in Leanfare's Settings and tick a Claude model."
@@ -462,7 +468,10 @@ export function record(p: Plan, m: Model, source: string, usage: Usage | null, o
   ];
   unwritten.push(row);
   if (!retryTimer) writeRows();
-  if (o.status === "error" && !unwritten.length) noteFailure(m.id); // too many failures lately: it rests (rest.ts)
+  if (o.status === "error" && !unwritten.length) {
+    noteFailure(m.id); // too many failures lately: it rests (rest.ts)
+    noteRefusal(m.id, m.provider, o.error ?? null, o.fail ?? null); // a key with no quota for it: left out (quota.ts)
+  }
   forgetSpeeds(m.id); // this answer's time counts in the next estimate
   if (unwritten.length && !retryTimer) retryTimer = setTimeout(writeRows, 1000);
   if (unwritten.length === 1 && retryTimer) console.error("leanfare: the database is busy; the cost ledger will be written when it is free.");

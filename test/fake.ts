@@ -14,6 +14,8 @@
 //   [slow 3000]             wait 3 seconds before answering
 //   [chunks 40]             stream the answer in 40 pieces, 50 ms apart
 //   [fail 429]              answer with this HTTP status ([fail@xai 400]: only that provider; [slow@...] too)
+//   [quota0@google argon]   answer 429 as Google's free tier does for a model it gives no quota ("... limit: 0, model: ..."),
+//                           only for models whose name has "argon" in it (no name: every model)
 //   [think]                 think first ("Let me think."), in each provider's own way
 //   [empty] [empty1]        answer nothing (always, or only the first time this prompt is seen)
 //   [cut1]                  the first time: stop sending after one piece, with no end marker
@@ -266,6 +268,8 @@ export function startFake() {
       const text = promptText(body);
       const fail = hooks.fail?.(text, provider) ? [hooks.fail(text, provider)!] : directive(text, "fail", provider);
       if (fail?.[0]) return Response.json({ error: { message: `fake failure ${fail[0]}` } }, { status: fail[0] });
+      const zero = /\[quota0(?:@([a-z]+))?(?: ([\w.:\/-]+))?\]/.exec(text);
+      if (zero && (!zero[1] || zero[1] === provider) && (!zero[2] || String(body?.model ?? "").includes(zero[2]))) return Response.json({ error: { code: 429, status: "RESOURCE_EXHAUSTED", message: `You exceeded your current quota, please check your plan and billing details. * Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: ${String(body?.model ?? "x").replace(/^models\//, "")}` } }, { status: 429 });
       const slow = directive(text, "slow", provider);
       if (slow?.[0]) await Bun.sleep(slow[0]);
       const slowHook = hooks.slow?.(text, provider) ?? 0;

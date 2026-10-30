@@ -9,6 +9,8 @@ import { chargeOf } from "./engine";
 import { FAIL_KINDS, FAIL_WORD, failOfText, type FailKind } from "./fails";
 import { GRADED_KINDS, movedDown } from "./grades";
 import { restOf, restsNow, restWhy } from "./rest";
+import { noQuota, noQuotaNow, noQuotaWhy } from "./quota";
+import { provider, type ProviderId } from "./config";
 
 export { FAIL_KINDS, FAIL_WORD, type FailKind };
 
@@ -25,7 +27,9 @@ export interface ModelStat {
   cost: number; costPerCall: number | null; // what its answers cost, and the middle answer's cost
   movedDown: string[]; // the kinds of work its grades moved it down for (grades.ts)
   rest: { until: string; why: string } | null; // resting now after failing too often (rest.ts): until when, and why
+  noQuota: { since: string; why: string } | null; // left out: your key has no quota for it (quota.ts), since when and why
 }
+const quotaOf = (id: string) => { const q = noQuota(id); return q ? { since: q.since, why: noQuotaWhy(q, provider(q.provider as ProviderId)?.name) } : null; };
 
 export interface StatsQuery { from: number; to: number; provider?: string | null; model?: string | null }
 export function modelStats(q: StatsQuery, limit = 12): ModelStat[] {
@@ -64,6 +68,7 @@ export function modelStats(q: StatsQuery, limit = 12): ModelStat[] {
       cost, costPerCall: costs.length ? mid(costs) : null,
       movedDown: GRADED_KINDS.filter((k) => movedDown(id, k)),
       rest: (() => { const r = restOf(id); return r ? { until: r.until, why: restWhy(r) } : null; })(),
+      noQuota: quotaOf(id),
     });
   }
   out.sort((a, b) => b.calls - a.calls || a.label.localeCompare(b.label));
@@ -72,9 +77,17 @@ export function modelStats(q: StatsQuery, limit = 12): ModelStat[] {
     const m = getModel(r.model);
     if (q.provider && (m?.local ? "local" : m?.provider) !== q.provider) continue;
     out.push({ id: r.model, label: m?.label ?? r.model, provider: m?.local ? "local" : m?.provider ?? r.model.split("/")[0], where: m?.local ? "local" : m && chargeOf(m, 1).cost === 0 ? "free" : "paid",
-      calls: 0, ok: 0, failed: 0, stopped: 0, fails: {}, first: null, whole: null, perSecond: null, cost: 0, costPerCall: null, movedDown: GRADED_KINDS.filter((k) => movedDown(r.model, k)), rest: { until: r.until, why: restWhy(r) } });
+      calls: 0, ok: 0, failed: 0, stopped: 0, fails: {}, first: null, whole: null, perSecond: null, cost: 0, costPerCall: null, movedDown: GRADED_KINDS.filter((k) => movedDown(r.model, k)), rest: { until: r.until, why: restWhy(r) }, noQuota: quotaOf(r.model) });
   }
-  return [...out.filter((m) => m.rest), ...out.filter((m) => !m.rest)].slice(0, limit);
+  // One left out because your key has no quota for it, with no call in the span, still shows (quota.ts).
+  for (const nq of noQuotaNow()) if (!by.has(nq.model) && !out.some((x) => x.id === nq.model) && (!q.model || q.model === nq.model)) {
+    const m = getModel(nq.model);
+    if (q.provider && (m?.provider ?? nq.provider) !== q.provider) continue;
+    out.push({ id: nq.model, label: m?.label ?? nq.model, provider: m?.provider ?? nq.provider, where: m && chargeOf(m, 1).cost === 0 ? "free" : "paid",
+      calls: 0, ok: 0, failed: 0, stopped: 0, fails: {}, first: null, whole: null, perSecond: null, cost: 0, costPerCall: null, movedDown: GRADED_KINDS.filter((k) => movedDown(nq.model, k)), rest: null, noQuota: quotaOf(nq.model) });
+  }
+  // Resting and left out ones first: they are what changed.
+  return [...out.filter((m) => m.rest || m.noQuota), ...out.filter((m) => !m.rest && !m.noQuota)].slice(0, limit);
 }
 
 // One line of what failed, for a person: "7 busy, 2 timed out".
