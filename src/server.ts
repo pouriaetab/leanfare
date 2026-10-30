@@ -50,6 +50,8 @@ import { startTrial, stopTrial, trialRunning, trialView } from "./trial";
 import { updateNotice } from "./update";
 import { dollars, localDay, now, randomId, redact } from "./util";
 
+// The system's name as people say it, for Report a problem's form (Settings): only the name, never its version.
+const SYSTEM_NAME: Record<string, string> = { darwin: "macOS", win32: "Windows", linux: "Linux" };
 const EFFORTS = ["auto", "low", "medium", "high"];
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...headers } });
@@ -123,6 +125,7 @@ export function state() {
   const ready = allProviders().filter((p) => providerReady(p.id));
   return {
     version: VERSION,
+    system: SYSTEM_NAME[process.platform] ?? process.platform, // for Report a problem's form, by its name only
     bun: Bun.version,
     bunTested: BUN_TESTED,
     address: `http://127.0.0.1:${serverPort}`,
