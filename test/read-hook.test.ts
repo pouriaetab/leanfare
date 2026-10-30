@@ -19,6 +19,7 @@ beforeAll(async () => { await boot(); });
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 beforeEach(async () => {
   rmSync(readsFile(), { force: true });
+  for (const f of ["limits-last.json", "limits.jsonl"]) rmSync(join(process.env.LEANFARE_DATA_DIR!, f), { force: true }); // plenty: the usual sizes
   rmSync(claudeDir(), { recursive: true, force: true });
   settingsFile = join(mkdtempSync(join(tmpdir(), "claude-settings-")), "settings.json");
   process.env.LEANFARE_CLAUDE_SETTINGS = settingsFile;

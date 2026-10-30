@@ -78,13 +78,13 @@ describe("Claude Code plans by itself", () => {
     expect(readFileSync(settingsFile, "utf8")).toBe("{}");
   });
 
-  test("the hook's line: the plan's windows as numbers, and the plan tool; near a limit it says so", () => {
+  test("the hook's line: the plan's windows as numbers, and the plan tool; running low it says what to hand off", () => {
     const T = (iso: string) => Date.parse(iso);
-    expect(hookLine()).toBe("Leanfare: Leanfare's plan tool splits a task with several parts across cheaper models.");
+    expect(hookLine()).toBe("Leanfare: Leanfare's plan tool splits a task with several parts across cheaper models, and its delegate reads big files you will not change.");
     saveSnap({ at: T("2026-10-21T11:00:00Z"), five: { used: 48.4, resets: T("2026-10-21T15:00:00Z") }, week: { used: 21, resets: T("2026-10-27T12:00:00Z") } });
-    expect(hookLine()).toBe("Leanfare: the Claude plan: its 5 hour window is 48% used, its week 21% used. Leanfare's plan tool splits a task with several parts across cheaper models.");
+    expect(hookLine()).toBe("Leanfare: the Claude plan: its 5 hour window is 48% used, its week 21% used. Leanfare's plan tool splits a task with several parts across cheaper models, and its delegate reads big files you will not change.");
     saveSnap({ at: T("2026-10-21T11:30:00Z"), five: { used: 91, resets: T("2026-10-21T15:00:00Z") }, week: { used: 22, resets: T("2026-10-27T12:00:00Z") } });
-    expect(hookLine()).toContain("near a limit, its delegate and plan_run can do the reading and drafting off the plan");
+    expect(hookLine()).toStartWith("Leanfare: your Claude plan is very low: the 5 hours 91% used, the week 22% used. Hand everything you can to Leanfare");
   });
 
   test("leanfare hook prompt prints the line, reads nothing of the prompt, and always exits 0", async () => {
