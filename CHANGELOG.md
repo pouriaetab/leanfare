@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.11.0
+
+- Plan modes: plenty, low and very low, from how much of your Claude plan is used and how fast. Low (70% used, or running out before it resets at this week's pace) tells Claude to hand off all reading, searching and drafting it will not change, reminds it sooner before big reads, and sends a plan's high effort parts out too; very low (90%) sends out everything that can go. Nothing is ever stopped. Settings shows the mode.
+- Jobs: Settings says where each kind of job goes in a plan: to Leanfare, to Leanfare only when your plan runs low, or kept with your app. By default reading and searching go to Leanfare, drafting goes when your plan runs low, and working things out stays with your app. A cap for paid work, $0.10 a hand off at first: a cheaper or free model first, and a hand off or a check that would cost more stays with your app.
+- Grades as a score out of 100 with its range (good counts 1, partly half, wrong 0), in the report, the card in Claude, Settings and the `grade` tool's answer. You still press Good, Partly or Wrong.
+- Claude Code is reminded once before it reads a big file itself (a log, data or docs of 40 KB or more, any other text file of 200 KB or more) that Leanfare's delegate can read it instead; reading it again goes through. Plan by itself now hands off by size, not only for tasks with several parts, and is brought up to date when Leanfare starts.
+- A door older than the app: when an app keeps an older `leanfare mcp` running after an update, its calls, its tools and its pages go through the updated app, and it says so once.
+
+Fixed from 0.10.0:
+
+- A model your key has no quota for (Google's free tier for Gemini 4 Argon answers every request "limit: 0") is left out of Auto, plans, checks and side by side, and Settings and the report say why, with Try again; a new key clears it.
+- A free plan's models count at $0 when Auto picks, as they do on the bill: a free Gemini key no longer loses to a cheaper paid model.
+- A plan is split by a model that answers within about 15 seconds by its record, and a try that does not start in 12 seconds goes to the next pick, so a slow model no longer runs the split out of time. A list of questions is no longer split like code: the facts are read outside, and the answers stay with your app.
+
 ## 0.10.0
 
 - Both sides of each hand off. The report shows what the outside models used, measured from the providers' own counts: what they read, thought and wrote, for every call of a hand off (its answer, a second try, its check, side by side). Next to it, what your app would have used doing the part alone, as an estimate with its range; what handing it off cost your app (the task it wrote, the answer and receipt it read back); and the saving. Your app's own use of the whole prompt is measured where its files say (Claude Code's), and not known elsewhere.
