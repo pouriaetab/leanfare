@@ -29,6 +29,7 @@
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --series-1: #2a78d6; --series-2: #eb6834; /* the report's two lines: kept out, used by your apps */
   --fill-good: #22a35a; --fill-warn: #eba129; --fill-bad: #df4a3f; /* status as a filled mark (bars), next to its words */
+  --est: #6b4fd6; --est-soft: #f5f2ff; --est-line: #d9d0ff; /* an estimate (the report's both sides): purple, with its range */
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -36,14 +37,14 @@
     --bg: #0e1011; --panel: #16191a; --panel-2: #1d2122; --line: #272b2d; --line-strong: #343a3c;
     --text: #e8eaeb; --muted: #a1a7ab; --faint: #737a7e; --accent: #2dd4bf; --accent-ink: #062a26; --accent-soft: #123331;
     --good: #4ade80; --good-soft: #12301d; --warn: #fbbf24; --warn-soft: #33270b; --bad: #f87171; --bad-soft: #3a1515;
-    --stop: #ef4444; --on-color: #ffffff; --knob: #ffffff; --code-bg: #111415; --shadow: 0 1px 2px rgba(0, 0, 0, 0.3); color-scheme: dark; --series-1: #3987e5; --series-2: #d95926; --fill-good: #36b56c; --fill-warn: #e3a032; --fill-bad: #e8584e;
+    --stop: #ef4444; --on-color: #ffffff; --knob: #ffffff; --code-bg: #111415; --shadow: 0 1px 2px rgba(0, 0, 0, 0.3); color-scheme: dark; --series-1: #3987e5; --series-2: #d95926; --fill-good: #36b56c; --est: #a796f7; --est-soft: #211b3b; --est-line: #3a3070; --fill-warn: #e3a032; --fill-bad: #e8584e;
   }
 }
 :root[data-theme="dark"] {
   --bg: #0e1011; --panel: #16191a; --panel-2: #1d2122; --line: #272b2d; --line-strong: #343a3c;
   --text: #e8eaeb; --muted: #a1a7ab; --faint: #737a7e; --accent: #2dd4bf; --accent-ink: #062a26; --accent-soft: #123331;
   --good: #4ade80; --good-soft: #12301d; --warn: #fbbf24; --warn-soft: #33270b; --bad: #f87171; --bad-soft: #3a1515;
-  --stop: #ef4444; --on-color: #ffffff; --knob: #ffffff; --code-bg: #111415; --shadow: 0 1px 2px rgba(0, 0, 0, 0.3); color-scheme: dark; --series-1: #3987e5; --series-2: #d95926; --fill-good: #36b56c; --fill-warn: #e3a032; --fill-bad: #e8584e;
+  --stop: #ef4444; --on-color: #ffffff; --knob: #ffffff; --code-bg: #111415; --shadow: 0 1px 2px rgba(0, 0, 0, 0.3); color-scheme: dark; --series-1: #3987e5; --series-2: #d95926; --fill-good: #36b56c; --est: #a796f7; --est-soft: #211b3b; --est-line: #3a3070; --fill-warn: #e3a032; --fill-bad: #e8584e;
 }
 
 * { box-sizing: border-box; }
@@ -342,6 +343,34 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
 .rp-kind .stack .bad { background: var(--fill-bad); }
 .rp-kind .stack .none { background: var(--line); }
 .rp-kind .meta { grid-area: meta; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; color: var(--muted); font-size: 12.5px; }
+/* Both sides (0.10): how sure each number is, estimates in purple with their range, quality three ways, and how the
+   app alone is worked out. */
+.rp .badge { display: inline-block; font-size: 11px; font-weight: 500; border-radius: 6px; padding: 0 6px; margin-left: 2px; border: 1px solid transparent; vertical-align: 1px; }
+.rp .badge.b-m { color: var(--good); background: var(--good-soft); }
+.rp .badge.b-e { color: var(--est); background: var(--est-soft); border-color: var(--est-line); }
+.rp .badge.b-n { color: var(--muted); background: var(--panel-2); border-color: var(--line); }
+.rp-tile .val.est, .rp-table td.est { color: var(--est); }
+.rp .nk { color: var(--faint); }
+.rp .gg { color: var(--good); }
+.rp .gw { color: var(--bad); }
+.rp-tile .q3 { display: grid; grid-template-columns: max-content minmax(40px, 1fr) max-content; gap: 5px 8px; align-items: center; font-size: 12.5px; margin: 3px 0 2px; }
+.rp-tile .q3 .bar { height: 8px; background: var(--panel-2); border-radius: 5px; overflow: hidden; }
+.rp-tile .q3 .bar i { display: block; height: 100%; border-radius: 0 5px 5px 0; background: var(--series-1); }
+.rp-tile .q3 > span:nth-child(5) i { background: var(--fill-good); } /* together */
+.rp-tile .q3 > span:nth-child(8) i { background: var(--est); } /* the app alone */
+.rp-table.both th.grp { text-align: center; border-bottom: 2px solid var(--line); }
+.rp-table.both th.num { text-align: right; }
+.rp-table.both td .tiny { display: block; color: var(--muted); font-size: 11.5px; font-weight: 400; white-space: normal; line-height: 1.35; }
+.rp-table.both td.est .tiny { color: var(--muted); }
+.rp-table.both td.num { vertical-align: top; }
+.rp-table.both { min-width: 980px; }
+.rp-table.both .btn.small { margin-left: 6px; }
+.rp-table.both .btn.small.on { background: var(--accent-soft); color: var(--accent); border-color: transparent; font-weight: 600; }
+.rp-how { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 10px; }
+.rp-how .step { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: grid; gap: 3px; align-content: start; font-size: 13px; }
+.rp-how .step.on { border-color: var(--est-line); background: var(--est-soft); }
+.rp-how .step .when { color: var(--muted); font-size: 12px; }
+
 /* Speed, failures, cost and quality per model (0.10). */
 .sp-top { display: grid; grid-template-columns: minmax(0, 560px) minmax(0, 1fr); gap: 16px; align-items: start; }
 @media (max-width: 860px) { .sp-top { grid-template-columns: minmax(0, 1fr); } }
