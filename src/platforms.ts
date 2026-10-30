@@ -84,7 +84,9 @@ function budgetLine(): string {
   const b = budgetState();
   return b.budget === null ? "Pay per use; no monthly budget is set." : `Pay per use: ${usd(Math.max(0, b.left ?? 0))} of your ${usd(b.budget)} monthly budget left.`;
 }
-const requestsToday = (prov: string): number => (db.query("SELECT COUNT(*) AS n FROM ledger WHERE day = ? AND provider = ? AND status != 'error'").get(localDay(), prov) as any).n;
+// A free key's requests through Leanfare today, as its provider counts them: every answer, an empty or cut off one too
+// (0.11.2: the empty ones were left out); not a request it refused, or one that never reached it.
+const requestsToday = (prov: string): number => (db.query("SELECT COUNT(*) AS n FROM ledger WHERE day = ? AND provider = ? AND (status != 'error' OR fail = 'cut')").get(localDay(), prov) as any).n;
 
 // A time in words: "4:10 PM" today, "Tue 4:10 PM" another day.
 export function whenText(iso: string, at = now().getTime()): string {
