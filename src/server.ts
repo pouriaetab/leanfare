@@ -4,6 +4,7 @@
 // pointing a domain at 127.0.0.1), and refuses browser requests from other
 // sites unless you allowed them in Settings.
 import { existsSync, unlinkSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { BUN_TESTED, DATA_ID, HOST, PORT, VERSION, allProviders, baseOf, paths, provider, runtime, type ProviderId } from "./config";
 import { TASKS, allModels, getModel, isRetired, refreshCatalog, refreshOllama, refreshOpenRouter, retiresWithin, served, store, type Model } from "./data";
@@ -26,6 +27,8 @@ import { checkDelegate, gradeRow, gradeTogether, runDelegate, startDelegate, sto
 import { sideMonth, sideStandings, sideText, stopSideBySide } from "./sidebyside";
 import { endRest } from "./rest";
 import { clearNoQuota, noQuotaNow, noQuotaWhy } from "./quota";
+import { TOOLS, clientLabel, resourceContents, runToolFor } from "./mcp";
+import { setSelf } from "./client";
 import { checkReport, report } from "./report";
 import { checkPlan, gradePart, makePlan, runView, startRun, stopAllRuns, stopRun } from "./planner";
 import { setAuto } from "./workers";
@@ -482,6 +485,18 @@ async function api(req: Request, url: URL): Promise<Response> {
     if (typeof b?.model !== "string" || b.model.length > 200) return fail(400, "model is needed.");
     return json({ ended: endRest(b.model) });
   }
+  // A door older than this app (an app kept it running after an update, mcp.ts): the tools as this version has them,
+  // a call run here for that door's app and folder, and an MCP App's page. A call reads files and may spend, so only
+  // Leanfare's own door makes one: it carries the control token.
+  if (p === "/api/mcp/tools" && m === "GET") return json({ version: VERSION, tools: TOOLS });
+  if (p === "/api/mcp/resource" && m === "POST") { const b = await readBody(req); return json({ contents: resourceContents(b?.uri) }); }
+  if (p === "/api/mcp/call" && m === "POST") {
+    if (!controlOk(req, controlToken)) return fail(403, "Wrong control token.");
+    const b = await readBody(req);
+    if (typeof b?.name !== "string" || !TOOLS.some((t) => t.name === b.name)) return fail(404, `Leanfare has no tool named ${String(b?.name)}.`);
+    const folder = typeof b.folder === "string" && b.folder.trim() ? b.folder : homedir();
+    return json(await runToolFor({ client: clientLabel(b.client), cwd: folder, canAsk: false }, b.name, b.arguments ?? {}, req.signal));
+  }
   // Try again for a model left out because the key had no quota for it (quota.ts): it may be picked again.
   if (p === "/api/quota/clear" && m === "POST") {
     const b = await readBody(req);
@@ -858,7 +873,7 @@ export async function handle(req: Request, server: { timeout(r: Request, s: numb
     if (url.pathname !== "/api/control/stop" && req.headers.get("x-leanfare") !== "1") return fail(403, "Missing the x-leanfare header.");
     if (url.pathname !== "/api/unlock" && !url.pathname.startsWith("/api/control/") && !pageAllowed(req, controlToken)) return json({ error: "Leanfare is locked. Paste its access key to open it.", locked: true }, 401);
     // Requests that can wait a long time on providers or other programs: no idle cut-off.
-    if (["/api/chat", "/api/delegate", "/api/plan", "/api/keys", "/api/refresh", "/api/import", "/api/keys/import", "/api/keys/recognize", "/api/keys/found", "/api/providers/custom", "/api/providers/registry", "/api/apps", "/api/setup", "/api/switch", "/api/trial/stop"].includes(url.pathname)) server?.timeout(req, 0);
+    if (["/api/mcp/call", "/api/chat", "/api/delegate", "/api/plan", "/api/keys", "/api/refresh", "/api/import", "/api/keys/import", "/api/keys/recognize", "/api/keys/found", "/api/providers/custom", "/api/providers/registry", "/api/apps", "/api/setup", "/api/switch", "/api/trial/stop"].includes(url.pathname)) server?.timeout(req, 0);
     try { return await api(req, url); }
     catch (e: any) { return fail(e instanceof UserError ? e.status : 500, e instanceof UserError ? e.message : `Leanfare hit an unexpected problem: ${String(e?.message ?? e)}`); }
   }
@@ -931,6 +946,7 @@ export function startServer(port = PORT, token = randomId(24)) {
   });
   serverPort = bunServer.port ?? port;
   runtime.port = serverPort;
+  setSelf({ base: `http://127.0.0.1:${serverPort}`, token }); // a call run here for an older door reaches this app (client.ts)
   return bunServer;
 }
 
