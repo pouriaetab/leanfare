@@ -10,7 +10,7 @@ import { TASKS, allModels, getModel, isRetired, type Model } from "./data";
 import { MODES, type Mode } from "./settings";
 import { localDay } from "./util";
 
-export interface Guess { task: string; why: string; alt: string | null }
+export interface Guess { task: string; why: string; alt: string | null; kind?: string | null } // kind: a hand off's (read, write, reason), for what your grades say
 export interface Msg { role: string; content: unknown }
 
 const taskLabel = (t: string) => TASKS.find(([id]) => id === t)?.[1] ?? t;
@@ -79,7 +79,7 @@ export function expectedOutput(task: string, model: Model | null, history: (task
 
 export const rating = (m: Model, task: string): number | null => m.ratings[task] ?? m.ratings.overall ?? null;
 
-export interface Candidate { model: Model; rating: number | null; estimate: number | null; seconds?: number | null; measured?: boolean }
+export interface Candidate { model: Model; rating: number | null; estimate: number | null; seconds?: number | null; measured?: boolean; shift?: number }
 export interface Pick {
   model: Model;
   guess: Guess;
@@ -104,8 +104,9 @@ const fmtUsd = (v: number | null) => (v === null ? "no listed price" : v === 0 ?
 // `forced` is a task the caller already knows (the delegate's kind), instead of the guess.
 // `speed` (speed.ts): the cheapest (as before), the fastest, or the cheapest expected within N seconds;
 // `timeOf` estimates an answer's seconds from how fast each model answered before.
+// learn: how many points your own history adds to a model's rating for this request's kind of work (learn.ts).
 export function pickModel(messages: Msg[], usable: Model[], mode: Mode, history: (task: string, model: string | null) => number | null, system?: unknown, forced?: Guess,
-  speed: SpeedChoice = "cheapest", timeOf?: (m: Model, outTokens: number) => { seconds: number; measured: boolean }, inTokens?: number): Pick | null {
+  speed: SpeedChoice = "cheapest", timeOf?: (m: Model, outTokens: number, inTokens: number) => { seconds: number; measured: boolean }, inTokens?: number, learn?: (m: Model) => number): Pick | null {
   const guess = forced ?? guessTask(messages);
   const inTok = inTokens ?? promptTokens(messages as any, system);
   const day = localDay();
@@ -113,10 +114,11 @@ export function pickModel(messages: Msg[], usable: Model[], mode: Mode, history:
   const rated: Candidate[] = [];
   const unrated: Candidate[] = [];
   for (const m of live) {
-    const r = rating(m, guess.task);
+    const r0 = rating(m, guess.task), shift = r0 !== null && learn ? learn(m) : 0;
+    const r = r0 === null ? null : r0 + shift;
     const out = expectedOutput(guess.task, m, history);
-    const t = timeOf?.(m, out) ?? null;
-    const c: Candidate = { model: m, rating: r, estimate: estimateFor(m, inTok, out), seconds: t?.seconds ?? null, measured: t?.measured ?? false };
+    const t = timeOf?.(m, out, inTok) ?? null;
+    const c: Candidate = { model: m, rating: r, estimate: estimateFor(m, inTok, out), seconds: t?.seconds ?? null, measured: t?.measured ?? false, shift };
     (r !== null && c.estimate !== null ? rated : unrated).push(c);
   }
   if (!rated.length) return null;
@@ -128,6 +130,17 @@ export function pickModel(messages: Msg[], usable: Model[], mode: Mode, history:
   // How the pick was made, said in the reason: by price (as before), or by the time each is expected to take.
   let how: string | null = null;
   if (speed === "fastest" && timeOf) { eligible.sort(byTime); how = `the fastest of the ${eligible.length} within reach`; }
+  else if (speed === "balanced" && timeOf) {
+    // Time and cost weighed alike: how many times the quickest each one takes, times how many times the cheapest it
+    // costs (a free one counted at a tenth of the cheapest paid one, so free ones still win unless far slower).
+    const paid = eligible.map((c) => c.estimate!).filter((e) => e > 0);
+    const floor = paid.length ? Math.min(...paid) / 10 : 1e-6;
+    const fast = Math.min(...eligible.map((c) => c.seconds ?? Infinity));
+    const cheap = Math.min(...eligible.map((c) => c.estimate! + floor));
+    const score = (c: Candidate) => ((c.estimate! + floor) / cheap) * ((c.seconds ?? fast * 4) / (Number.isFinite(fast) && fast > 0 ? fast : 1));
+    eligible.sort((a, b) => score(a) - score(b) || byPrice(a, b));
+    how = `the best balance of time and cost of the ${eligible.length} within reach`;
+  }
   else if (typeof speed === "number" && timeOf) {
     const inTime = eligible.filter((c) => (c.seconds ?? Infinity) <= speed).sort(byPrice);
     const late = eligible.filter((c) => !inTime.includes(c)).sort(byTime);
@@ -139,9 +152,10 @@ export function pickModel(messages: Msg[], usable: Model[], mode: Mode, history:
   const usedRating = chosen.model.ratings[guess.task] !== undefined ? guess.task : "overall";
   const gap = Math.round(best.rating! - chosen.rating!);
   let reason = `${taskLabel(guess.task)}, guessed from ${guess.why}. ${MODES[mode].label}: ${MODES[mode].blurb}.`;
-  if (chosen === best && !how) reason += ` ${chosen.model.label} is the best rated for this (${Math.round(chosen.rating!)}) and the cheapest of the ${eligible.length} within reach.`;
-  else if (chosen === best) reason += ` ${chosen.model.label} is the best rated for this (${Math.round(chosen.rating!)}).`;
-  else reason += ` ${chosen.model.label} is rated ${Math.round(chosen.rating!)}${usedRating !== guess.task ? " overall" : ""}, ${gap} under ${best.model.label}, at about ${fmtUsd(chosen.estimate)} instead of ${fmtUsd(best.estimate)}.`;
+  const learned = chosen.shift ? ` (${chosen.shift > 0 ? "+" : "−"}${Math.abs(chosen.shift)} from your grades)` : "";
+  if (chosen === best && !how) reason += ` ${chosen.model.label} is the best rated for this (${Math.round(chosen.rating!)}${learned}) and the cheapest of the ${eligible.length} within reach.`;
+  else if (chosen === best) reason += ` ${chosen.model.label} is the best rated for this (${Math.round(chosen.rating!)}${learned}).`;
+  else reason += ` ${chosen.model.label} is rated ${Math.round(chosen.rating!)}${usedRating !== guess.task ? " overall" : ""}${learned}, ${gap} under ${best.model.label}, at about ${fmtUsd(chosen.estimate)} instead of ${fmtUsd(best.estimate)}.`;
   if (how) reason += ` It is ${how}: ${chosen.seconds == null ? "its time is not known" : `${secondsText(chosen.seconds)}${chosen.measured ? "" : " (a rough guess)"}`}.`;
   const cheapest = [...eligible].sort(byPrice)[0];
   const fastest = timeOf ? [...eligible].sort(byTime)[0] : null;
