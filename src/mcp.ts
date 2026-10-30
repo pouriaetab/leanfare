@@ -313,7 +313,8 @@ const failure = (t: string) => ({ content: [{ type: "text", text: t }], isError:
 
 // The app on the other side, by the name it gives (initialize's clientInfo), for the plan's table.
 let client: string | null = null;
-const CLIENTS: [RegExp, string][] = [[/claude[- _]?code/i, "Claude Code"], [/^claude/i, "Claude"], [/codex/i, "Codex"], [/cursor/i, "Cursor"], [/gemini/i, "Gemini CLI"],
+// Cowork gives its door the name "local-agent-mode-<server>" (local-agent-mode-leanfare).
+const CLIENTS: [RegExp, string][] = [[/^local[- _]agent[- _]mode|cowork/i, "Cowork"], [/claude[- _]?code/i, "Claude Code"], [/^claude/i, "Claude"], [/codex/i, "Codex"], [/cursor/i, "Cursor"], [/gemini/i, "Gemini CLI"],
   [/windsurf|codeium/i, "Windsurf"], [/grok/i, "Grok"], [/perplexity/i, "Perplexity"], [/visual studio code|vs ?code|copilot/i, "VS Code"], [/lm ?studio/i, "LM Studio"]];
 export function clientLabel(name: unknown): string | null {
   if (typeof name !== "string" || !name.trim()) return null;
