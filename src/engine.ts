@@ -736,20 +736,24 @@ export async function handleOpenAI(req: Request, body: any): Promise<Response> {
 
   if (!stream) {
     try {
-      // One whole answer; an empty one (no text, no tool call, not declined) is asked for once more.
-      const read = async (r: Response, t: number) => {
+      // One whole answer; an empty one (no text, no tool call, not declined) is asked for once more, and one still
+      // empty goes to Auto's next pick, once (0.11.2), as it does on the chat screen and for the delegate.
+      const read = async (r: Response, t: number, m: Model = model) => {
+        const d = provider(m.provider)!, as = m === model ? name : m.apiId; // the next pick answers in its own way
         const text = await r.text();
         let j: any;
-        try { j = JSON.parse(text); } catch { throw new UserError(502, `${def.name} sent an answer Leanfare could not read.`, "bad_provider_answer"); }
+        try { j = JSON.parse(text); } catch { throw new UserError(502, `${d.name} sent an answer Leanfare could not read.`, "bad_provider_answer"); }
         const native = OLLAMA_NATIVE.has(r);
-        const oj = def.kind === "anthropic" ? anthropicToOpenAI(j, name) : def.kind === "responses" ? responsesToOpenAI(j, name) : native ? ollamaToOpenAI(j, name) : j;
+        const oj = d.kind === "anthropic" ? anthropicToOpenAI(j, as) : d.kind === "responses" ? responsesToOpenAI(j, as) : native ? ollamaToOpenAI(j, as) : j;
         const msg = oj.choices?.[0]?.message ?? {};
         const answer = typeof msg.content === "string" ? msg.content : "";
         const empty = !answer.trim() && !msg.tool_calls?.length && !msg.function_call && oj.choices?.[0]?.finish_reason !== "content_filter";
-        const usage = def.kind === "anthropic" ? fromAnthropicUsage(j.usage) : fromOpenAIUsage(oj.usage);
-        return { out: def.kind === "anthropic" || def.kind === "responses" || native ? JSON.stringify(oj) : text, answer, empty, usage, reported: reportedCost(oj.usage), t };
+        const usage = d.kind === "anthropic" ? fromAnthropicUsage(j.usage) : fromOpenAIUsage(oj.usage);
+        return { out: d.kind === "anthropic" || d.kind === "responses" || native ? JSON.stringify(oj) : text, answer, empty, usage, reported: reportedCost(oj.usage), t };
       };
+      const picks = p.auto ? [...p.candidates] : []; // Auto's picks in order, to pass the request on
       let a = await read(res, t0);
+      let answered = model; // the model whose answer goes back
       if (a.empty && !ac.signal.aborted) {
         const firstTry = record(p, model, "openai", a.usage ?? estimatedUsage(p, 0), { status: "error", error: "came back empty", ms: performance.now() - a.t, reportedCost: a.reported, estimated: !a.usage });
         if (reserveAgain(p, model, p.maxOut)) {
@@ -757,6 +761,16 @@ export async function handleOpenAI(req: Request, body: any): Promise<Response> {
           p.candidates = [model];
           const again = await sendWithFallback(p, "openai", body, false, ac.signal);
           a = await read(again.res, again.t0);
+          const at = picks.findIndex((m) => m.id === model.id);
+          const next = a.empty && !ac.signal.aborted ? picks.slice(at + 1).find((m) => m.id !== model.id) : undefined;
+          if (next && reserveAgain(p, next, p.maxOut)) {
+            record(p, model, "openai", a.usage ?? estimatedUsage(p, 0), { status: "error", error: "came back empty", ms: performance.now() - a.t, reportedCost: a.reported, estimated: !a.usage });
+            p.notes.push(`${model.label} came back empty again, so Auto passed the request to its next pick.`);
+            p.model = next; p.candidates = picks.slice(picks.indexOf(next));
+            const other = await sendWithFallback(p, "openai", body, false, ac.signal);
+            answered = other.model;
+            a = await read(other.res, other.t0, other.model);
+          }
         } else {
           // The empty answer goes back as it came (it is already in the ledger, at what it cost).
           p.notes.push("The answer came back empty, and the budget does not leave room to ask again.");
@@ -764,9 +778,9 @@ export async function handleOpenAI(req: Request, body: any): Promise<Response> {
           headers["x-leanfare-cost-usd"] = firstTry.cost === null ? "unknown" : usd8(firstTry.cost);
           return new Response(a.out, { status: 200, headers: { ...headers, "content-type": "application/json" } });
         }
-        Object.assign(headers, leanHeaders(p, model));
+        Object.assign(headers, leanHeaders(p, answered));
       }
-      const r = record(p, model, "openai", a.usage ?? estimatedUsage(p, a.answer.length), { status: "ok", ms: performance.now() - a.t, reportedCost: a.reported, estimated: !a.usage });
+      const r = record(p, answered, "openai", a.usage ?? estimatedUsage(p, a.answer.length), { status: "ok", ms: performance.now() - a.t, reportedCost: a.reported, estimated: !a.usage });
       headers["x-leanfare-cost-usd"] = r.cost === null ? "unknown" : usd8(r.cost);
       return new Response(a.out, { status: 200, headers: { ...headers, "content-type": "application/json" } });
     } catch (e) {

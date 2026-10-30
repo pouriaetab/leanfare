@@ -5,10 +5,11 @@ import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { db } from "../src/db";
 import { runDelegate } from "../src/delegate";
 import { runChat } from "../src/engine";
-import { boot, fake, keys, reset } from "./app";
+import { boot, fake, keys, post, reset } from "./app";
 
 const GEMINI = "google/gemini-3.8-flash", CLAUDE = "anthropic/claude-sonnet-4-6";
-beforeAll(async () => { await boot(); });
+let url = "";
+beforeAll(async () => { url = (await boot()).url; });
 beforeEach(async () => {
   await reset({ ticked: [GEMINI, CLAUDE], mode: "save" });
   await keys("google", "anthropic");
@@ -72,5 +73,26 @@ describe("a hand off", () => {
     expect(r.model.id).toBe(CLAUDE);
     expect(r.receipt).toContain(PASSED);
     expect((db.query("SELECT model, status FROM delegations").all() as any[]).map((d) => [d.model, d.status])).toEqual([[CLAUDE, "ok"]]);
+  });
+});
+
+describe("an app on the OpenAI address (a whole answer)", () => {
+  test("still empty after a second try: Auto passes it to its next pick, which answers in its own way (0.11.2)", async () => {
+    emptyAt("google");
+    const r = await post(`${url}/v1/chat/completions`, { model: "auto", messages: [{ role: "user", content: "From an app [usage 100 10]" }] });
+    const j = await r.json();
+    expect(r.status).toBe(200);
+    expect(j.choices[0].message.content).toBe("Hello from claude-sonnet-4-6.");
+    expect(decodeURIComponent(r.headers.get("x-leanfare-reason")!)).toContain(PASSED);
+    expect(tries()).toEqual([
+      { model: GEMINI, status: "error", error: "came back empty" },
+      { model: GEMINI, status: "error", error: "came back empty" },
+      { model: CLAUDE, status: "ok", error: null }]);
+  });
+  test("a model the app named is asked once more, and its answer goes back as it came", async () => {
+    emptyAt("google");
+    const r = await post(`${url}/v1/chat/completions`, { model: GEMINI, messages: [{ role: "user", content: "From an app [usage 100 10]" }] });
+    expect((await r.json()).choices[0].message.content).toBe("");
+    expect(tries().map((t: any) => t.model)).toEqual([GEMINI, GEMINI]);
   });
 });
