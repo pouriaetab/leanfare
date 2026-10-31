@@ -296,12 +296,20 @@ export function reportLines(r: any, range: string): string {
     t.three ? `Quality three ways, as scores out of 100 (good 1, partly half, wrong 0) with their 90% range: the outside answers ${scoreText(t.three.outside.score)}; the whole results together ${scoreText(t.three.together.score)}; the app alone ${scoreText(t.three.alone.score, "not known")}.` : "",
     t.outside?.measured ? `What the outside models used (measured): ${usedText(t.outside)}, in ${t.outside.calls} call${t.outside.calls === 1 ? "" : "s"}${t.outside.failed ? ` (${t.outside.failed} failed)` : ""}${t.outside.notMeasured ? `; ${t.outside.notMeasured} older part${t.outside.notMeasured === 1 ? "" : "s"} not measured` : ""}.` : "",
     `Quality: ${t.quality.graded ? `${scoreText(t.quality.score)}: ${t.quality.good} good, ${t.quality.partly} partly, ${t.quality.wrong} wrong; ${t.quality.blind} judged blind` : "not graded yet"}.`,
+    levelLine(r.byLevel),
     speedLine(r.speed),
     r.byModel.length ? `Work by model: ${r.byModel.slice(0, 6).map((m: any) => `${m.label} ${tokShort(m.read)} tokens, ${m.parts} part${m.parts === 1 ? "" : "s"}${m.score ? `, score ${scoreText(m.score)}` : ""}`).join("; ")}.` : "",
     `Last prompts:\n${r.prompts.slice(0, 6).map((p: any) => `- ${p.id ? `${p.id}, ` : ""}${new Date(p.ts).toISOString().slice(0, 16).replace("T", " ")} UTC, ${p.app}${p.model ? ` (${p.model.label}${p.plan ? `, ${planShort(p.plan)}` : ""})` : ""}: ${p.parts.length ? `${[...new Set(p.parts.map((x: any) => x.label))].join(", ")}, ${tokShort(p.kept)} kept out${p.saved !== null ? `, ${pctOf(p.saved)} saved` : ""}` : "nothing handed off"}${p.grade ? `, ${p.grade}` : ""}`).join("\n")}`,
     `The full report: Leanfare, Savings (${where().base}/#report).`,
   ];
   return lines.filter(Boolean).join("\n");
+}
+// Quality by level (0.12): each level's share graded good and how many were fixed before the app answered, then all.
+export function levelLine(b: any): string {
+  if (!b || !b.all?.parts) return "";
+  const one = (r: any) => (r.graded ? `${Math.round(r.goodShare * 100)}% good of ${r.graded} graded${r.bad ? `, ${r.fixed} of ${r.bad} fixed first` : ""}` : `${r.parts} not graded yet`);
+  const rows = [...b.levels.map((r: any) => `${levelText(r.level as Level)} ${one(r)}`), ...(b.before ? [`before levels ${one(b.before)}`] : [])];
+  return `Quality by level: ${rows.join("; ")}; all levels ${one(b.all)}.`;
 }
 // One prompt and its parts, by its id (report with prompt).
 const KIND_WORD: Record<string, string> = { read: "reading", write: "drafting", reason: "working out", search: "search" };
@@ -321,6 +329,7 @@ function compactReport(r: any, range: string, app: string | null = null) {
     range, app, from: r.from, to: r.to, step: r.step, tiles: r.tiles, series: r.series,
     byModel: r.byModel.slice(0, 6).map((m: any) => ({ label: m.label, where: m.where, read: m.read, parts: m.parts, cost: m.cost, goodShare: m.goodShare, score: m.score ?? null })),
     byKind: r.byKind,
+    byLevel: r.byLevel ?? null,
     speed: (r.speed ?? []).slice(0, 6).map((m: any) => ({ label: m.label, where: m.where, calls: m.calls, failed: m.failed, fails: m.fails, first: m.first, whole: m.whole, goodShare: m.goodShare, score: m.score ?? null, rest: m.rest, noQuota: m.noQuota ?? null })),
     prompts: r.prompts.slice(0, 6).map((p: any) => ({ id: p.id, ts: p.ts, app: p.app, model: p.model?.label ?? null, plan: planShort(p.plan), parts: [...new Set(p.parts.map((x: any) => x.label))], kept: p.kept, saved: p.saved, grade: p.grade, used: p.used ? { read: p.used.read, thought: p.used.thought, wrote: p.used.wrote } : null,
       both: p.both ? { alone: p.both.alone.mid, saved: p.both.saved.mid } : null, together: p.together ?? null })),
