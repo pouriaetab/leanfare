@@ -3,6 +3,7 @@
 // only, answers only to its own host name (so a web page cannot reach it by
 // pointing a domain at 127.0.0.1), and refuses browser requests from other
 // sites unless you allowed them in Settings.
+import { deleteWords, KEEP_DAYS, KEEP_NAMES, KEEP_SAYS, wordsKept } from "./words";
 import { probeState } from "./usageprobe";
 import { lastSnap } from "./statusline";
 import { APP_LEVELS, appKey, DEFAULT_LEVEL, isLevel, LEVEL_MEANS, LEVEL_NAME, LEVEL_SAYS, levelFor } from "./level";
@@ -155,6 +156,7 @@ export function state() {
     // The level (level.ts, 0.12): the names, what each does, the apps that keep their own, and the one in effect for
     // a Claude app now (raised while the plan runs low, when that is on).
     level: { names: LEVEL_NAME, says: LEVEL_SAYS, apps: APP_LEVELS, now: levelFor(s, "Claude Code", null, planMode()), plan: planReading() },
+    keep: { names: KEEP_NAMES, says: KEEP_SAYS, days: KEEP_DAYS, kept: wordsKept() }, // what Leanfare keeps of the words (words.ts)
     budget: b,
     month: (() => { const v = savings(); return { spent: v.spent, today: v.today, answers: v.answers }; })(),
     notices,
@@ -547,6 +549,8 @@ async function api(req: Request, url: URL): Promise<Response> {
     return json(levelState(typeof b.app === "string" ? b.app : null, null));
   }
   // A model resting after failing too often (rest.ts): end its rest now, so Auto may pick it again.
+  // What Leanfare keeps (words.ts, 0.12): Delete all.
+  if (p === "/api/words/delete" && m === "POST") return json({ deleted: deleteWords(), kept: wordsKept() });
   if (p === "/api/rest/end" && m === "POST") {
     const b = await readBody(req);
     if (typeof b?.model !== "string" || b.model.length > 200) return fail(400, "model is needed.");

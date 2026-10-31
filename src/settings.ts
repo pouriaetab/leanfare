@@ -57,6 +57,8 @@ export interface Settings {
   levels: Record<string, number>; // 0.12: an app's own level (level.ts: APP_LEVELS); none: the default
   raiseWhenLow: boolean; // 0.12: at least 4 when your Claude plan runs low, 5 when very low (a chat's own level stays)
   askEachChat: boolean; // 0.12: the app asks you for the level at the start of each new chat; off: nothing asks again
+  keep: number; // 0.12: what Leanfare keeps of each hand off's words, 1 (numbers only) to 5 (everything) (words.ts)
+  keepDays: number; // 0.12: how many days kept words stay
   planMeter: boolean; // 0.12: read the Claude plan's use through Claude Code's usage view while the app runs (usageprobe.ts)
   jobs: Jobs; // where each kind of job goes in plans (0.11): to Leanfare, to Leanfare when your plan runs low (modes.ts), or your app
   paidCap: number; // US dollars a hand off may spend on a paid model (0.11); a cheaper or free one first, or it stays with your app
@@ -103,6 +105,8 @@ export const DEFAULTS: Settings = {
   levels: {},
   raiseWhenLow: true,
   askEachChat: false,
+  keep: 1,
+  keepDays: 30,
   planMeter: true,
   jobs: JOB_DEFAULTS,
   paidCap: 0.1,
@@ -176,6 +180,8 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
   if ("atLimit" in p) { if (p.atLimit !== "cheapest" && p.atLimit !== "stop") return { error: "atLimit must be cheapest or stop" }; out.atLimit = p.atLimit; }
   if ("history" in p) out.history = !!p.history;
   if ("updateCheck" in p) out.updateCheck = !!p.updateCheck;
+  if ("keep" in p) { if (!Number.isInteger(p.keep) || p.keep < 1 || p.keep > 5) return { error: "keep must be a whole number from 1 to 5" }; out.keep = p.keep; }
+  if ("keepDays" in p) { if (![7, 14, 30, 60, 90].includes(p.keepDays)) return { error: "keepDays must be 7, 14, 30, 60 or 90" }; out.keepDays = p.keepDays; }
   if ("level" in p) { if (!Number.isInteger(p.level) || p.level < 1 || p.level > 5) return { error: "level must be a whole number from 1 to 5" }; out.level = p.level; }
   if ("levels" in p) { // an app's own level; null takes it back to the default
     if (!p.levels || typeof p.levels !== "object" || Array.isArray(p.levels)) return { error: "levels must be an object of apps and levels" };

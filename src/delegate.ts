@@ -17,6 +17,7 @@
 // Each task is written to the delegations table with the chance it had of being checked,
 // so pass rates can be weighted back to every task. No words are kept there or in the
 // ledger: only models, verdicts, token counts and costs.
+import { keepWords, pruneWords } from "./words";
 import { isLevel, LEVEL_CHECKS, levelFor, type Level } from "./level";
 import { planMode } from "./modes";
 import { parseSpeed, secondsText, type SpeedChoice } from "./speed";
@@ -535,6 +536,8 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   result.row = write({ ...row, model: first.meta.model.id, cost: first.cost, answerTokens, status: "ok", chance, checker: check.checker?.id ?? null, verdict: picked ? check.verdict : null, checkCost: check.cost, rerun: firstUsed ? model.id : null, rerunCost, ms: Math.round(result.seconds * 1000),
     replyTokens: tokensOf(receipt.length) }); // the receipt the app reads back with the answer
   if (result.row !== null) keepRequest(result.row, input, model, job ?? null); // for a fix one tier up, should the app grade it partly or wrong
+  // Its words, as far as Settings, What Leanfare keeps, says (words.ts, 0.12); the oldest past the days kept go.
+  if (result.row !== null && !input.trial && (settings().keep ?? 1) >= 2) { keepWords(result.row, settings().keep, { task: input.task, answer: final.text, files: input.files }); pruneWords(settings().keepDays ?? 30); }
   // Now and then the top model answers it too, and a judge of a third company compares the two blind (sidebyside.ts).
   // In the background: this answer goes back now. Not for a private task, nor a plan's part kept to free or local
   // models, nor an answer a failed check replaced (the check judged it).

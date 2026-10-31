@@ -145,6 +145,8 @@ async function start() {
   // Plan by itself, where it is on, brought up to this version (workers.ts): its block's text and its hooks.
   import("./workers").then((w) => { const done = w.refreshAuto(); if (done.length) console.log(`Plan by itself is up to date in ${done.join(", ")}.`); }).catch(() => {});
   // The Claude plan's use, read through Claude Code's usage view when the last reading is old (usageprobe.ts, 0.12).
+  // Kept words past the days Settings keeps them (words.ts, 0.12) go, even with no new hand off.
+  Promise.all([import("./words"), import("./settings")]).then(([w, st]) => { if ((st.settings().keep ?? 1) >= 2 || w.wordsKept().count) w.pruneWords(st.settings().keepDays ?? 30); }).catch(() => {});
   Promise.all([import("./usageprobe"), import("./settings"), import("./switch")]).then(([u, st, sw]) => u.startUsageProbe(() => st.settings().planMeter !== false && sw.switchedOn())).catch(() => {});
   const day = 24 * 3600_000;
   const stale = () => Date.now() - Date.parse(data.store.catalog.built) > 12 * 3600_000;
