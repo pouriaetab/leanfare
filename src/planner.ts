@@ -21,6 +21,7 @@
 // not hold). The monthly budget holds either way.
 //
 // No words are kept: the ledger has the split's model, tokens and cost, as for any answer.
+import { isLevel, levelFor, levelText, type Level } from "./level";
 import { homedir } from "node:os";
 import { dirname, relative, sep } from "node:path";
 import { CODEX_ID, CODEX_LABEL, codexFor, runCodex } from "./codex";
@@ -99,6 +100,7 @@ export interface PlanResult {
   codex?: string | null; // why Codex took no part, when it is turned on in Settings and could not
   private?: boolean; // stays on this computer: its parts go only to models here, or stay with you
   you?: { model: string | null; label: string | null; plan: string | null }; // the app's own model, as it said, and your plan for it
+  level?: number; // 0.12: the level it was made at (level.ts); its parts run at it
   table: string; // the table as markdown
   next: string; // what to do now
 }
@@ -311,7 +313,9 @@ export function modelInYourApp(part: { kind: PartKind; effort: Effort; task: str
 // A part on Codex: its time is a rough guess (Codex is a whole agent: half a minute to start, then it reads).
 const onCodex = (part: Split, r: { tokens: number }, why: string): Part => ({ ...part, where: "codex", model: { id: CODEX_ID, label: CODEX_LABEL }, use: null, seconds: Math.round(30 + r.tokens / 400), tokens: r.tokens + OUT_LEANFARE, cost: 0, why });
 
-async function place(part: Split, files: PlanFile[], near: string | null, manager: string, signal: AbortSignal, codex = false, priv = false): Promise<Part> {
+// Why more goes out: the plan near its limit, or the level (0.12) set to 4 or 5.
+const nearWords = (near: string, join: ": " | " (") => (near.startsWith("your Leanfare level") ? near : `your plan is near its limit${join}${near}${join === " (" ? ")" : ""}`);
+async function place(part: Split, files: PlanFile[], near: string | null, manager: string, signal: AbortSignal, codex = false, priv = false, level: Level = 2): Promise<Part> {
   const r = reading(part, files);
   // A private plan stays on this computer; a part's files go where Settings says (platforms.ts: mayTake).
   const work = { private: priv, files: r.named > 0 };
@@ -329,7 +333,7 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
   const job = JOB_OF[part.kind];
   const rule = job ? ({ ...JOB_DEFAULTS, ...settings().jobs })[job] : "leanfare";
   const yours = manager === "you" ? "your app" : manager;
-  if (job && rule === "app") return stay(`your rules keep ${JOB_WORD[job]} with ${yours} (Settings, Jobs)`);
+  if (job && rule === "app" && level < 5) return stay(`your rules keep ${JOB_WORD[job]} with ${yours} (Settings, Jobs)`);
   if (job && rule === "low" && !near) return stay(`your rules send ${JOB_WORD[job]} out only when your plan runs low (Settings, Jobs)`);
   const big = (part.effort === "high" && (part.kind === "reason" || part.kind === "write"));
   if (big && !near) return stay(`high effort judgement: your strongest model, in your plan`);
@@ -363,8 +367,8 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
     const p = await route({ source: "chat", asked: `auto-${TIER[part.effort]}`, messages, tokens: r.tokens, maxOut: null, signal, dry: true, effort: part.effort,
       guess: part.kind === "search" ? { task: "overall", why: "a web search", alt: null } : taskFor(kind, messages), only, onlyWhy: offWhy ?? `none of the models you ticked can take this much text (about ${tokText(need)} tokens with the answer)`, ledgerSource: "delegate" });
     const where = whereOf(p.model, p.estimate);
-    if (where === "paid" && viaCodex) return onCodex(part, r, `your ChatGPT plan through Codex, not pay per use${near && big ? ` (your plan is near its limit: ${near})` : ""}; Codex reads ${r.named ? "the files itself" : "what the task says"}, read only`);
-    const why = (near && big ? `your plan is near its limit (${near}), so this goes out too` : where === "local" ? "reading and drafting go out: on this computer, $0"
+    if (where === "paid" && viaCodex) return onCodex(part, r, `your ChatGPT plan through Codex, not pay per use${near && big ? ` (${nearWords(near, ": ")})` : ""}; Codex reads ${r.named ? "the files itself" : "what the task says"}, read only`);
+    const why = (near && big ? `${nearWords(near, " (")}, so this goes out too` : where === "local" ? "reading and drafting go out: on this computer, $0"
       : where === "free" ? "reading and drafting go out: a free model" : `the cheapest model rated well enough at ${part.effort} effort`) + some;
     return { ...part, where, model: { id: p.model.id, label: p.model.label }, use: null, seconds: p.seconds, tokens: r.tokens + OUT_LEANFARE, cost: p.estimate, risk: readRisk(p.model), why };
   } catch (e: any) {
@@ -510,7 +514,7 @@ function nextOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
 
 // ---- the plan ------------------------------------------------------------------------------------
 
-export interface PlanInput { task: string; files: PlanFile[]; manager: string | null; split?: "auto" | "rules"; private?: boolean; yourModel?: string | null; signal: AbortSignal }
+export interface PlanInput { task: string; files: PlanFile[]; manager: string | null; split?: "auto" | "rules"; private?: boolean; yourModel?: string | null; level?: Level; signal: AbortSignal }
 
 // The name of a model an app says it runs on: the price list's when it has the model, else made from the id
 // (claude-opus-5-5: Claude Opus 5.5; gpt-5.4: GPT-5.4; a date at the end is dropped).
@@ -565,7 +569,8 @@ export function checkPlan(b: any, trusted = false): Omit<PlanInput, "signal"> | 
   if (b.private !== undefined && typeof b.private !== "boolean") return "private must be true or false.";
   const yourModel = nameOf(b.your_model ?? b.yourModel);
   if (yourModel === false) return "your_model must be a model's name, like claude-opus-5-5.";
-  return { task: b.task.trim(), files, manager, split, ...(b.private ? { private: true } : {}), ...(yourModel ? { yourModel } : {}) };
+  if (b.level !== undefined && b.level !== null && !isLevel(b.level)) return "level must be a whole number from 1 to 5.";
+  return { task: b.task.trim(), files, manager, split, ...(b.private ? { private: true } : {}), ...(yourModel ? { yourModel } : {}), ...(isLevel(b.level) ? { level: b.level } : {}) };
 }
 
 // The plan whose limits count: Codex spends a ChatGPT plan, the others a Claude plan when they are Claude's.
@@ -614,15 +619,19 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
   const nearText = mode ? (mode.mode === "plenty" ? null : mode.mode === "low" && (mode.five ?? 0) < MODE_AT.low && (mode.week ?? 0) < MODE_AT.low && mode.runsOut !== null
       ? `at this week's pace it runs out before it resets` : [mode.five !== null && mode.five >= MODE_AT.low ? `the 5 hours at ${Math.round(mode.five)}%` : "", mode.week !== null && mode.week >= MODE_AT.low ? `the week at ${Math.round(mode.week)}%` : ""].filter(Boolean).join(", "))
     : [limits.five !== null && limits.five >= NEAR ? `the 5 hours at ${Math.round(limits.five)}%` : "", limits.week !== null && limits.week >= NEAR ? `the week at ${Math.round(limits.week)}%` : ""].filter(Boolean).join(", ") || null;
+  // The level (level.ts, 0.12): at 4 (Most) and 5 (All it can) the parts go out as when the plan runs low; at 5 also the
+  // kinds your rules keep with your app.
+  const lv = levelFor(settings(), manager === "you" ? null : manager, input.level ?? null, mode);
+  const near = nearText ?? (lv.level >= 4 ? `your Leanfare level is ${levelText(lv.level)}` : null);
   const placed: Part[] = [];
   // A reading part with no files named reads what an earlier part finds (a search's sources): its size is a guess.
   const guessed = (p: Split) => p.kind === "read" && p.size !== "none" && reading(p, input.files).named === 0;
   const mark = (x: Part, p: Split): Part => (guessed(p) ? { ...x, guess: true } : x);
-  for (const p of parts) placed.push(mark(await place(p, input.files, nearText, manager, input.signal, codex.ok, !!input.private), p));
+  for (const p of parts) placed.push(mark(await place(p, input.files, near, manager, input.signal, codex.ok, !!input.private, lv.level), p));
   // A part that waits for one of yours is handed over by your app once yours are done, with delegate,
   // which cannot run it on Codex: such a part is placed as if Codex were off.
   const later = afterYours(placed);
-  for (let i = 0; i < placed.length; i++) if (placed[i].where === "codex" && later.has(placed[i].n)) placed[i] = mark(await place(parts[i], input.files, nearText, manager, input.signal, false), parts[i]);
+  for (let i = 0; i < placed.length; i++) if (placed[i].where === "codex" && later.has(placed[i].n)) placed[i] = mark(await place(parts[i], input.files, near, manager, input.signal, false, !!input.private, lv.level), parts[i]);
   const out = placed.filter((p) => p.where !== "you");
   const costs = out.map((p) => p.cost);
   const time = chains(placed);
@@ -642,7 +651,7 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
   const sg = wantsLocal ? suggestLocal().suggestion : null;
   const local = sg ? { name: sg.name, size: sg.size, like: sg.like, rating: sg.rating, fit: sg.fit } : null;
   const you = { model: input.yourModel ?? null, label: input.yourModel ? modelName(input.yourModel) : null, plan: planFor(manager) };
-  const base = { task: input.task, manager, parts: placed, totals, split, limits: known ? limits : null, local, codex: codex.why, ...(input.private ? { private: true } : {}), you };
+  const base = { task: input.task, manager, parts: placed, totals, split, limits: known ? limits : null, local, codex: codex.why, ...(input.private ? { private: true } : {}), you, level: lv.level };
   const result: PlanResult = { id: randomId(), ...base, table: tableOf(base), next: nextOf(base) };
   keep(result, new Map(input.files.filter((f) => f.path).map((f) => [f.name, { path: f.path!, size: f.size }])));
   return result;
@@ -822,7 +831,7 @@ async function runPart(p: Part, plan: PlanResult, at: (n: number) => RunPart, si
   if (mine.length && !files.length) throw Object.assign(new UserError(400, `None of its files could be handed over${skipped.length ? `: ${skipped.slice(0, 3).join("; ")}` : ""}.`, "plan_files"), { spent: 0 });
   // A free part stays on free models, its check too; a paid part within the cap goes unchecked (the estimate holds no check).
   const free = p.where === "local" || p.where === "free";
-  const d = await runDelegate({ task, files, kind: DELEGATE_KIND[p.kind] ?? null, effort: p.effort, check: free || yes ? "auto" : "never", maxOut: DEFAULT_MAX_OUT, ...(free ? { only: isFree } : {}), ...(p.model ? { model: p.model.id } : {}), plan: `${plan.id}:${p.n}`, ...(plan.private ? { private: true } : {}), ...appOf(plan) }, signal);
+  const d = await runDelegate({ task, files, kind: DELEGATE_KIND[p.kind] ?? null, effort: p.effort, check: free || yes ? "auto" : "never", maxOut: DEFAULT_MAX_OUT, ...(free ? { only: isFree } : {}), ...(p.model ? { model: p.model.id } : {}), plan: `${plan.id}:${p.n}`, ...(plan.private ? { private: true } : {}), ...appOf(plan), ...(isLevel(plan.level) ? { level: plan.level } : {}) }, signal);
   const notes = [
     mine.length > files.length + skipped.length ? `Handed over ${files.length} of its ${mine.length} files (the most one hand off takes is ${DELEGATE_LIMITS.count} files, ${DELEGATE_LIMITS.total / 1048576} MB).` : "",
     skipped.length ? `Left out: ${skipped.slice(0, 3).join("; ")}${skipped.length > 3 ? `, and ${skipped.length - 3} more` : ""}.` : "",

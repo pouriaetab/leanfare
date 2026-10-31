@@ -3,6 +3,8 @@
 // only, answers only to its own host name (so a web page cannot reach it by
 // pointing a domain at 127.0.0.1), and refuses browser requests from other
 // sites unless you allowed them in Settings.
+import { APP_LEVELS, appKey, DEFAULT_LEVEL, isLevel, LEVEL_MEANS, LEVEL_NAME, levelFor } from "./level";
+import { planMode } from "./modes";
 import { existsSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -377,6 +379,14 @@ function handOffBody(job: NonNullable<Awaited<ReturnType<typeof waitDelegate>>>)
   return { ...job.result, id: job.id, running: false, whoWrote: settings().whoWrote, review: settings().review };
 }
 
+// The level as an app sees it: in effect (a chat's own first), the default, each app's own, and the two switches.
+function levelState(app: string | null, chat: string | null) {
+  const s = settings();
+  const n = chat === null ? null : Number(chat);
+  const view = levelFor(s, app && app.trim() ? app.trim().slice(0, 60) : null, isLevel(n) ? n : null, planMode());
+  return { view, default: isLevel(s.level) ? s.level : DEFAULT_LEVEL, levels: s.levels ?? {}, raiseWhenLow: s.raiseWhenLow !== false, ask: s.askEachChat === true, names: LEVEL_NAME, means: LEVEL_MEANS, apps: APP_LEVELS };
+}
+
 async function readBody(req: Request): Promise<any> {
   const t = await req.text();
   if (!t) return {};
@@ -508,6 +518,21 @@ async function api(req: Request, url: URL): Promise<Response> {
       return json({ text: standingText(st), standing: st, fix: Number.isInteger(b.handoff) ? await fixed(b.handoff) : fix ? { error: "A fix needs the hand off's number, from its receipt." } : null });
     }
     return fail(400, "Grade a plan's part (id and part) or a model's answer (model and kind: read, write, reason or search).");
+  }
+  // The level (level.ts, 0.12): for an app (and a chat's own, when the level tool set one), with the default and each
+  // app's; POST keeps one as the default or for an app.
+  if (p === "/api/level" && m === "GET") return json(levelState(url.searchParams.get("app"), url.searchParams.get("chat")));
+  if (p === "/api/level" && m === "POST") {
+    const b = await readBody(req);
+    if (!isLevel(b?.set)) return fail(400, "set must be a level from 1 to 5.");
+    if (b.scope === "default") saveSettings({ level: b.set });
+    else if (b.scope === "app") {
+      const k = typeof b.key === "string" && b.key in APP_LEVELS ? b.key : appKey(typeof b.app === "string" ? b.app : null);
+      if (!k) return fail(400, "That app cannot keep a level of its own.");
+      saveSettings({ levels: { ...(settings().levels ?? {}), [k]: b.set } });
+    }
+    else return fail(400, "scope must be default or app (a chat's level stays in the chat).");
+    return json(levelState(typeof b.app === "string" ? b.app : null, null));
   }
   // A model resting after failing too often (rest.ts): end its rest now, so Auto may pick it again.
   if (p === "/api/rest/end" && m === "POST") {
