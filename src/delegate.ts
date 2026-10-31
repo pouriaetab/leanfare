@@ -48,12 +48,15 @@ export interface DelegateInput {
   private?: boolean; // stays on this computer: only models in Ollama and the other model apps here (platforms.ts: mayTake)
   app?: string | null; // the app that asked (the MCP door's client), for the report
   appModel?: string | null; // the model that app runs on, as it says: the prompt's main model
+  fixOf?: number; // 0.12: a fix of that hand off, asked one tier up after the app graded it partly or wrong (fixHandOff)
+  fixDepth?: number; // how many fixes deep: a fix of a fix is 2, and Leanfare asks again no further
 }
 
 export const KINDS: Kind[] = ["read", "write", "reason"];
 export const EFFORTS: Effort[] = ["low", "medium", "high"];
 export const TIER: Record<Effort, Mode> = { low: "save", medium: "balanced", high: "best" };
 const UP: Record<Mode, Mode | null> = { save: "balanced", balanced: "best", best: null };
+const UP_EFFORT: Record<Effort, Effort> = { low: "medium", medium: "high", high: "high" }; // a fix asks one tier up (at high: another model)
 export const CHANCE: Record<Effort, number> = { low: 0.1, medium: 0.25, high: 1 }; // checked when check is auto
 export const DEFAULT_MAX_OUT = 8192;
 export const CHECK_MAX_OUT = 4096;
@@ -218,15 +221,15 @@ const add = (...v: (number | null | undefined)[]) => (v.some((x) => x === null) 
 // Tokens as Leanfare estimates them everywhere (about four characters each).
 const tokensOf = (chars: number) => Math.ceil(chars / 4);
 
-const INSERT = `INSERT INTO delegations(ts, month, day, task, kind, effort, model, cost, files, file_tokens, answer_tokens, status, chance, checker, verdict, check_cost, rerun, rerun_cost, plan, task_tokens, app, app_model, ms, job, ask_tokens, reply_tokens)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const INSERT = `INSERT INTO delegations(ts, month, day, task, kind, effort, model, cost, files, file_tokens, answer_tokens, status, chance, checker, verdict, check_cost, rerun, rerun_cost, plan, task_tokens, app, app_model, ms, job, ask_tokens, reply_tokens, fix_of)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 // taskTokens: a plan part's own text, which Leanfare wrote from the plan (the part, what the earlier parts
 // found, the task it belongs to): the app that asked never read it. A hand off's task the app wrote itself: 0.
-function writeRow(row: { task: string; kind: string | null; effort: Effort; model: string | null; cost: number | null; files: number; fileTokens: number; answerTokens: number; status: string; chance: number; checker: string | null; verdict: string | null; checkCost: number | null; rerun: string | null; rerunCost: number | null; plan?: string | null; taskTokens?: number; app?: string | null; appModel?: string | null; ms?: number | null; job?: string | null; askTokens?: number | null; replyTokens?: number | null }): number | null {
+function writeRow(row: { task: string; kind: string | null; effort: Effort; model: string | null; cost: number | null; files: number; fileTokens: number; answerTokens: number; status: string; chance: number; checker: string | null; verdict: string | null; checkCost: number | null; rerun: string | null; rerunCost: number | null; plan?: string | null; taskTokens?: number; app?: string | null; appModel?: string | null; ms?: number | null; job?: string | null; askTokens?: number | null; replyTokens?: number | null; fixOf?: number | null }): number | null {
   const d = now();
   try {
-    const r = db.query(INSERT).run(d.toISOString(), localMonth(d), localDay(d), row.task, row.kind, row.effort, row.model, row.cost, row.files, row.fileTokens, row.answerTokens, row.status, row.chance, row.checker, row.verdict, row.checkCost, row.rerun, row.rerunCost, row.plan ?? null, row.taskTokens ?? 0, row.app ?? null, row.appModel ?? null, row.ms ?? null, row.job ?? null, row.askTokens ?? null, row.replyTokens ?? null);
+    const r = db.query(INSERT).run(d.toISOString(), localMonth(d), localDay(d), row.task, row.kind, row.effort, row.model, row.cost, row.files, row.fileTokens, row.answerTokens, row.status, row.chance, row.checker, row.verdict, row.checkCost, row.rerun, row.rerunCost, row.plan ?? null, row.taskTokens ?? 0, row.app ?? null, row.appModel ?? null, row.ms ?? null, row.job ?? null, row.askTokens ?? null, row.replyTokens ?? null, row.fixOf ?? null);
     return Number(r.lastInsertRowid);
   } catch (e) { console.error("leanfare: could not write the delegate's row:", String(e)); return null; } // the answer matters more than the row
 }
@@ -252,6 +255,27 @@ export function gradeRow(verdict: string, by: { row?: number; plan?: string; mod
     }
   } catch (e) { console.error("leanfare: could not keep the grade with its hand off:", String(e)); }
   return false;
+}
+
+// A hand off's model and kind, for a grade that names only its number (0.12): the model whose answer the app got (the
+// one that answered again after a failed check, when one did), and the kind it was given, else the kind of its task.
+const TASK_KIND: Record<string, string> = { longer_query: "read", instruction_following: "write", hard_prompts: "reason" };
+export function handOffRow(row: number): { model: string; kind: string; effort: string } | null {
+  try {
+    const r = db.query("SELECT model, rerun, kind, task, effort FROM delegations WHERE id = ? AND status = 'ok'").get(row) as any;
+    const kind = r ? r.kind ?? TASK_KIND[r.task] ?? null : null;
+    return r && kind && (r.rerun ?? r.model) ? { model: r.rerun ?? r.model, kind, effort: r.effort } : null;
+  } catch { return null; }
+}
+// A plan part's hand off: its last answer (a fix of it, when one was asked).
+export function planRow(id: string, part: number): number | null {
+  try { const r = db.query("SELECT id FROM delegations WHERE plan = ? AND status = 'ok' ORDER BY id DESC LIMIT 1").get(`${id}:${part}`) as { id: number } | null; return r?.id ?? null; }
+  catch { return null; }
+}
+// Graded partly or wrong, then fixed before the app answered: by the app itself, or one tier up through Leanfare.
+export function markFixed(row: number, how: "myself" | "leanfare"): boolean {
+  try { return db.query("UPDATE delegations SET fixed = ? WHERE id = ? AND status = 'ok'").run(how, row).changes > 0; }
+  catch { return false; }
 }
 
 // The prompt's whole result, the app and the hand offs together: kept with a hand off of that prompt (the one you
@@ -342,7 +366,8 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   // by side), so the report can sum what the outside models used for it. The trial's questions keep no row.
   const job = input.trial ? undefined : randomId();
   const row = { task: guess.task, kind: input.kind, effort: input.effort, files: input.files.length, fileTokens, plan: input.plan ?? null, taskTokens: input.plan ? tokensOf(input.task.length) : 0, app: input.app ?? null, appModel: input.appModel ?? null, job: job ?? null,
-    askTokens: input.plan ? 0 : tokensOf(input.task.length) }; // what the app wrote to hand it off (a plan part's text is Leanfare's)
+    askTokens: input.plan || input.fixOf ? 0 : tokensOf(input.task.length), // what the app wrote to hand it off (a plan part's text, or a fix's, is Leanfare's)
+    fixOf: input.fixOf ?? null };
   const source = input.trial ? "trial" : "delegate";
   const write = (r: Parameters<typeof writeRow>[0]) => (input.trial ? null : writeRow(r));
   const none = { checker: null, verdict: null, checkCost: null, rerun: null, rerunCost: null };
@@ -503,12 +528,59 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   const receipt = receiptOf(result, input.maxOut);
   result.row = write({ ...row, model: first.meta.model.id, cost: first.cost, answerTokens, status: "ok", chance, checker: check.checker?.id ?? null, verdict: picked ? check.verdict : null, checkCost: check.cost, rerun: firstUsed ? model.id : null, rerunCost, ms: Math.round(result.seconds * 1000),
     replyTokens: tokensOf(receipt.length) }); // the receipt the app reads back with the answer
+  if (result.row !== null) keepRequest(result.row, input, model, job ?? null); // for a fix one tier up, should the app grade it partly or wrong
   // Now and then the top model answers it too, and a judge of a third company compares the two blind (sidebyside.ts).
   // In the background: this answer goes back now. Not for a private task, nor a plan's part kept to free or local
   // models, nor an answer a failed check replaced (the check judged it).
   if (result.row !== null && doer && input.kind && !input.private && !limit && !firstUsed)
     startSideBySide({ handoff: result.row, kind: input.kind, effort: input.effort, guess, messages, system, maxOut: input.maxOut, task: input.task, block, doer, answer: final.text, allowed: kept(() => true), job, appModel: input.appModel ?? null });
   return { ...result, receipt };
+}
+
+// ---- a fix one tier up (0.12) ----------------------------------------------------------------------
+// The last hand offs' requests, in memory only and never written down, so that an app that graded an answer partly or
+// wrong can have Leanfare ask again one tier up (the grade tool, fix leanfare): the task, its files, and what was wrong.
+// The last 20, for 2 hours, at most 16 MB of text; switching Leanfare off, or quitting it, forgets them.
+interface Kept { input: DelegateInput; model: string; job: string | null; at: number; size: number } // job: the row's own mark, so a row number used again never finds another's request
+const requests = new Map<number, Kept>();
+export const KEEP_REQUESTS = 20;
+const KEEP_BYTES = 16 * 1024 * 1024;
+export const MAX_FIXES = 2;
+const sizeOf = (i: DelegateInput) => i.task.length + i.files.reduce((n, f) => n + f.text.length, 0);
+function keepRequest(row: number, input: DelegateInput, model: { id: string }, job: string | null) {
+  if (input.trial) return;
+  const at = Date.now();
+  for (const [k, v] of requests) if (at - v.at > KEEP_MS) requests.delete(k);
+  const size = sizeOf(input);
+  if (size > KEEP_BYTES) return;
+  requests.delete(row); // set again goes last: the newest
+  requests.set(row, { input, model: model.id, job, at, size });
+  let total = 0;
+  for (const v of requests.values()) total += v.size;
+  for (const [k, v] of requests) { // the oldest go first
+    if (requests.size <= KEEP_REQUESTS && total <= KEEP_BYTES) break;
+    total -= v.size;
+    requests.delete(k);
+  }
+}
+export function forgetRequests() { requests.clear(); }
+
+// Asked again one tier up, with what the app said was wrong, by another model than the one that answered: a new hand
+// off (a fix of that one), run like any other (a check, the receipt), its answer within the wait or later by its id.
+export function fixHandOff(row: number, verdict: string, why: string | null): { job: Job } | { error: string } {
+  const k = requests.get(row);
+  let mark: string | null | undefined;
+  try { mark = (db.query("SELECT job FROM delegations WHERE id = ?").get(row) as { job: string | null } | null)?.job; } catch {}
+  if (!k || Date.now() - k.at > KEEP_MS || !k.job || mark !== k.job)
+    return { error: `Leanfare no longer holds hand off ${row}'s request (it keeps the last ${KEEP_REQUESTS}, for 2 hours, in memory only), so it did not ask again. Fix it yourself, or call delegate again with the task and what was wrong.` };
+  if ((k.input.fixDepth ?? 0) >= MAX_FIXES) return { error: `Hand off ${row} is already a fix of a fix, and Leanfare asks again at most ${MAX_FIXES} times. Fix it yourself.` };
+  const said = (why ?? "").replace(/\s+/g, " ").trim().slice(0, 2000);
+  const note = `\n\nThe app that asked graded an earlier answer to this task ${verdict}${said ? `: ${said.replace(/[.!?]?$/, ".")}` : "."} Answer the task again, and avoid that.`;
+  const prev = k.input.only, first = k.model;
+  const input: DelegateInput = { ...k.input, task: k.input.task + note, effort: UP_EFFORT[k.input.effort], model: undefined,
+    only: (m: Model) => m.id !== first && (!prev || prev(m)), fixOf: row, fixDepth: (k.input.fixDepth ?? 0) + 1 };
+  markFixed(row, "leanfare");
+  return { job: startDelegate(input) };
 }
 
 // ---- a hand off that takes longer than an app waits ------------------------------------------------
@@ -551,6 +623,7 @@ export async function waitDelegate(id: string, seconds: number, signal?: AbortSi
 }
 
 export function stopDelegates(): number {
+  forgetRequests(); // switched off: nothing is kept for a fix either
   let n = 0;
   for (const j of jobs.values()) if (!j.done) { j.ac.abort(); n++; }
   return n;

@@ -141,6 +141,8 @@ const ADDED: [table: string, column: string, type: string][] = [
   ["delegations", "reply_tokens", "INTEGER"], // the receipt it read back with the answer, in tokens
   ["delegations", "together", "TEXT"], // the prompt's whole result, the app and the hand offs together: good, partly or wrong
   ["delegations", "together_by", "TEXT"], // who said so: the app (the grade tool), or you (the report)
+  ["delegations", "fixed", "TEXT"], // 0.12: graded partly or wrong, then fixed before the app answered: by the app itself (myself), or one tier up (leanfare)
+  ["delegations", "fix_of", "INTEGER"], // 0.12: this hand off is a fix of that one, asked one tier up through the grade tool
   ["comparisons", "app_alone", "INTEGER"], // 1: the top model was the app's own model, so this is a sample of the app alone
 ];
 
