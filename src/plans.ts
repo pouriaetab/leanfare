@@ -66,6 +66,7 @@ function listFiles(dirs: string[], match: (name: string) => boolean, notBefore: 
     try { names = readdirSync(dir, { recursive: true }) as string[]; } catch { continue; }
     for (const name of names) {
       if (!match(name)) continue;
+      if (String(name).split(/[\\/]/)[0].endsWith("-meter-probe")) continue; // Leanfare's own read of the plan's use (usageprobe.ts): not a prompt of yours
       const path = join(dir, name);
       try {
         const s = statSync(path);

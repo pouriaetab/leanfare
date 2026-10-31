@@ -806,3 +806,4 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
 .lv-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .lv-legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
 .lv-legend .good { background: var(--fill-good); } .lv-legend .warn { background: var(--fill-warn); } .lv-legend .bad { background: var(--fill-bad); }
+.setting p.lv-plan { font-size: 12px; }

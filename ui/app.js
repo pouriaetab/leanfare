@@ -3004,6 +3004,15 @@
     return wrap;
   }
 
+  // The Claude plan's last reading (usageprobe.ts): its numbers and how old they are, so a raise or its absence makes sense.
+  function planReadingEl(p) {
+    if (!p) return null;
+    const ago = (t) => { const m = Math.round((Date.now() - t) / 60000); return m < 2 ? "just now" : m < 90 ? `${m} min ago` : m < 2160 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`; };
+    const nums = [p.week !== null ? `the week ${p.week}% used` : null, p.five !== null ? `the 5 hours ${p.five}%` : null].filter(Boolean).join(", ");
+    const how = p.check && !p.check.ok ? ` Reading it through Claude Code did not work: ${p.check.why}.` : "";
+    return h("p", { class: "lv-plan", text: p.at ? `Your Claude plan: ${nums || "no window known"} (read ${ago(p.at)}).${how}` : `Your Claude plan's use is not known yet.${how}` });
+  }
+
   // How much Leanfare takes first (level.ts): the knob, what each number does beside it, the two switches, and a level
   // for each app.
   function levelSettingEl(s) {
@@ -3030,8 +3039,11 @@
       h("p", { text: 'Your default for every app and every new chat. A chat, or a Claude Code session, can have its own: say "Leanfare 4" in it.' }),
       h("div", { class: "lv-row" }, h("div", { class: "lv-knobbox" }, knobEl(value, L.names, pick), h("div", { class: "lv-hint", text: "Turn it, or press 1 to 5" })), defs),
       now && now.raised ? h("p", { class: "lv-raised", text: `In Claude now: ${now.level} (${L.names[now.level]}), ${now.raised}.` }) : null,
+      planReadingEl(L.plan),
       switchRow(s.raiseWhenLow !== false, "Raise it when my Claude plan runs low", "Low: at least 4. Very low: 5. A level set for one chat stays as it was set.",
         (on) => patchSettings({ raiseWhenLow: on }, on ? "The level goes up as your Claude plan runs low." : "The level stays as set when your plan runs low.")),
+      switchRow(s.planMeter !== false, "Read my Claude plan's use through Claude Code", "While Leanfare runs, it asks Claude Code's usage view when the last reading is over 45 minutes old. Claude Code uses its own sign-in; Leanfare never touches it, and stops if it would cost anything.",
+        (on) => patchSettings({ planMeter: on }, on ? "Leanfare reads your plan's use through Claude Code." : "Your plan's use comes only from Claude Code's status line.")),
       switchRow(s.askEachChat === true, "Ask me at the start of each new chat", "Off: new chats use the default, and nothing asks again until you change it.",
         (on) => patchSettings({ askEachChat: on }, on ? "Your apps ask for the level at the start of each new chat." : "New chats use the default level.")),
       apps);

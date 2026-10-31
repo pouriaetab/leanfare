@@ -339,6 +339,7 @@ function compactReport(r: any, range: string, app: string | null = null) {
 const text = (t: string, structured?: unknown) => ({ content: [{ type: "text", text: t }], ...(structured !== undefined ? { structuredContent: structured } : {}) });
 const failure = (t: string) => ({ content: [{ type: "text", text: t }], isError: true });
 
+const agoText = (ms: number) => (ms < 90_000 ? "just now" : ms < 90 * 60_000 ? `${Math.round(ms / 60_000)} minutes ago` : ms < 36 * 3600_000 ? `${Math.round(ms / 3600_000)} hours ago` : `${Math.round(ms / 86_400_000)} days ago`);
 // What the app is asked to do with an answer Leanfare brought back (0.12): review it, grade it, and fix it before it
 // answers (Settings, Review every answer); off, or with no number to grade by, the line of before.
 export function reviewLine(j: { row?: number | null; kind?: string | null; model: { id: string }; review?: boolean }): string {
@@ -530,6 +531,8 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
     const lines = [levelAdvice(j.view, "chat")];
     if (set !== undefined) lines.push(scope === "chat" ? `Set for this chat only: follow it until the user changes it. Leanfare's default stays ${levelText(j.default)}.` : scope === "app" ? `Kept for ${ctx.client} from now on, in every chat that sets none of its own.` : "Kept as the default for every app and new chat that sets none of its own.");
     else if (j.ask) lines.push("Ask the user which level they want for this chat (1 Off, 2 Light, 3 More, 4 Most, 5 All it can), then call level with set.");
+    const p = j.plan;
+    if (p?.at) lines.push(`The Claude plan, read ${agoText(Date.now() - p.at)}: ${[p.five !== null ? `the 5 hours ${p.five}% used` : "", p.week !== null ? `the week ${p.week}% used` : ""].filter(Boolean).join(", ") || "no window known"}.`);
     lines.push(`The levels: ${LEVELS.map((n) => `${n} ${LEVEL_NAME[n]}`).join(", ")}.`);
     return text(lines.join("\n"), { level: j.view.level, name: LEVEL_NAME[j.view.level as Level], from: set !== undefined ? scope : j.view.from, default: j.default, raised: j.view.raised, advice: lines[0], note: lines.slice(1).join(" ") });
   }
