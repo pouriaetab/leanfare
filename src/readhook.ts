@@ -1,6 +1,7 @@
 // Claude Code's read hook (0.11, Settings, In your apps, Plan by itself): before Claude Code reads a big file itself,
-// it is reminded once that Leanfare can read it instead, so only the answer comes into its context. Big: a log, data
-// or text file of 40 KB or more, or any other text file of 200 KB or more. Once per file in a session: when Claude
+// it is reminded once that Leanfare can read it instead, so only the answer comes into its context. Big, by the
+// session's level (0.12, level.ts: LEVEL_READ): at 2 (Light) a log, data or text file of 40 KB or more, or any other
+// text file of 200 KB or more; at 3 (More) 10 KB and 50 KB; lower still at 4 and 5; never at 1 (Off). Once per file in a session: when Claude
 // reads it again (it needs the whole file, or will change it), it goes through. Never for a slice (a few hundred
 // lines), an image or a PDF, a file over Leanfare's 2 MB, or while Leanfare is switched off. It must never get in the
 // way: anything that goes wrong lets the read through. Kept: when each reminder was, and how big the file was (no
@@ -9,7 +10,9 @@ import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { paths } from "./config";
 import { switchedOn } from "./switch";
-import { READ_SIZES, planMode } from "./modes";
+import { planMode } from "./modes";
+import { LEVEL_READ, levelFor } from "./level";
+import { hookSettings, sessionFacts } from "./sessionlog";
 import { clock } from "./statusline";
 
 export const BIG = { data: 40 * 1024, other: 200 * 1024, most: 2 * 1024 * 1024, slice: 400 };
@@ -34,7 +37,7 @@ const sizeText = (b: number) => (b >= 1024 * 1024 ? `${(b / (1024 * 1024)).toFix
 const tokText = (b: number) => { const t = b / 4; return t >= 1e6 ? `${(t / 1e6).toFixed(1)}M` : t >= 1e3 ? `${Math.round(t / 1e3)}k` : String(Math.round(t)); };
 
 // What Claude Code is told before a read, or null to let it through (the hook's whole decision; tested on its own).
-export function readReminder(input: any, now = clock()): string | null {
+export function readReminder(input: any, now = clock(), set: Record<string, any> | null = null): string | null {
   if (input?.tool_name !== "Read") return null;
   const given = input?.tool_input?.file_path;
   if (typeof given !== "string" || !given.trim()) return null;
@@ -44,8 +47,11 @@ export function readReminder(input: any, now = clock()): string | null {
   if (NOT_TEXT.test(path)) return null; // Leanfare's delegate reads text
   let size = 0;
   try { const st = statSync(path); if (!st.isFile()) return null; size = st.size; } catch { return null; }
-  const sizes = READ_SIZES[planMode(now).mode]; // sooner as your Claude plan runs low (modes.ts)
-  if (size > BIG.most || size < (DATA.test(path) ? sizes.data : sizes.other)) return null;
+  if (size > BIG.most || size < LEVEL_READ[5]!.data) return null; // under the smallest size any level reminds at
+  // 0.12: by the session's level (level.ts): sooner at higher levels and as your Claude plan runs low; never at 1 (Off).
+  const level = levelFor(set ?? hookSettings(), "Claude Code", sessionFacts(String(input.session_id ?? ""), now)?.level ?? null, planMode(now)).level;
+  const sizes = LEVEL_READ[level];
+  if (!sizes || size < (DATA.test(path) ? sizes.data : sizes.other)) return null;
   const s = load();
   const key = `${String(input.session_id ?? "")}|${path}`;
   if (now - (s.at[key] ?? 0) < DAY) return null; // reminded once already: this read goes through

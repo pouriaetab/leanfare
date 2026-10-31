@@ -10,50 +10,14 @@
 // Like the other hooks it must never get in the way: anything that goes wrong lets Claude finish. Off in Settings
 // (Review every answer), or while Leanfare is switched off, it asks nothing.
 import { Database } from "bun:sqlite";
-import { appendFileSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { paths } from "./config";
 import { switchedOn } from "./switch";
 import { clock } from "./statusline";
+import { compactSessions, hookSettings, noteSession, SESSION_ID, sessionFacts, sessionFile } from "./sessionlog";
 
-export const reviewFile = () => join(dirname(paths.db), "review.log");
-const KEEP = 2 * 86_400_000; // two days of sessions
-const BIG = 512 * 1024; // past this the log keeps its last two days only
-const SESSION = /^[\w-]{1,100}$/;
+export const reviewFile = sessionFile;
 const PLAN = /^[\w-]{4,40}$/;
 const SHOWN = 6;
-
-// One line per fact, appended (several hooks of one turn may write at once): when, the session, and h (a hand off
-// it got), p (a plan it ran) or a (a hand off the stop hook asked about), with the number or the plan's id.
-function note(lines: string[]) {
-  if (!lines.length) return;
-  try { appendFileSync(reviewFile(), lines.map((l) => l + "\n").join(""), { mode: 0o600 }); } catch {}
-}
-interface Session { handoffs: Set<number>; plans: Set<string>; asked: Set<number> }
-function sessionOf(sid: string, now: number): Session | null {
-  let text = "";
-  try { text = readFileSync(reviewFile(), "utf8"); } catch { return null; }
-  const s: Session = { handoffs: new Set(), plans: new Set(), asked: new Set() };
-  let seen = false;
-  for (const line of text.split("\n")) {
-    const [t, id, what, v] = line.split("\t");
-    if (id !== sid || !(now - Number(t) < KEEP) || v === undefined) continue;
-    seen = true;
-    if (what === "h") s.handoffs.add(Number(v));
-    else if (what === "p") s.plans.add(v);
-    else if (what === "a") s.asked.add(Number(v));
-  }
-  return seen ? s : null;
-}
-function compact(now: number) {
-  try {
-    if (statSync(reviewFile()).size < BIG) return;
-    const keep = readFileSync(reviewFile(), "utf8").split("\n").filter((l) => l && now - Number(l.split("\t")[0]) < KEEP);
-    const tmp = `${reviewFile()}.${process.pid}`;
-    writeFileSync(tmp, keep.map((l) => l + "\n").join(""), { mode: 0o600 });
-    renameSync(tmp, reviewFile());
-  } catch {}
-}
 
 // The hand offs a tool's result names: the handoff number delegate and a fix give in their structured result, else
 // "hand off N" in the text; and the plan's id, from what plan_run or plan_status was asked.
@@ -68,12 +32,15 @@ export function handoffsIn(input: any): { handoffs: number[]; plan: string | nul
   return { handoffs: [...out].filter((n) => n > 0), plan };
 }
 
-// The hand off hook's whole work, tested on its own.
+// The hand off hook's whole work, tested on its own: the hand offs and the plan a tool's result names, and a level the
+// level tool set for this session (scope chat, the default).
 export function noteHandoffs(input: any, now = clock()) {
   const sid = String(input?.session_id ?? "");
-  if (!SESSION.test(sid)) return;
+  if (!SESSION_ID.test(sid)) return;
   const { handoffs, plan } = handoffsIn(input);
-  note([...handoffs.map((n) => `${now}\t${sid}\th\t${n}`), ...(plan ? [`${now}\t${sid}\tp\t${plan}`] : [])]);
+  const set = input?.tool_input?.set, scope = input?.tool_input?.scope;
+  const level = /__level$/.test(String(input?.tool_name ?? "")) && Number.isInteger(set) && set >= 1 && set <= 5 && (scope === undefined || scope === "chat") ? set : null;
+  noteSession(sid, [...handoffs.map((n): [string, number] => ["h", n]), ...(plan ? [["p", plan] as [string, string]] : []), ...(level ? [["l", level] as [string, number]] : [])], now);
 }
 
 const TASK_KIND: Record<string, string> = { longer_query: "read", instruction_following: "write", hard_prompts: "reason" };
@@ -84,14 +51,12 @@ const openDb = (): Database | null => { try { return new Database(paths.db, { re
 export function stopDecision(input: any, now = clock(), open: () => Database | null = openDb): { decision: "block"; reason: string } | null {
   if (input?.stop_hook_active === true) return null; // already doing what a stop hook asked: once is enough
   const sid = String(input?.session_id ?? "");
-  if (!SESSION.test(sid)) return null;
-  const s = sessionOf(sid, now);
+  const s = sessionFacts(sid, now);
   if (!s || (!s.handoffs.size && !s.plans.size)) return null; // a session with nothing from Leanfare: nothing to open
+  if (hookSettings(open).reviewHook === false) return null;
   const d = open();
   if (!d) return null;
   try {
-    const st = d.query("SELECT v FROM settings WHERE k = 'settings'").get() as { v: string } | null;
-    try { if (st && JSON.parse(st.v)?.reviewHook === false) return null; } catch {}
     const rows = new Map<number, any>();
     const ids = [...s.handoffs].filter((n) => !s.asked.has(n));
     if (ids.length)
@@ -101,8 +66,8 @@ export function stopDecision(input: any, now = clock(), open: () => Database | n
         if (!s.asked.has(r.id)) rows.set(r.id, r);
     const open_ = [...rows.values()].sort((a, b) => a.id - b.id);
     if (!open_.length) return null;
-    note(open_.map((r) => `${now}\t${sid}\ta\t${r.id}`));
-    compact(now);
+    noteSession(sid, open_.map((r): [string, number] => ["a", r.id]), now);
+    compactSessions(now);
     const one = open_.length === 1;
     const list = open_.slice(0, SHOWN).map((r) => `hand off ${r.id} (${shortModel(r.rerun ?? r.model)}, ${r.kind ?? TASK_KIND[r.task] ?? "work"})`).join(", ");
     const more = open_.length > SHOWN ? ` and ${open_.length - SHOWN} more` : "";
