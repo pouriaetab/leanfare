@@ -28,6 +28,7 @@ const HELP = `Leanfare ${VERSION}: every top AI model in one app on your own com
   leanfare hook prompt the line Claude Code's prompt hook adds: your plan's use, and that plan can split a task
   leanfare hook stop  Claude Code's stop hook: before Claude finishes, it asks once for a grade of each answer
                       Leanfare brought back, and a fix of what is partly or wrong ("hook handoff" notes them)
+  leanfare meter      reads your Claude plan's use now through Claude Code's usage view (it does this by itself while it runs)
   leanfare level      how much Leanfare takes first, 1 (Off) to 5 (All it can), for every app and each app;
                       "leanfare level 4" sets it, "leanfare level 4 --app codex" one app's
   leanfare apps       the AI apps on this computer, and whether Leanfare's tools are in each
@@ -143,6 +144,8 @@ async function start() {
   // Background work, after the app is already open (nothing heavy before launch).
   // Plan by itself, where it is on, brought up to this version (workers.ts): its block's text and its hooks.
   import("./workers").then((w) => { const done = w.refreshAuto(); if (done.length) console.log(`Plan by itself is up to date in ${done.join(", ")}.`); }).catch(() => {});
+  // The Claude plan's use, read through Claude Code's usage view when the last reading is old (usageprobe.ts, 0.12).
+  Promise.all([import("./usageprobe"), import("./settings"), import("./switch")]).then(([u, st, sw]) => u.startUsageProbe(() => st.settings().planMeter !== false && sw.switchedOn())).catch(() => {});
   const day = 24 * 3600_000;
   const stale = () => Date.now() - Date.parse(data.store.catalog.built) > 12 * 3600_000;
   if (stale()) data.refreshCatalog().then((st) => console.log(st.state === "ok" ? `Prices updated to ${data.store.catalog.built.slice(0, 10)}.` : `Prices not updated: ${st.error}. Using the copy from ${data.store.catalog.built.slice(0, 10)}.`));
@@ -245,6 +248,16 @@ async function apps() {
 }
 
 // leanfare trial [--report] [--share]: the delegate trial, run by the Leanfare that is running (trial.ts).
+// leanfare meter: reads the Claude plan's use through Claude Code's usage view now (usageprobe.ts), and says how it went.
+async function meter() {
+  const { probeUsage } = await import("./usageprobe");
+  const s = await probeUsage({ force: true });
+  const r = s.read;
+  if (s.ok && r) console.log(`Your Claude plan: ${[r.five ? `the 5 hours ${Math.round(r.five.used)}% used` : "", r.week ? `the week ${Math.round(r.week.used)}% used` : ""].filter(Boolean).join(", ")}, ${s.why}. Leanfare reads it like this by itself while it runs, when the last reading is over 45 minutes old.`);
+  else console.log(`Leanfare could not read your Claude plan's use: ${s.why}. It still reads it from Claude Code's status line while a Claude Code session is open.`);
+  process.exit(0);
+}
+
 // leanfare level: the level (0.12, level.ts) for every app and each app's own; leanfare level 4 sets the default, and
 // leanfare level 4 --app codex one app's.
 async function level() {
@@ -330,5 +343,6 @@ else if (command === "hook") {
 }
 else if (command === "apps") await apps();
 else if (command === "level") await level();
+else if (command === "meter") await meter();
 else if (command === "trial") await trial();
 else { console.error(`Unknown command "${command}".\n\n${HELP}`); process.exit(2); }

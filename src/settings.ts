@@ -57,6 +57,7 @@ export interface Settings {
   levels: Record<string, number>; // 0.12: an app's own level (level.ts: APP_LEVELS); none: the default
   raiseWhenLow: boolean; // 0.12: at least 4 when your Claude plan runs low, 5 when very low (a chat's own level stays)
   askEachChat: boolean; // 0.12: the app asks you for the level at the start of each new chat; off: nothing asks again
+  planMeter: boolean; // 0.12: read the Claude plan's use through Claude Code's usage view while the app runs (usageprobe.ts)
   jobs: Jobs; // where each kind of job goes in plans (0.11): to Leanfare, to Leanfare when your plan runs low (modes.ts), or your app
   paidCap: number; // US dollars a hand off may spend on a paid model (0.11); a cheaper or free one first, or it stays with your app
 }
@@ -102,6 +103,7 @@ export const DEFAULTS: Settings = {
   levels: {},
   raiseWhenLow: true,
   askEachChat: false,
+  planMeter: true,
   jobs: JOB_DEFAULTS,
   paidCap: 0.1,
 };
@@ -186,7 +188,7 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
     }
     out.levels = next;
   }
-  for (const k of ["showValue", "brief", "codexPlan", "setupDone", "whoWrote", "review", "reviewHook", "raiseWhenLow", "askEachChat"] as const) {
+  for (const k of ["showValue", "brief", "codexPlan", "setupDone", "whoWrote", "review", "reviewHook", "raiseWhenLow", "askEachChat", "planMeter"] as const) {
     if (!(k in p)) continue;
     if (typeof p[k] !== "boolean") return { error: `${k} must be true or false` };
     out[k] = p[k];

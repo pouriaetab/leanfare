@@ -61,6 +61,9 @@ export function lastSnap(): Snap | null {
   try { return JSON.parse(readFileSync(lastFile(), "utf8")); } catch { return null; }
 }
 
+// The last reading again, with its new time, when its numbers did not change (usageprobe.ts: still fresh).
+export function touchSnap(s: Snap) { try { writeFileSync(lastFile(), JSON.stringify(s), { mode: 0o600 }); } catch {} }
+
 // Saves a snapshot when a number changed. Returns whether it saved one.
 export function saveSnap(s: Snap): boolean {
   if (sameSnap(lastSnap(), s)) return false;
