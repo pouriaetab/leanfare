@@ -2934,16 +2934,96 @@
         h("span", { class: "vs", text: `against ${x.tops.join(", ")} · judged by ${x.judges.join(", ")}` })))));
   }
 
-  // 0.12, the review loop (mcp.ts: reviewLine; reviewhook.ts): each answer Leanfare hands back is reviewed by your app,
-  // graded, and fixed before it answers you.
+  // ---- 0.12: the level and the review, set with a knob and switches ----------------------------------
+  // A switch on its own row: what it does, a line under it, and the switch (a button that says on or off).
+  function switchRow(on, label, small, onChange) {
+    return h("div", { class: "swrow" }, h("div", { class: "sw-text" }, h("span", { text: label }), small ? h("small", { text: small }) : null),
+      h("button", { type: "button", class: "sw", role: "switch", "aria-checked": String(!!on), "aria-label": label, onclick: () => onChange(!on) },
+        h("span", { class: "track", "aria-hidden": "true" }, h("span", { class: "dot" }))));
+  }
+
+  // The level's knob (level.ts): turned from 1 to 5, by the pointer, the arrow keys or a number key; the number and its
+  // name in the middle.
+  function sv(tag, attrs, text) { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, String(attrs[k])); if (text !== undefined) e.textContent = text; return e; }
+  const knobAt = (n) => -120 + 60 * (n - 1); // degrees from straight up: 1 at the lower left, 3 at the top, 5 at the lower right
+  const knobPt = (cx, cy, r, deg) => { const a = (deg * Math.PI) / 180; return [cx + r * Math.sin(a), cy - r * Math.cos(a)]; };
+  const knobArc = (cx, cy, r, a1, a2) => { const [x1, y1] = knobPt(cx, cy, r, a1), [x2, y2] = knobPt(cx, cy, r, a2); return `M${x1.toFixed(2)} ${y1.toFixed(2)} A${r} ${r} 0 ${a2 - a1 > 180 ? 1 : 0} 1 ${x2.toFixed(2)} ${y2.toFixed(2)}`; };
+  function knobEl(value, names, onPick) {
+    const W = 176, H = 164, cx = 88, cy = 90, r = 60, body = r - 16;
+    const g = sv("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, "aria-hidden": "true" });
+    g.append(sv("path", { d: knobArc(cx, cy, r, -120, 120), class: "lk-track" }), sv("path", { d: knobArc(cx, cy, r, -120, Math.max(-119, knobAt(value))), class: "lk-fill" }));
+    for (let n = 1; n <= 5; n++) {
+      const [tx, ty] = knobPt(cx, cy, r, knobAt(n)), [lx, ly] = knobPt(cx, cy, r + 16, knobAt(n));
+      g.append(sv("circle", { cx: tx.toFixed(2), cy: ty.toFixed(2), r: 2.2, class: n <= value ? "lk-tick on" : "lk-tick" }));
+      g.append(sv("text", { x: lx.toFixed(2), y: (ly + 4).toFixed(2), "text-anchor": "middle", class: n === value ? "lk-num on" : "lk-num" }, String(n)));
+    }
+    const [px, py] = knobPt(cx, cy, body - 9, knobAt(value));
+    g.append(sv("circle", { cx, cy: cy + 2, r: body, class: "lk-shadow" }), sv("circle", { cx, cy, r: body, class: "lk-body" }), sv("circle", { cx: px.toFixed(2), cy: py.toFixed(2), r: 4, class: "lk-dot" }),
+      sv("text", { x: cx, y: cy + 6, "text-anchor": "middle", class: "lk-big" }, String(value)), sv("text", { x: cx, y: cy + 23, "text-anchor": "middle", class: "lk-name" }, names[value]));
+    const wrap = h("div", { class: "lvknob", role: "slider", tabindex: "0", "aria-label": "How much Leanfare takes first", "aria-valuemin": "1", "aria-valuemax": "5", "aria-valuenow": String(value), "aria-valuetext": `${value}, ${names[value]}` }, g);
+    wrap.addEventListener("keydown", (e) => {
+      const k = e.key;
+      const n = k === "ArrowRight" || k === "ArrowUp" ? Math.min(5, value + 1) : k === "ArrowLeft" || k === "ArrowDown" ? Math.max(1, value - 1) : k === "Home" ? 1 : k === "End" ? 5 : /^[1-5]$/.test(k) ? Number(k) : null;
+      if (n === null) return;
+      e.preventDefault();
+      if (n !== value) onPick(n);
+    });
+    // Pointed at: the number nearest to where the pointer is, around the middle (a tap in the middle changes nothing).
+    wrap.addEventListener("pointerup", (e) => {
+      const b = g.getBoundingClientRect();
+      if (!b.width) return;
+      const x = (e.clientX - b.left) * (W / b.width) - cx, y = (e.clientY - b.top) * (H / b.height) - cy;
+      if (Math.hypot(x, y) < body * 0.45) return;
+      const deg = Math.max(-120, Math.min(120, (Math.atan2(x, -y) * 180) / Math.PI));
+      const n = Math.round((deg + 120) / 60) + 1;
+      if (n !== value) onPick(n);
+    });
+    return wrap;
+  }
+
+  // How much Leanfare takes first (level.ts): the knob, what each number does beside it, the two switches, and a level
+  // for each app.
+  function levelSettingEl(s) {
+    const L = S.st.level;
+    if (!L) return null;
+    const value = Number.isInteger(s.level) && s.level >= 1 && s.level <= 5 ? s.level : 3;
+    const pick = (n) => patchSettings({ level: n }, `Level ${n}: ${L.names[n]}.`);
+    const defs = h("ul", { class: "lv-defs" }, ...[1, 2, 3, 4, 5].map((n) => h("li", { class: n === value ? "on" : null },
+      h("button", { type: "button", "aria-pressed": String(n === value), "aria-label": `Level ${n}, ${L.names[n]}`, onclick: () => (n === value ? null : pick(n)) },
+        h("b", { class: "n", text: String(n) }), h("span", { class: "d" }, h("b", { text: `${L.names[n]}. ` }), L.says[n], n === 3 ? h("span", { class: "lv-tag", text: "default" }) : null)))));
+    const now = L.now;
+    const levels = s.levels ?? {};
+    const apps = h("div", { class: "lv-apps" }, h("div", { class: "lv-apps-title", text: "Per app" }),
+      ...Object.entries(L.apps).map(([k, label]) => {
+        const own = Number.isInteger(levels[k]) ? levels[k] : null, shown = own ?? value;
+        return h("div", { class: "lv-app" }, h("span", { class: "nm", text: label }),
+          h("span", { class: "lv-dots" + (own === null ? " def" : ""), role: "group", "aria-label": `${label}, its own level` },
+            ...[1, 2, 3, 4, 5].map((n) => h("button", { type: "button", class: "lv-dot" + (n === shown ? " on" : n < shown ? " under" : ""), "aria-pressed": String(own === n), "aria-label": `${label}: ${n}, ${L.names[n]}`, title: `${n} · ${L.names[n]}`,
+              onclick: () => (own === n ? null : patchSettings({ levels: { [k]: n } }, `${label}: level ${n}, ${L.names[n]}.`)) }))),
+          h("span", { class: "lv-now" + (own === null ? " def" : ""), text: own === null ? `default (${value})` : `${own} · ${L.names[own]}` }),
+          own !== null ? h("button", { type: "button", class: "lv-back", text: "Use default", "aria-label": `${label}: use the default level`, onclick: () => patchSettings({ levels: { [k]: null } }, `${label} follows the default level.`) }) : null);
+      }));
+    return h("div", { class: "setting lv-setting" }, h("h3", { text: "How much Leanfare takes first" }),
+      h("p", { text: 'Your default for every app and every new chat. A chat, or a Claude Code session, can have its own: say "Leanfare 4" in it.' }),
+      h("div", { class: "lv-row" }, h("div", { class: "lv-knobbox" }, knobEl(value, L.names, pick), h("div", { class: "lv-hint", text: "Turn it, or press 1 to 5" })), defs),
+      now && now.raised ? h("p", { class: "lv-raised", text: `In Claude now: ${now.level} (${L.names[now.level]}), ${now.raised}.` }) : null,
+      switchRow(s.raiseWhenLow !== false, "Raise it when my Claude plan runs low", "Low: at least 4. Very low: 5. A level set for one chat stays as it was set.",
+        (on) => patchSettings({ raiseWhenLow: on }, on ? "The level goes up as your Claude plan runs low." : "The level stays as set when your plan runs low.")),
+      switchRow(s.askEachChat === true, "Ask me at the start of each new chat", "Off: new chats use the default, and nothing asks again until you change it.",
+        (on) => patchSettings({ askEachChat: on }, on ? "Your apps ask for the level at the start of each new chat." : "New chats use the default level.")),
+      apps);
+  }
+
+  // The review (mcp.ts: reviewLine; reviewhook.ts): each answer Leanfare hands back is reviewed by your app, graded,
+  // and fixed before it answers you.
   function reviewSettingEl(s) {
     return h("div", { class: "setting" }, h("h3", { text: "Review every answer" }),
-      h("label", { class: "check" }, h("input", { type: "checkbox", checked: s.review !== false, onchange: (e) => patchSettings({ review: e.target.checked }, e.target.checked ? "Your apps are asked to review, grade and fix each answer Leanfare hands back." : "Your apps are only asked to grade the answers.") }),
-        "Ask the app to review, grade and fix each answer Leanfare brings back"),
-      h("p", { text: "Each answer ends with a line that asks your app to check it against its task, grade it, and fix it before it answers you: by itself, or by asking Leanfare to try again one tier up, with what was wrong, on another model. To ask again, Leanfare holds the last 20 requests in memory for 2 hours; nothing is written down." }),
-      h("label", { class: "check" }, h("input", { type: "checkbox", checked: s.reviewHook !== false, onchange: (e) => patchSettings({ reviewHook: e.target.checked }, e.target.checked ? "Claude Code asks for the grades before it finishes." : "Claude Code no longer asks before it finishes.") }),
-        "In Claude Code, ask once before Claude finishes for a grade of each answer"),
-      h("p", { text: "A stop hook, part of Plan by itself in Claude Code. Claude Desktop, Cowork and other apps have no hooks: there the line in each answer asks." }));
+      h("p", { text: "Your app checks each answer Leanfare brings back, grades it, and fixes it before you see it: by itself, or by asking Leanfare to try again one tier up, with what was wrong, on another model. To ask again, Leanfare holds the last 20 requests in memory for 2 hours; nothing is written down." }),
+      switchRow(s.review !== false, "Ask the app to review, grade and fix each answer", "Off: the app is only asked to grade an answer once it used it.",
+        (on) => patchSettings({ review: on }, on ? "Your apps are asked to review, grade and fix each answer Leanfare hands back." : "Your apps are only asked to grade the answers.")),
+      switchRow(s.reviewHook !== false, "Claude Code grades every hand off before it finishes", "A stop hook asks once. Claude Desktop, Cowork and other apps have no hooks: the line in each answer asks.",
+        (on) => patchSettings({ reviewHook: on }, on ? "Claude Code asks for the grades before it finishes." : "Claude Code no longer asks before it finishes.")),
+      h("p", { class: "lv-checks", text: "A stronger model of another company also checks answers blind, more often at higher levels: at 2, every high effort answer, 1 in 4 medium and 1 in 10 low; at 3, half the medium and 1 in 4 low; at 4 and 5, every answer." }));
   }
 
   // A test (mcp.ts: markedBy): answers handed back to your apps mark which model wrote each paragraph.
@@ -3079,6 +3159,7 @@
       h("div", { class: "section-title", text: "In your apps" }),
       appsSettingEl(),
       h("div", { class: "section-title", text: "Choices" }),
+      levelSettingEl(s),
       h("div", { class: "setting" }, h("h3", { text: "How Auto picks" }), modeSeg,
         h("p", { text: `${st.modes[s.mode].label}: ${st.modes[s.mode].blurb}, for the task Leanfare guesses from your message (coding, math, writing, long prompts and more). Ratings come from the Arena leaderboard.` })),
       speedSettingEl(s),

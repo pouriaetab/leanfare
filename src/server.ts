@@ -3,7 +3,7 @@
 // only, answers only to its own host name (so a web page cannot reach it by
 // pointing a domain at 127.0.0.1), and refuses browser requests from other
 // sites unless you allowed them in Settings.
-import { APP_LEVELS, appKey, DEFAULT_LEVEL, isLevel, LEVEL_MEANS, LEVEL_NAME, levelFor } from "./level";
+import { APP_LEVELS, appKey, DEFAULT_LEVEL, isLevel, LEVEL_MEANS, LEVEL_NAME, LEVEL_SAYS, levelFor } from "./level";
 import { planMode } from "./modes";
 import { existsSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
@@ -150,6 +150,9 @@ export function state() {
     // Models left out because your key has no quota for them (quota.ts): which, and why, for Settings' model lists.
     noQuota: noQuotaNow().map((q) => ({ model: q.model, since: q.since, why: noQuotaWhy(q, provider(q.provider as ProviderId)?.name) })),
     switchOn: switchedOn(), // Leanfare in your apps, on or off (switch.ts): the switch at the top of the page
+    // The level (level.ts, 0.12): the names, what each does, the apps that keep their own, and the one in effect for
+    // a Claude app now (raised while the plan runs low, when that is on).
+    level: { names: LEVEL_NAME, says: LEVEL_SAYS, apps: APP_LEVELS, now: levelFor(s, "Claude Code", null, planMode()) },
     budget: b,
     month: (() => { const v = savings(); return { spent: v.spent, today: v.today, answers: v.answers }; })(),
     notices,
