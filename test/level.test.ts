@@ -82,6 +82,9 @@ describe("Settings, the level tool and leanfare level", () => {
     expect(chat.content[0].text).toContain("Leanfare: level 4 (Most) in this chat.");
     expect(chat.content[0].text).toContain("Set for this chat only: follow it until the user changes it. Leanfare's default stays 2 (Light).");
     expect(chat.structuredContent).toMatchObject({ level: 4, name: "Most", from: "chat", default: 2 });
+    // Some apps read only the structured part (Cowork does): what to do at this level is there too.
+    expect(chat.structuredContent.advice).toStartWith("Leanfare: level 4 (Most) in this chat. Call Leanfare's plan tool first");
+    expect(chat.structuredContent.note).toContain("Set for this chat only");
     expect(settings().level).toBe(2); // nothing kept
     const app = await call({ set: 5, scope: "app" });
     expect(app.content[0].text).toContain("Kept for Claude from now on");
