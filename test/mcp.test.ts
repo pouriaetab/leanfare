@@ -163,7 +163,7 @@ describe("the tools", () => {
       expect(st.result.structuredContent.saved_in).toBe(`.leanfare/plans/${id}`);
       expect(readFileSync(join(dir, ".leanfare", "plans", id, "part-1.md"), "utf8")).toContain("Three timeouts at 10:02.");
       // Once it used the answer, the app grades it: the grade goes with the model and the kind, never the words.
-      expect(t).toContain("grade it with grade (good, partly or wrong, with the plan's id and the part)");
+      expect(t).toContain("Review this answer before you use it, then grade it with grade (good, partly or wrong, with the plan's id and the part). If one is partly or wrong, fix it before you answer");
       const g = await rpc("tools/call", { name: "grade", arguments: { id, part: 1, verdict: "partly" } });
       expect(g.result.isError).toBeUndefined();
       expect(g.result.content[0].text).toMatch(/^Graded partly\. .+ for reading: 50 of 100 \(7 to 93, 1 grade\): 1 partly \(it moves down below 50, from 3 grades on\)\.$/);
@@ -173,7 +173,7 @@ describe("the tools", () => {
       expect(mine.result.content[0].text).toContain("Part 2 has no answer to grade (it is yours).");
       const none = await rpc("tools/call", { name: "grade", arguments: { verdict: "good" } });
       expect(none.result.isError).toBe(true);
-      expect(none.result.content[0].text).toContain("grade needs the plan's id and the part's number");
+      expect(none.result.content[0].text).toContain("grade needs the hand off's number (from its receipt), or the plan's id and the part's number.");
       // No yes: the paid part waits, and the tool says to ask the user.
       onRequest = (msg) => write({ jsonrpc: "2.0", id: msg.id, result: { action: "decline" } });
       const again = await rpc("tools/call", { name: "plan", arguments: { task: "The nightly job fails again: find out why", folder: dir } });
@@ -253,6 +253,28 @@ describe("the tools", () => {
     } finally { timing.pause = 2000; }
   }, 30_000);
 
+  test("grade with fix leanfare (0.12): the new answer comes back with its own review line, a fix of the first", async () => {
+    await keys("openai", "anthropic", "google", "deepseek", "xai", "mistral");
+    const folder = mkdtempSync(join(tmpdir(), "leanfare-door-"));
+    try {
+      writeFileSync(join(folder, "app.log"), "10:00 start\n10:01 error: disk full\n");
+      const r = await rpc("tools/call", modern({ name: "delegate", arguments: { task: "List the errors.", files: ["app.log"], folder, kind: "read", effort: "low", check: "never" } }));
+      const first = r.result.structuredContent.handoff;
+      const g = await rpc("tools/call", { name: "grade", arguments: { handoff: first, verdict: "wrong", fix: "leanfare", why: "it missed an error" } });
+      expect(g.result.isError).toBeUndefined();
+      const fixed = g.result.structuredContent.handoff;
+      expect(g.result.structuredContent).toMatchObject({ fix_of: first, model: "xai/grok-4.20-beta" });
+      const t = g.result.content[0].text;
+      expect(t).toStartWith("Graded wrong. ");
+      expect(t).toContain(`Asked again one tier up: the new answer is hand off ${fixed}, a fix of ${first}.\n\nHello from grok-4.20-beta.`);
+      expect(t).toContain(`Then grade hand off ${fixed}: good, partly or wrong.`);
+      const mine = await rpc("tools/call", { name: "grade", arguments: { handoff: fixed, verdict: "partly", fix: "myself" } });
+      expect(mine.result.content[0].text).toEndWith("Kept as fixed by you before you answered.");
+      const bad = await rpc("tools/call", { name: "grade", arguments: { handoff: first, verdict: "good", fix: "leanfare" } });
+      expect(bad.result.content[0].text).toBe("fix goes with partly or wrong: a good answer needs no fix.");
+    } finally { rmSync(folder, { recursive: true, force: true }); }
+  });
+
   test("delegate: the door reads the files itself, and the answer comes back with its receipt", async () => {
     await keys("openai", "anthropic", "google", "deepseek", "xai", "mistral");
     const folder = mkdtempSync(join(tmpdir(), "leanfare-door-"));
@@ -265,7 +287,8 @@ describe("the tools", () => {
       expect(answer).toBe("Hello from deepseek-v4-flash.");
       const row = r.result.structuredContent.handoff;
       expect(row).toBeGreaterThan(0);
-      expect(gradeIt).toBe(`(Once you have used it: grade, with model deepseek/deepseek-v4-flash, kind read and handoff ${row}.)`);
+      // 0.12: the app is asked to review it, grade it by its number, and fix it before it answers.
+      expect(gradeIt).toBe(`(Review it before you use it: check it against the task. Then grade hand off ${row}: good, partly or wrong. If it is partly or wrong, fix it before you answer: yourself (grade with fix "myself"), or grade with fix "leanfare" and why, and Leanfare asks again one tier up and sends back a new answer to review.)`);
       // Graded without its handoff (an older app): the grade still finds its hand off, the last one of that model and kind.
       const g = await rpc("tools/call", { name: "grade", arguments: { model: "deepseek/deepseek-v4-flash", kind: "read", verdict: "good" } });
       expect(g.result.content[0].text).toBe("Graded good. DeepSeek V4 Flash for reading: 100 of 100 (27 to 100, 1 grade): 1 good (it moves down below 50, from 3 grades on).");
