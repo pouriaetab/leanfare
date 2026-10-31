@@ -28,6 +28,8 @@ const HELP = `Leanfare ${VERSION}: every top AI model in one app on your own com
   leanfare hook prompt the line Claude Code's prompt hook adds: your plan's use, and that plan can split a task
   leanfare hook stop  Claude Code's stop hook: before Claude finishes, it asks once for a grade of each answer
                       Leanfare brought back, and a fix of what is partly or wrong ("hook handoff" notes them)
+  leanfare level      how much Leanfare takes first, 1 (Off) to 5 (All it can), for every app and each app;
+                      "leanfare level 4" sets it, "leanfare level 4 --app codex" one app's
   leanfare apps       the AI apps on this computer, and whether Leanfare's tools are in each
   leanfare apps add claude-desktop   add Leanfare's tools to one (claude-desktop, claude-code, cursor, codex,
                       gemini-cli, windsurf, vscode, lm-studio); "leanfare apps remove <app>" takes them out
@@ -243,6 +245,26 @@ async function apps() {
 }
 
 // leanfare trial [--report] [--share]: the delegate trial, run by the Leanfare that is running (trial.ts).
+// leanfare level: the level (0.12, level.ts) for every app and each app's own; leanfare level 4 sets the default, and
+// leanfare level 4 --app codex one app's.
+async function level() {
+  const { call } = await import("./client");
+  const { APP_LEVELS, LEVEL_MEANS, LEVEL_NAME, isLevel } = await import("./level");
+  const n = Number(args.find((a) => /^[1-5]$/.test(a)));
+  const at = args.indexOf("--app"), key = at >= 0 ? args[at + 1] ?? "" : null;
+  try {
+    if (key !== null && !(key in APP_LEVELS)) { console.error(`--app takes one of: ${Object.keys(APP_LEVELS).join(", ")}.`); process.exit(2); }
+    if (isLevel(n)) await call("/api/level", { method: "POST", json: key ? { set: n, scope: "app", key } : { set: n, scope: "default" } });
+    const { j } = await call("/api/level");
+    const name = (v: number) => `${v} (${(LEVEL_NAME as Record<number, string>)[v]})`;
+    console.log(`Leanfare's level: ${name(j.default)}. ${(LEVEL_MEANS as Record<number, string>)[j.default]}`);
+    for (const [k, label] of Object.entries(APP_LEVELS)) console.log(`  ${label}: ${j.levels?.[k] ? name(j.levels[k]) : "the default"}`);
+    console.log(`Raise it when your Claude plan runs low: ${j.raiseWhenLow ? "on" : "off"}. Ask at the start of each new chat: ${j.ask ? "on" : "off"}.`);
+    console.log('Set it with: leanfare level 4 (every app), or leanfare level 4 --app codex. In a chat, say "Leanfare 4".');
+  } catch (e: any) { console.error(String(e?.message ?? e)); process.exit(1); }
+  process.exit(0);
+}
+
 async function trial() {
   const { call } = await import("./client");
   const say = (line = "") => console.log(line);
@@ -298,10 +320,15 @@ else if (command === "hook") {
     if (args.includes("read")) { const { runReadHook } = await import("./readhook"); await runReadHook(); }
     else if (args.includes("handoff")) { const { runHandoffHook } = await import("./reviewhook"); await runHandoffHook(); }
     else if (args.includes("stop")) { const { runStopHook } = await import("./reviewhook"); await runStopHook(); }
-    else if (args.includes("prompt")) { const { hookLine } = await import("./statusline"); const line = hookLine(); if (line) console.log(line); }
+    else if (args.includes("prompt")) { // the JSON Claude Code sends: only its session_id is read (statusline.ts)
+      let input: any = null;
+      if (!process.stdin.isTTY) { try { input = JSON.parse(await Bun.stdin.text()); } catch {} }
+      const { hookLine, clock } = await import("./statusline"); const line = hookLine(clock(), input); if (line) console.log(line);
+    }
   } catch {}
   process.exit(0);
 }
 else if (command === "apps") await apps();
+else if (command === "level") await level();
 else if (command === "trial") await trial();
 else { console.error(`Unknown command "${command}".\n\n${HELP}`); process.exit(2); }

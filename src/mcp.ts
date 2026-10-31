@@ -8,6 +8,7 @@
 // carries its version in _meta; server/discover) and the earlier ones that
 // open with initialize (2025-11-25 and before). No SDK: JSON-RPC over stdin and
 // stdout, one message per line; anything for a person goes to stderr.
+import { appKey, isLevel, LEVEL_NAME, LEVELS, levelAdvice, levelText, type Level } from "./level";
 import { VERSION } from "./config";
 import { OFF_TEXT, switchedOn } from "./switch";
 import { app, call, healthy, seenVersion, where } from "./client";
@@ -54,6 +55,7 @@ export const TOOLS = [
         split: { type: "string", enum: ["auto", "rules"], description: "auto (the default): a model the user ticked splits it. rules: Leanfare splits it by rules, with no model call." },
         private: { type: "boolean", description: "true keeps the whole plan on the user's computer: the split and every Leanfare part go only to models there (Ollama), and a part none of them can take stays with you. Use it for anything sensitive or personal, or when the user asks." },
         your_model: { type: "string", description: "The model you run on, as your own instructions name it (for example claude-opus-5-5). Leanfare names it for the work that stays with you, and the report shows it as the prompt's main model." },
+        level: { type: "integer", minimum: 1, maximum: 5, description: "The Leanfare level for this chat or session, as the level tool or Leanfare's prompt line gave it. Leave it out when none was given." },
       },
       required: ["task"],
       additionalProperties: false,
@@ -157,6 +159,7 @@ export const TOOLS = [
         private: { type: "boolean", description: "true keeps this task on the user's computer: only models there (Ollama) take it, and its check too. Use it for anything sensitive or personal, or when the user asks." },
         max_tokens: { type: "integer", minimum: 1, maximum: 64000, description: "The longest answer to allow, in tokens (default 8,192)." },
         your_model: { type: "string", description: "The model you run on, as your own instructions name it (for example claude-opus-5-5). Leanfare names it for the work that stays with you, and the report shows it as the prompt's main model." },
+        level: { type: "integer", minimum: 1, maximum: 5, description: "The Leanfare level for this chat or session, as the level tool or Leanfare's prompt line gave it. Leave it out when none was given." },
       },
       additionalProperties: false,
     },
@@ -229,6 +232,20 @@ export const TOOLS = [
       additionalProperties: false,
     },
     annotations: { title: "Local models on this computer", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  },
+  {
+    name: "level",
+    title: "Leanfare's level",
+    description: "How much to hand to Leanfare first, from 1 to 5: 1 Off (only when the user asks), 2 Light (big reads and tasks with several parts), 3 More (also reads over about 10 KB you will not change, project wide searches, summaries, reviews and first drafts), 4 Most (plan every prompt that is more than a quick question with Leanfare first), 5 All it can (every part a model can do; you review, decide and answer). Call it with nothing at the start of a chat to learn the level, and follow it. When the user sets one (\"Leanfare 4\", \"use Leanfare less\"), call it with set, and scope: chat (this chat only, the default), app (this app from now on) or default (every app). Pass the level to delegate and plan.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        set: { type: "integer", minimum: 1, maximum: 5, description: "The level to set: 1 Off, 2 Light, 3 More, 4 Most, 5 All it can." },
+        scope: { type: "string", enum: ["chat", "app", "default"], description: "With set: chat (this chat only, the default), app (this app from now on) or default (every app and new chat)." },
+      },
+      additionalProperties: false,
+    },
+    annotations: { title: "Leanfare's level", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
 ];
 
@@ -483,6 +500,20 @@ const here = (): ToolCtx => ({ client, cwd: process.cwd(), canAsk });
 export const runToolFor = (ctx: ToolCtx, name: string, args: any, signal: AbortSignal) => runTool(name, args, signal, ctx);
 async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCtx = here()): Promise<any> {
   if ((HANDS_OVER.has(name) || (name === "trial" && args?.action === "start")) && !switchedOn()) return text(OFF_TEXT, { off: true });
+  if (name === "level") {
+    const set = args?.set, scope = args?.scope ?? "chat";
+    if (set !== undefined && !isLevel(set)) return failure("set is a level from 1 to 5: 1 Off, 2 Light, 3 More, 4 Most, 5 All it can.");
+    if (!["chat", "app", "default"].includes(scope)) return failure("scope is chat (this chat only), app (this app from now on) or default (every app and new chat).");
+    if (set !== undefined && scope === "app" && !appKey(ctx.client)) return failure(`A level can be kept for Claude Code, Claude Desktop and Cowork, Codex, Gemini CLI and Cursor, and this app is ${ctx.client ?? "not named"}. Set it for this chat, or as the default.`);
+    if (set !== undefined && scope !== "chat") await call("/api/level", { method: "POST", json: { set, scope, app: ctx.client } }, signal);
+    const q = [ctx.client ? `app=${encodeURIComponent(ctx.client)}` : "", set !== undefined && scope === "chat" ? `chat=${set}` : ""].filter(Boolean).join("&");
+    const { j } = await call(`/api/level${q ? `?${q}` : ""}`, {}, signal);
+    const lines = [levelAdvice(j.view, "chat")];
+    if (set !== undefined) lines.push(scope === "chat" ? `Set for this chat only: follow it until the user changes it. Leanfare's default stays ${levelText(j.default)}.` : scope === "app" ? `Kept for ${ctx.client} from now on, in every chat that sets none of its own.` : "Kept as the default for every app and new chat that sets none of its own.");
+    else if (j.ask) lines.push("Ask the user which level they want for this chat (1 Off, 2 Light, 3 More, 4 Most, 5 All it can), then call level with set.");
+    lines.push(`The levels: ${LEVELS.map((n) => `${n} ${LEVEL_NAME[n]}`).join(", ")}.`);
+    return text(lines.join("\n"), { level: j.view.level, name: LEVEL_NAME[j.view.level as Level], from: set !== undefined ? scope : j.view.from, default: j.default, raised: j.view.raised });
+  }
   if (name === "grade") {
     if (!["good", "partly", "wrong"].includes(args?.verdict)) return failure("grade needs a verdict: good, partly or wrong.");
     if (args.whole === true) { // the prompt's whole result: kept with this app's last hand off, so the report shows it on that prompt
@@ -590,7 +621,7 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
     if (typeof args?.task !== "string" || !args.task.trim()) return failure("plan needs a task.");
     const files = sizesForPlan(args.files, args.folder, ctx.cwd);
     if (typeof files === "string") return failure(files);
-    const { j } = await call("/api/plan", { method: "POST", json: { task: args.task, files, manager: ctx.client, split: args.split === "rules" ? "rules" : "auto", ...(args.private === true ? { private: true } : {}), ...(typeof args.your_model === "string" ? { your_model: args.your_model } : {}) } }, signal);
+    const { j } = await call("/api/plan", { method: "POST", json: { task: args.task, files, manager: ctx.client, split: args.split === "rules" ? "rules" : "auto", ...(args.private === true ? { private: true } : {}), ...(isLevel(args.level) ? { level: args.level } : {}), ...(typeof args.your_model === "string" ? { your_model: args.your_model } : {}) } }, signal);
     const note = j.split?.note ? `\n\n(${j.split.note})` : j.split?.model ? `\n\n(Split by ${j.split.model.label}${typeof j.split.cost === "number" ? `, ${usd(j.split.cost)}` : ""}.)` : "";
     const folder = sharedFolder(args.folder, ctx.cwd);
     const saved = folder ? writeShared(folder, j.id, { "plan.md": `# Plan ${j.id}\n\n${args.task.trim()}\n\n${j.table}\n\n${j.next}\n` }) : null;
@@ -629,7 +660,7 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
       const files = readForDelegate(args.files, args.folder, ctx.cwd);
       if (typeof files === "string") return failure(files);
       const body = { task: args.task, files, kind: args.kind ?? null, effort: args.effort ?? "medium", check: args.check ?? "auto", wait, ...(args.max_tokens !== undefined ? { max_tokens: args.max_tokens } : {}), ...(args.speed !== undefined ? { speed: args.speed } : {}), ...(args.private === true ? { private: true } : {}),
-        ...(ctx.client ? { app: ctx.client } : {}), ...(typeof args.your_model === "string" ? { your_model: args.your_model } : {}) };
+        ...(ctx.client ? { app: ctx.client } : {}), ...(typeof args.your_model === "string" ? { your_model: args.your_model } : {}), ...(isLevel(args.level) ? { level: args.level } : {}) };
       ({ j } = await call("/api/delegate", { method: "POST", json: body }, signal));
     }
     if (j.running) return text(`Still working in Leanfare (${j.seconds} seconds so far). Call delegate again with id "${j.id}" and nothing else to get the answer.`, { running: true, id: j.id, seconds: j.seconds });
