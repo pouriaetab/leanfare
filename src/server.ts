@@ -3,6 +3,8 @@
 // only, answers only to its own host name (so a web page cannot reach it by
 // pointing a domain at 127.0.0.1), and refuses browser requests from other
 // sites unless you allowed them in Settings.
+import { probeState } from "./usageprobe";
+import { lastSnap } from "./statusline";
 import { APP_LEVELS, appKey, DEFAULT_LEVEL, isLevel, LEVEL_MEANS, LEVEL_NAME, LEVEL_SAYS, levelFor } from "./level";
 import { planMode } from "./modes";
 import { existsSync, unlinkSync } from "node:fs";
@@ -152,7 +154,7 @@ export function state() {
     switchOn: switchedOn(), // Leanfare in your apps, on or off (switch.ts): the switch at the top of the page
     // The level (level.ts, 0.12): the names, what each does, the apps that keep their own, and the one in effect for
     // a Claude app now (raised while the plan runs low, when that is on).
-    level: { names: LEVEL_NAME, says: LEVEL_SAYS, apps: APP_LEVELS, now: levelFor(s, "Claude Code", null, planMode()) },
+    level: { names: LEVEL_NAME, says: LEVEL_SAYS, apps: APP_LEVELS, now: levelFor(s, "Claude Code", null, planMode()), plan: planReading() },
     budget: b,
     month: (() => { const v = savings(); return { spent: v.spent, today: v.today, answers: v.answers }; })(),
     notices,
@@ -382,12 +384,19 @@ function handOffBody(job: NonNullable<Awaited<ReturnType<typeof waitDelegate>>>)
   return { ...job.result, id: job.id, running: false, whoWrote: settings().whoWrote, review: settings().review };
 }
 
+// The Claude plan's last reading (statusline.ts, usageprobe.ts): the two windows' use, when it was read, and how.
+function planReading() {
+  const snap = lastSnap(), p = probeState();
+  const live = (w: { used: number; resets: number | null } | null | undefined) => (w && (w.resets === null || w.resets > Date.now()) ? Math.round(w.used) : null);
+  return snap ? { five: live(snap.five), week: live(snap.week), at: snap.at, check: p ? { ok: p.ok, why: p.why, at: p.at } : null } : { five: null, week: null, at: null, check: p ? { ok: p.ok, why: p.why, at: p.at } : null };
+}
+
 // The level as an app sees it: in effect (a chat's own first), the default, each app's own, and the two switches.
 function levelState(app: string | null, chat: string | null) {
   const s = settings();
   const n = chat === null ? null : Number(chat);
   const view = levelFor(s, app && app.trim() ? app.trim().slice(0, 60) : null, isLevel(n) ? n : null, planMode());
-  return { view, default: isLevel(s.level) ? s.level : DEFAULT_LEVEL, levels: s.levels ?? {}, raiseWhenLow: s.raiseWhenLow !== false, ask: s.askEachChat === true, names: LEVEL_NAME, means: LEVEL_MEANS, apps: APP_LEVELS };
+  return { view, default: isLevel(s.level) ? s.level : DEFAULT_LEVEL, levels: s.levels ?? {}, raiseWhenLow: s.raiseWhenLow !== false, ask: s.askEachChat === true, names: LEVEL_NAME, means: LEVEL_MEANS, apps: APP_LEVELS, plan: planReading() };
 }
 
 async function readBody(req: Request): Promise<any> {
