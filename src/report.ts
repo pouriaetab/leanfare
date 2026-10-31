@@ -34,6 +34,8 @@ export interface ReportPart {
   used: Used | null; // what the outside models used for it, measured from its calls (null: a hand off before 0.10, or a plan part run elsewhere)
   both: Both; // the app's side: what it would have used doing the part alone (an estimate), what handing it off cost it, the saving
   together: Grade | null; togetherBy: "app" | "you" | null; // the prompt's whole result, kept with this part
+  level: number | null; // 0.12: the level it was handed off at (null: before 0.12)
+  fixed: "myself" | "leanfare" | null; fixOf: number | null; // 0.12: graded partly or wrong, then fixed; or itself a fix of that hand off
   alone: AloneSample | null; // a sample of the app's own model doing the part, judged blind against this answer (side by side)
 }
 // A number Leanfare estimates: the middle, and how low or high it may be.
@@ -178,7 +180,7 @@ function partsIn(from: number, to: number): (ReportPart & { app: string | null; 
   const used = usedIn(from, to);
   const samples = sampleTokens(from, to);
   const rows = db.query(`SELECT d.id, d.ts, d.kind, d.model, d.rerun, d.cost, d.check_cost, d.rerun_cost, d.file_tokens, d.task_tokens, d.answer_tokens, d.verdict, d.checker, d.grade, d.plan, d.app, d.app_model, d.ms, d.job,
-      d.ask_tokens, d.reply_tokens, d.together, d.together_by,
+      d.ask_tokens, d.reply_tokens, d.together, d.together_by, d.level, d.fixed, d.fix_of,
       c.verdict AS side, COALESCE(c.top_cost, 0) + COALESCE(c.judge_cost, 0) AS side_cost, c.app_alone, c.top_model
     FROM delegations d LEFT JOIN comparisons c ON c.handoff = d.id AND c.verdict IN ('same', 'better', 'worse')
     WHERE d.status = 'ok' AND d.ts >= ? AND d.ts < ? ORDER BY d.ts, d.id`).all(new Date(from).toISOString(), new Date(to).toISOString()) as any[];
@@ -200,6 +202,8 @@ function partsIn(from: number, to: number): (ReportPart & { app: string | null; 
       both: bothOf({ read, back, used: used1, ask: r.ask_tokens ?? null, reply: r.reply_tokens ?? null }),
       together: ["good", "partly", "wrong"].includes(r.together) ? r.together : null, togetherBy: r.together ? (r.together_by === "you" ? "you" : "app") : null,
       alone,
+      level: Number.isInteger(r.level) && r.level >= 1 && r.level <= 5 ? r.level : null,
+      fixed: r.fixed === "myself" || r.fixed === "leanfare" ? r.fixed : null, fixOf: Number.isInteger(r.fix_of) ? r.fix_of : null,
     };
   });
 }
@@ -368,17 +372,34 @@ export async function report(q: ReportQuery, inner = false): Promise<Report> {
     return { kind, parts: xs.length, ...c, score: scoreOf(c), best: models[0] ? { id: models[0].id, label: models[0].label } : null };
   }).sort((a, b) => b.parts - a.parts || KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind));
 
+  // Quality by level (0.12): each level's answers and grades, all levels together, and those from before the levels.
+  // Fixed first: answers graded partly or wrong that were fixed before the app answered, by the app itself or by a fix
+  // one tier up that was graded good (or fixed in turn).
+  const fixes = new Map(ps.filter((x) => x.fixOf !== null).map((x) => [x.fixOf!, x]));
+  const fixedFirst = (x: (typeof ps)[number], depth = 0): boolean => x.fixed === "myself" || (x.fixed === "leanfare" && depth < 3 && (() => { const f = fixes.get(x.id); return !!f && (f.grade === "good" || fixedFirst(f, depth + 1)); })());
+  const levelRow = (xs: typeof ps) => {
+    const c = countOf(xs.map((x) => x.grade)), graded = c.good + c.partly + c.wrong;
+    const bad = xs.filter((x) => (x.grade === "partly" || x.grade === "wrong") && x.fixOf === null);
+    return { parts: xs.length, graded, ...c, goodShare: graded ? c.good / graded : null, score: scoreOf(c), bad: bad.length, fixed: bad.filter((x) => fixedFirst(x)).length };
+  };
+  const before = ps.filter((x) => x.level === null);
+  const byLevel = {
+    levels: [1, 2, 3, 4, 5].map((n) => ({ level: n, ...levelRow(ps.filter((x) => x.level === n)) })).filter((r) => r.parts > 0),
+    before: before.length ? levelRow(before) : null,
+    all: levelRow(ps),
+  };
+
   // Speed, failures, cost and quality per model: every call in the span (modelstats.ts), with its grades from the parts.
   const speed: SpeedRow[] = modelStats({ from: q.from, to: q.to, provider: q.provider, model: q.model })
     .map((m) => { const b = byModel.find((x) => x.id === m.id); return { ...m, graded: b?.graded ?? 0, goodShare: b?.goodShare ?? null, score: b?.score ?? null }; });
 
-  return { from: new Date(q.from).toISOString(), to: new Date(q.to).toISOString(), step, tiles, series, byModel, byKind, speed, prompts: shown.slice(0, 200), more: Math.max(0, shown.length - 200), options };
+  return { from: new Date(q.from).toISOString(), to: new Date(q.to).toISOString(), step, tiles, series, byModel, byKind, byLevel, speed, prompts: shown.slice(0, 200), more: Math.max(0, shown.length - 200), options };
 }
 
 export type SpeedRow = ModelStat & { graded: number; goodShare: number | null; score: ReturnType<typeof scoreOf> };
 // Good, partly and wrong among some grades (the rest not graded).
 const countOf = (gs: (string | null | undefined)[]) => ({ good: gs.filter((g) => g === "good").length, partly: gs.filter((g) => g === "partly").length, wrong: gs.filter((g) => g === "wrong").length });
-export type Report = { from: string; to: string; step: number; tiles: any; series: { at: string; kept: number; used: number }[]; byModel: any[]; byKind: any[]; speed: SpeedRow[]; prompts: ReportPrompt[]; more: number; options: any };
+export type Report = { from: string; to: string; step: number; tiles: any; series: { at: string; kept: number; used: number }[]; byModel: any[]; byKind: any[]; byLevel: { levels: any[]; before: any | null; all: any }; speed: SpeedRow[]; prompts: ReportPrompt[]; more: number; options: any };
 
 // Prompt ids: PRM and a number (PRM-1042), one count for every app, in the order of the prompts' times. Each is given
 // once and kept (the prompts table), so a prompt has the same id in every span and filter, and two prompts alike in
