@@ -1,5 +1,6 @@
 // Your choices: which models appear, how Auto picks, the budget and the
 // subscription price to compare against. Stored as one row in the database.
+import { APP_LEVELS } from "./level";
 import type { ProviderId } from "./config";
 import { getSetting, putSetting } from "./db";
 import type { CustomProvider } from "./providers";
@@ -52,6 +53,10 @@ export interface Settings {
   whoWrote: boolean; // a test: answers handed back to apps mark which model wrote each paragraph (mcp.ts: markedBy)
   review: boolean; // 0.12: each answer handed back asks the app to review it, grade it and fix it before it answers (mcp.ts: reviewLine)
   reviewHook: boolean; // 0.12: Claude Code's Stop hook asks once for a grade of each hand off of the turn before Claude finishes (reviewhook.ts)
+  level: number; // 0.12: how much Leanfare takes first, 1 (Off) to 5 (All it can), for every app and new chat (level.ts)
+  levels: Record<string, number>; // 0.12: an app's own level (level.ts: APP_LEVELS); none: the default
+  raiseWhenLow: boolean; // 0.12: at least 4 when your Claude plan runs low, 5 when very low (a chat's own level stays)
+  askEachChat: boolean; // 0.12: the app asks you for the level at the start of each new chat; off: nothing asks again
   jobs: Jobs; // where each kind of job goes in plans (0.11): to Leanfare, to Leanfare when your plan runs low (modes.ts), or your app
   paidCap: number; // US dollars a hand off may spend on a paid model (0.11); a cheaper or free one first, or it stays with your app
 }
@@ -93,6 +98,10 @@ export const DEFAULTS: Settings = {
   whoWrote: false,
   review: true,
   reviewHook: true,
+  level: 3,
+  levels: {},
+  raiseWhenLow: true,
+  askEachChat: false,
   jobs: JOB_DEFAULTS,
   paidCap: 0.1,
 };
@@ -165,7 +174,19 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
   if ("atLimit" in p) { if (p.atLimit !== "cheapest" && p.atLimit !== "stop") return { error: "atLimit must be cheapest or stop" }; out.atLimit = p.atLimit; }
   if ("history" in p) out.history = !!p.history;
   if ("updateCheck" in p) out.updateCheck = !!p.updateCheck;
-  for (const k of ["showValue", "brief", "codexPlan", "setupDone", "whoWrote", "review", "reviewHook"] as const) {
+  if ("level" in p) { if (!Number.isInteger(p.level) || p.level < 1 || p.level > 5) return { error: "level must be a whole number from 1 to 5" }; out.level = p.level; }
+  if ("levels" in p) { // an app's own level; null takes it back to the default
+    if (!p.levels || typeof p.levels !== "object" || Array.isArray(p.levels)) return { error: "levels must be an object of apps and levels" };
+    const next: Record<string, number> = { ...(settings().levels ?? {}) };
+    for (const [k, v] of Object.entries(p.levels)) {
+      if (!(k in APP_LEVELS)) return { error: `${k.slice(0, 40)} is not an app a level can be set for (${Object.keys(APP_LEVELS).join(", ")})` };
+      if (v === null) delete next[k];
+      else if (Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 5) next[k] = v as number;
+      else return { error: "an app's level must be a whole number from 1 to 5, or null for the default" };
+    }
+    out.levels = next;
+  }
+  for (const k of ["showValue", "brief", "codexPlan", "setupDone", "whoWrote", "review", "reviewHook", "raiseWhenLow", "askEachChat"] as const) {
     if (!(k in p)) continue;
     if (typeof p[k] !== "boolean") return { error: `${k} must be true or false` };
     out[k] = p[k];
