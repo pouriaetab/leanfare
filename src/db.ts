@@ -108,6 +108,10 @@ CREATE INDEX IF NOT EXISTS comparisons_month ON comparisons(month);
 -- so a prompt keeps its id whatever span or filter shows it. Its number, its key (the session's file and the prompt's
 -- time, or the first hand off of a group) and its time. No words.
 CREATE TABLE IF NOT EXISTS prompts(n INTEGER PRIMARY KEY, key TEXT NOT NULL UNIQUE, ts TEXT NOT NULL);
+-- What Leanfare keeps of a hand off's words (words.ts, 0.12): only when Settings, What Leanfare keeps, is above numbers
+-- only. The task, the answer, the files' names and sizes, the files' text, as far as the setting went. On this computer.
+CREATE TABLE IF NOT EXISTS words(handoff INTEGER PRIMARY KEY, ts TEXT NOT NULL, task TEXT NOT NULL, answer TEXT, files TEXT, texts TEXT);
+CREATE INDEX IF NOT EXISTS words_ts ON words(ts);
 -- Models resting after failing too often (rest.ts, 0.10): which, from when to when, how many of its last tries failed
 -- and why (kinds: busy, limit, timeout...), and when you ended it early. No words.
 CREATE TABLE IF NOT EXISTS rests(id INTEGER PRIMARY KEY, model TEXT NOT NULL, start TEXT NOT NULL, until TEXT NOT NULL, fails INTEGER NOT NULL, tries INTEGER NOT NULL, kinds TEXT NOT NULL, ended TEXT);
