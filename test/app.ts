@@ -14,6 +14,7 @@ import { forgetRests } from "../src/rest";
 import { forgetNoQuota } from "../src/quota";
 import { sideBySideIdle, stopSideBySide } from "../src/sidebyside";
 import { stopTrial } from "../src/trial";
+import { forgetRequests } from "../src/delegate";
 import { forgetTests } from "../src/localtest";
 import { setNow } from "../src/util";
 import { KEYS, type startFake } from "./fake";
@@ -59,6 +60,7 @@ export async function reset(patch: Partial<Settings> = {}) {
   local.stopPull(); local.dismissPull(); fake.ollama.reset();
   Object.assign(local.probe, { free: () => 200e9, memory: () => 16e9, roots: () => [] }); // fixed numbers: tests never depend on this computer's disk, memory or drives
   forgetTests();
+  forgetRequests(); // the requests kept for a fix one tier up (0.12)
   for (const id of Object.keys(KEYS)) await removeKey(id as any);
   fake.seen.length = 0;
   fake.hooks.answer = null;

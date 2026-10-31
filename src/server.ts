@@ -23,7 +23,7 @@ import { CODEX_ID, codexState } from "./codex";
 import { GRADED_KINDS, VERDICTS, addGrade, giveAnotherChance, standing, standingText, standings } from "./grades";
 import { plansBrief, plansView } from "./plans";
 import { meterViews, setStatusline } from "./meter";
-import { checkDelegate, gradeRow, gradeTogether, runDelegate, startDelegate, stopDelegates, waitDelegate } from "./delegate";
+import { checkDelegate, fixHandOff, gradeRow, gradeTogether, handOffRow, markFixed, planRow, runDelegate, startDelegate, stopDelegates, waitDelegate } from "./delegate";
 import { sideMonth, sideStandings, sideText, stopSideBySide } from "./sidebyside";
 import { endRest } from "./rest";
 import { clearNoQuota, noQuotaNow, noQuotaWhy } from "./quota";
@@ -366,9 +366,15 @@ const waitOf = (x: unknown) => { if (x === undefined || x === null || x === "") 
 // A hand off as the door gets it: its answer once done (an error as before), or that it still works.
 function handOff(job: Awaited<ReturnType<typeof waitDelegate>>): Response {
   if (!job) return fail(404, "No hand off with that id: Leanfare was restarted, or it is more than 2 hours old.");
-  if (!job.done) return json({ id: job.id, running: true, seconds: Math.round((Date.now() - job.started) / 1000) });
-  if (job.error) return fail(job.error.status, job.error.message);
-  return json({ ...job.result, id: job.id, running: false, whoWrote: settings().whoWrote });
+  if (job.done && job.error) return fail(job.error.status, job.error.message);
+  return json(handOffBody(job));
+}
+// A hand off's answer for the door, or that it is still working; review: whether the receipt asks the app to review,
+// grade and fix it (0.12, Settings).
+function handOffBody(job: NonNullable<Awaited<ReturnType<typeof waitDelegate>>>): any {
+  if (!job.done) return { id: job.id, running: true, seconds: Math.round((Date.now() - job.started) / 1000) };
+  if (job.error) return { error: job.error.message };
+  return { ...job.result, id: job.id, running: false, whoWrote: settings().whoWrote, review: settings().review };
 }
 
 async function readBody(req: Request): Promise<any> {
@@ -471,14 +477,35 @@ async function api(req: Request, url: URL): Promise<Response> {
     const b = await readBody(req);
     if (!VERDICTS.includes(b?.verdict)) return fail(400, "verdict must be good, partly or wrong.");
     const source = b.source === "you" ? "you" : "manager";
-    if (typeof b.id === "string" && Number.isInteger(b.part)) return json(gradePart(b.id, b.part, b.verdict, source));
+    // 0.12: graded partly or wrong, the app fixed it itself (fix myself), or Leanfare asks again one tier up (fix leanfare).
+    const fix = b.fix === "myself" || b.fix === "leanfare" ? (b.fix as "myself" | "leanfare") : null;
+    if (b.fix !== undefined && b.fix !== null && !fix) return fail(400, "fix must be myself or leanfare.");
+    if (fix && b.verdict === "good") return fail(400, "fix goes with partly or wrong: a good answer needs no fix.");
+    const fixed = async (row: number | null) => {
+      if (!fix || row === null) return null;
+      if (fix === "myself") { markFixed(row, "myself"); return null; }
+      if (!switchedOn()) return { error: "Leanfare is switched off, so it did not ask again. Fix it yourself." };
+      const f = fixHandOff(row, b.verdict, typeof b.why === "string" ? b.why : null);
+      if ("error" in f) return { error: f.error };
+      return { ...handOffBody((await waitDelegate(f.job.id, waitOf(b.wait) ?? 0, req.signal))!), fixOf: row };
+    };
+    if (typeof b.id === "string" && Number.isInteger(b.part)) {
+      const g = gradePart(b.id, b.part, b.verdict, source);
+      return json(fix && !(g as any).error ? { ...g, fix: await fixed(planRow(b.id, b.part)) } : g);
+    }
+    // A hand off named only by its number: its model and kind from its row.
+    if (Number.isInteger(b.handoff) && typeof b.model !== "string") {
+      const r = handOffRow(b.handoff);
+      if (!r) return fail(404, `No hand off ${b.handoff} with an answer to grade.`);
+      b.model = r.model; b.kind = r.kind; b.effort ??= r.effort;
+    }
     if (typeof b.model === "string" && GRADED_KINDS.includes(b.kind)) {
       if (b.model !== CODEX_ID && !getModel(b.model)) return fail(404, `Leanfare does not know the model ${String(b.model).slice(0, 80)}.`);
       addGrade({ model: b.model, kind: b.kind, effort: typeof b.effort === "string" ? b.effort.slice(0, 10) : null, verdict: b.verdict, source });
       // Kept with the hand off's row too (the one the app names, else its last of that model and kind).
       gradeRow(b.verdict, Number.isInteger(b.handoff) ? { row: b.handoff } : { model: b.model, kind: b.kind });
       const st = standing(b.model, b.kind);
-      return json({ text: standingText(st), standing: st });
+      return json({ text: standingText(st), standing: st, fix: Number.isInteger(b.handoff) ? await fixed(b.handoff) : fix ? { error: "A fix needs the hand off's number, from its receipt." } : null });
     }
     return fail(400, "Grade a plan's part (id and part) or a model's answer (model and kind: read, write, reason or search).");
   }
@@ -657,7 +684,7 @@ async function api(req: Request, url: URL): Promise<Response> {
     const v = checkDelegate(b);
     if (typeof v === "string") return fail(400, v);
     const wait = waitOf(b?.wait);
-    if (wait === null) return json({ ...(await runDelegate(v, req.signal)), whoWrote: settings().whoWrote });
+    if (wait === null) return json({ ...(await runDelegate(v, req.signal)), whoWrote: settings().whoWrote, review: settings().review });
     return handOff(await waitDelegate(startDelegate(v).id, wait, req.signal));
   }
   if (p === "/api/delegate" && m === "GET") return handOff(await waitDelegate(url.searchParams.get("id") ?? "", waitOf(url.searchParams.get("wait")) ?? 0, req.signal));
@@ -669,8 +696,8 @@ async function api(req: Request, url: URL): Promise<Response> {
     if (typeof v === "string") return fail(400, v);
     return json(await makePlan({ ...v, signal: req.signal }));
   }
-  if (p === "/api/plan/run" && m === "POST") { if (offForApps(req)) return fail(409, OFF_TEXT); const b = await readBody(req); return json({ ...startRun(String(b?.id ?? ""), { paid: b?.paid === true || b?.paid === "yes" }), whoWrote: settings().whoWrote }); }
-  if (p === "/api/plan/run" && m === "GET") { const v = runView(url.searchParams.get("id") ?? ""); return v ? json({ ...v, whoWrote: settings().whoWrote }) : fail(404, "No run of that plan."); }
+  if (p === "/api/plan/run" && m === "POST") { if (offForApps(req)) return fail(409, OFF_TEXT); const b = await readBody(req); return json({ ...startRun(String(b?.id ?? ""), { paid: b?.paid === true || b?.paid === "yes" }), whoWrote: settings().whoWrote, review: settings().review }); }
+  if (p === "/api/plan/run" && m === "GET") { const v = runView(url.searchParams.get("id") ?? ""); return v ? json({ ...v, whoWrote: settings().whoWrote, review: settings().review }) : fail(404, "No run of that plan."); }
   if (p === "/api/plan/stop" && m === "POST") { const b = await readBody(req); const v = stopRun(String(b?.id ?? "")); return v ? json(v) : fail(404, "No run of that plan."); }
   // The delegate trial (trial.ts): its estimate and last report, start, stop.
   if (p === "/api/trial" && m === "GET") return json(await trialView(req.signal));

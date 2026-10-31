@@ -26,6 +26,8 @@ const HELP = `Leanfare ${VERSION}: every top AI model in one app on your own com
   leanfare mcp        Leanfare as an MCP server (stdio), for Claude Desktop and other MCP clients
   leanfare statusline the line for Claude Code's status line: your plan's 5 hour and weekly use (Settings adds it)
   leanfare hook prompt the line Claude Code's prompt hook adds: your plan's use, and that plan can split a task
+  leanfare hook stop  Claude Code's stop hook: before Claude finishes, it asks once for a grade of each answer
+                      Leanfare brought back, and a fix of what is partly or wrong ("hook handoff" notes them)
   leanfare apps       the AI apps on this computer, and whether Leanfare's tools are in each
   leanfare apps add claude-desktop   add Leanfare's tools to one (claude-desktop, claude-code, cursor, codex,
                       gemini-cli, windsurf, vscode, lm-studio); "leanfare apps remove <app>" takes them out
@@ -294,6 +296,8 @@ else if (command === "statusline") { const { runStatusline } = await import("./s
 else if (command === "hook") {
   try {
     if (args.includes("read")) { const { runReadHook } = await import("./readhook"); await runReadHook(); }
+    else if (args.includes("handoff")) { const { runHandoffHook } = await import("./reviewhook"); await runHandoffHook(); }
+    else if (args.includes("stop")) { const { runStopHook } = await import("./reviewhook"); await runStopHook(); }
     else if (args.includes("prompt")) { const { hookLine } = await import("./statusline"); const line = hookLine(); if (line) console.log(line); }
   } catch {}
   process.exit(0);

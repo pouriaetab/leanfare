@@ -4,7 +4,7 @@ import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { END, START, WORKER, autoView, hookCommand, setAuto, withBlock } from "../src/workers";
+import { END, START, WORKER, autoView, hookCommand, setAuto, stopHookCommand, withBlock } from "../src/workers";
 import { hookLine, saveSnap } from "../src/statusline";
 import { boot, reset, ui } from "./app";
 
@@ -53,7 +53,8 @@ describe("Claude Code plans by itself", () => {
     const j = JSON.parse(readFileSync(settingsFile, "utf8"));
     expect(j.model).toBe("opus");
     expect(j.statusLine).toEqual(theirs.statusLine);
-    expect(j.hooks.Stop).toEqual(theirs.hooks.Stop);
+    expect(j.hooks.Stop[0]).toEqual(theirs.hooks.Stop[0]); // theirs first, then Leanfare's stop hook (0.12)
+    expect(j.hooks.Stop[1]).toEqual({ hooks: [{ type: "command", command: stopHookCommand(), timeout: 10 }] });
     expect(j.hooks.UserPromptSubmit[0]).toEqual(theirs.hooks.UserPromptSubmit[0]);
     expect(j.hooks.UserPromptSubmit[1]).toEqual({ hooks: [{ type: "command", command: hookCommand(), timeout: 5 }] });
     expect(existsSync(settingsFile + ".leanfare-backup")).toBe(true);

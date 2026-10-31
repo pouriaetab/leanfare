@@ -50,6 +50,8 @@ export interface Settings {
   sideBySide: number; // one hand off in this many is also answered by the top model and judged blind against it (sidebyside.ts); 0: off
   sideBySideCap: number; // US dollars a month side by side may spend, from your budget
   whoWrote: boolean; // a test: answers handed back to apps mark which model wrote each paragraph (mcp.ts: markedBy)
+  review: boolean; // 0.12: each answer handed back asks the app to review it, grade it and fix it before it answers (mcp.ts: reviewLine)
+  reviewHook: boolean; // 0.12: Claude Code's Stop hook asks once for a grade of each hand off of the turn before Claude finishes (reviewhook.ts)
   jobs: Jobs; // where each kind of job goes in plans (0.11): to Leanfare, to Leanfare when your plan runs low (modes.ts), or your app
   paidCap: number; // US dollars a hand off may spend on a paid model (0.11); a cheaper or free one first, or it stays with your app
 }
@@ -89,6 +91,8 @@ export const DEFAULTS: Settings = {
   sideBySide: 10,
   sideBySideCap: 1,
   whoWrote: false,
+  review: true,
+  reviewHook: true,
   jobs: JOB_DEFAULTS,
   paidCap: 0.1,
 };
@@ -161,7 +165,7 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
   if ("atLimit" in p) { if (p.atLimit !== "cheapest" && p.atLimit !== "stop") return { error: "atLimit must be cheapest or stop" }; out.atLimit = p.atLimit; }
   if ("history" in p) out.history = !!p.history;
   if ("updateCheck" in p) out.updateCheck = !!p.updateCheck;
-  for (const k of ["showValue", "brief", "codexPlan", "setupDone", "whoWrote"] as const) {
+  for (const k of ["showValue", "brief", "codexPlan", "setupDone", "whoWrote", "review", "reviewHook"] as const) {
     if (!(k in p)) continue;
     if (typeof p[k] !== "boolean") return { error: `${k} must be true or false` };
     out[k] = p[k];

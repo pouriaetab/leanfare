@@ -29,16 +29,18 @@ const OWN = "(Leanfare wrote this file. Take it out in Leanfare's Settings, In y
 // What the app is told (0.11: by size and kind, not only "a task with several parts", which Claude judged most prompts
 // not to be: in a week of Plan by itself, Claude Code handed off nothing in 112 prompts).
 const BY_SIZE = `Before you read a file you will not change that is big (a log, data, docs or notes of about 40 KB or more, any other file over about 200 KB), or more than 5 files to answer one question, hand the reading to Leanfare's delegate tool (kind read, the files as full paths, and a task that says what to find): only the answer comes back, and the files stay out of your context. Keep for yourself the files you will change, short files, and anything you must quote exactly.`;
+// 0.12: every answer Leanfare brings back is reviewed, graded and fixed before the app answers (Settings, Review every answer).
+const REVIEW = `Review every answer Leanfare brings back before you use it: check it against its task, grade it with Leanfare's grade tool (good, partly or wrong, with its handoff number), and fix anything partly or wrong before you answer: yourself, or with grade fix leanfare and why, and Leanfare asks again one tier up and sends back a new answer to review. Models graded down too often are picked less.`;
 const RULE_CLAUDE = `## Leanfare
 
 Leanfare hands reading and searching to free or cheap models, so your Claude plan lasts longer. ${BY_SIZE}
 
-For a task with several parts (a feature, a fix across files, research across many files), call Leanfare's plan tool first and follow its table: run the parts it gives to Leanfare with delegate (several in the same turn) or with the leanfare-worker subagent (one per part, at once), or call plan_run to run them in the background and plan_status for their answers. Do the parts it leaves to you yourself. Once you have used an answer of Leanfare's, grade it with Leanfare's grade tool (good, partly or wrong), so the models that do badly are moved down.`;
+For a task with several parts (a feature, a fix across files, research across many files), call Leanfare's plan tool first and follow its table: run the parts it gives to Leanfare with delegate (several in the same turn) or with the leanfare-worker subagent (one per part, at once), or call plan_run to run them in the background and plan_status for their answers. Do the parts it leaves to you yourself. ${REVIEW}`;
 const RULE_OTHER = `## Leanfare
 
 Leanfare hands reading and searching to free or cheap models, so your plan lasts longer. ${BY_SIZE}
 
-For a task with several parts (a feature, a fix across files, research across many files), call Leanfare's plan tool first and follow its table: run the parts it gives to Leanfare with delegate (several in the same turn), or call plan_run to run them in the background and plan_status for their answers. Do the parts it leaves to you yourself. Once you have used an answer of Leanfare's, grade it with Leanfare's grade tool (good, partly or wrong), so the models that do badly are moved down.`;
+For a task with several parts (a feature, a fix across files, research across many files), call Leanfare's plan tool first and follow its table: run the parts it gives to Leanfare with delegate (several in the same turn), or call plan_run to run them in the background and plan_status for their answers. Do the parts it leaves to you yourself. ${REVIEW}`;
 
 export const WORKER = `---
 name: leanfare-worker
@@ -129,17 +131,23 @@ function setBlock(file: string, body: string | null) {
   writeAtomic(file, after); // a file left empty stays, empty: it may have been there before Leanfare
 }
 
-// ---- Claude Code's hooks: the prompt hook, and the read hook (0.11) ---------------------------------
+// ---- Claude Code's hooks: the prompt hook, the read hook (0.11), and the review hooks (0.12) ---------
 
 // The prompt hook says how much of your Claude plan is left as each prompt goes; the read hook reminds Claude Code once
 // before it reads a big file itself (readhook.ts). Both are Leanfare's own entries in ~/.claude/settings.json.
 export const hookCommand = () => { const c = selfCommand(); return [c.command, ...c.args].map(quote).join(" ") + " hook prompt"; };
 export const readHookCommand = () => { const c = selfCommand(); return [c.command, ...c.args].map(quote).join(" ") + " hook read"; };
-const ourHook = (what: "prompt" | "read") => (cmd: unknown) => typeof cmd === "string" && new RegExp(`(^|[\\s'"/\\\\])(leanfare(\\.exe)?|cli\\.ts)['"]?\\s+hook\\s+${what}\\b`, "i").test(cmd);
-const isOurHook = ourHook("prompt"), isOurReadHook = ourHook("read");
+// The review hooks (reviewhook.ts): which hand offs a session got, and a grade asked for once before Claude finishes.
+export const handoffHookCommand = () => { const c = selfCommand(); return [c.command, ...c.args].map(quote).join(" ") + " hook handoff"; };
+export const stopHookCommand = () => { const c = selfCommand(); return [c.command, ...c.args].map(quote).join(" ") + " hook stop"; };
+export const HANDOFF_MATCHER = "mcp__.*leanfare.*__(delegate|plan_run|plan_status|grade)";
+const ourHook = (what: "prompt" | "read" | "handoff" | "stop") => (cmd: unknown) => typeof cmd === "string" && new RegExp(`(^|[\\s'"/\\\\])(leanfare(\\.exe)?|cli\\.ts)['"]?\\s+hook\\s+${what}\\b`, "i").test(cmd);
+const isOurHook = ourHook("prompt"), isOurReadHook = ourHook("read"), isOurHandoffHook = ourHook("handoff"), isOurStopHook = ourHook("stop");
 const HOOKS = [
   { event: "UserPromptSubmit", ours: isOurHook, entry: () => ({ hooks: [{ type: "command", command: hookCommand(), timeout: 5 }] }), command: hookCommand },
   { event: "PreToolUse", ours: isOurReadHook, entry: () => ({ matcher: "Read", hooks: [{ type: "command", command: readHookCommand(), timeout: 5 }] }), command: readHookCommand },
+  { event: "PostToolUse", ours: isOurHandoffHook, entry: () => ({ matcher: HANDOFF_MATCHER, hooks: [{ type: "command", command: handoffHookCommand(), timeout: 5 }] }), command: handoffHookCommand },
+  { event: "Stop", ours: isOurStopHook, entry: () => ({ hooks: [{ type: "command", command: stopHookCommand(), timeout: 10 }] }), command: stopHookCommand },
 ];
 const has = (j: any, h: (typeof HOOKS)[number], exact = false) => {
   const groups = j?.hooks?.[h.event];
@@ -171,7 +179,7 @@ export interface AutoView { on: boolean; partly: boolean; what: string; reminder
 interface AutoDef { files: () => { rule: string; agent?: string }; hook?: boolean; rule: string; what: string }
 export const AUTO: Record<string, AutoDef> = {
   "claude-code": { files: () => ({ rule: join(claudeDir(), "CLAUDE.md"), agent: join(claudeDir(), "agents", "leanfare-worker.md") }), hook: true, rule: RULE_CLAUDE,
-    what: "Plan by itself: a block in CLAUDE.md (hand off big reads, and plan tasks with several parts), a worker subagent (leanfare-worker, on Haiku) for Leanfare's parts, a prompt hook that says how much of your plan is left, and a reminder before Claude Code reads a big file itself" },
+    what: "Plan by itself: a block in CLAUDE.md (hand off big reads, and plan tasks with several parts), a worker subagent (leanfare-worker, on Haiku) for Leanfare's parts, a prompt hook that says how much of your plan is left, a reminder before Claude Code reads a big file itself, and, before Claude finishes, a request to grade and fix the answers Leanfare brought back" },
   codex: { files: () => ({ rule: join(codexDir(), "AGENTS.md") }), rule: RULE_OTHER, what: "Plan by itself: a block in AGENTS.md that has Codex hand off big reads and call Leanfare's plan for a task with several parts" },
   "gemini-cli": { files: () => ({ rule: join(home(), ".gemini", "GEMINI.md") }), rule: RULE_OTHER, what: "Plan by itself: a block in GEMINI.md that has Gemini CLI hand off big reads and call Leanfare's plan for a task with several parts" },
 };

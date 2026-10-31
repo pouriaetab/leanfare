@@ -2934,6 +2934,18 @@
         h("span", { class: "vs", text: `against ${x.tops.join(", ")} · judged by ${x.judges.join(", ")}` })))));
   }
 
+  // 0.12, the review loop (mcp.ts: reviewLine; reviewhook.ts): each answer Leanfare hands back is reviewed by your app,
+  // graded, and fixed before it answers you.
+  function reviewSettingEl(s) {
+    return h("div", { class: "setting" }, h("h3", { text: "Review every answer" }),
+      h("label", { class: "check" }, h("input", { type: "checkbox", checked: s.review !== false, onchange: (e) => patchSettings({ review: e.target.checked }, e.target.checked ? "Your apps are asked to review, grade and fix each answer Leanfare hands back." : "Your apps are only asked to grade the answers.") }),
+        "Ask the app to review, grade and fix each answer Leanfare brings back"),
+      h("p", { text: "Each answer ends with a line that asks your app to check it against its task, grade it, and fix it before it answers you: by itself, or by asking Leanfare to try again one tier up, with what was wrong, on another model. To ask again, Leanfare holds the last 20 requests in memory for 2 hours; nothing is written down." }),
+      h("label", { class: "check" }, h("input", { type: "checkbox", checked: s.reviewHook !== false, onchange: (e) => patchSettings({ reviewHook: e.target.checked }, e.target.checked ? "Claude Code asks for the grades before it finishes." : "Claude Code no longer asks before it finishes.") }),
+        "In Claude Code, ask once before Claude finishes for a grade of each answer"),
+      h("p", { text: "A stop hook, part of Plan by itself in Claude Code. Claude Desktop, Cowork and other apps have no hooks: there the line in each answer asks." }));
+  }
+
   // A test (mcp.ts: markedBy): answers handed back to your apps mark which model wrote each paragraph.
   function whoWroteSettingEl(s) {
     return h("div", { class: "setting" }, h("h3", { text: "Show who wrote what (a test)" }),
@@ -3077,7 +3089,7 @@
         h("div", { class: "seg", role: "group", "aria-label": "Thinking effort" }, ...[["auto", "Model's default"], ["low", "Low"], ["medium", "Medium"], ["high", "High"]].map(([k, label]) =>
           h("button", { type: "button", "aria-pressed": String((s.effort ?? "auto") === k), text: label, onclick: () => patchSettings({ effort: k }, k === "auto" ? "Thinking models think as they do by default." : `Thinking effort: ${label.toLowerCase()}.`) }))),
         h("p", { text: "For models that think before they answer, at the levels each one takes. Thinking is billed as output, so a higher effort costs more and takes longer; the estimate learns from your answers at each level." })),
-      planCapSettingEl(s), jobsSettingEl(s), platformsSettingEl(), codexSettingEl(s), gradesSettingEl(), sideBySideSettingEl(s), whoWroteSettingEl(s),
+      planCapSettingEl(s), jobsSettingEl(s), platformsSettingEl(), codexSettingEl(s), reviewSettingEl(s), gradesSettingEl(), sideBySideSettingEl(s), whoWroteSettingEl(s),
       h("div", { class: "setting" }, h("h3", { text: "Your usual model" }), usualSel,
         h("p", { text: "The model you would use without Leanfare. Savings are measured against it." })),
       h("div", { class: "setting", id: "budgetSetting" }, h("h3", { text: "Monthly budget" }),
