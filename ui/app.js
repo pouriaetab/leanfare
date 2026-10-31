@@ -2971,7 +2971,7 @@
   const knobAt = (n) => -120 + 60 * (n - 1); // degrees from straight up: 1 at the lower left, 3 at the top, 5 at the lower right
   const knobPt = (cx, cy, r, deg) => { const a = (deg * Math.PI) / 180; return [cx + r * Math.sin(a), cy - r * Math.cos(a)]; };
   const knobArc = (cx, cy, r, a1, a2) => { const [x1, y1] = knobPt(cx, cy, r, a1), [x2, y2] = knobPt(cx, cy, r, a2); return `M${x1.toFixed(2)} ${y1.toFixed(2)} A${r} ${r} 0 ${a2 - a1 > 180 ? 1 : 0} 1 ${x2.toFixed(2)} ${y2.toFixed(2)}`; };
-  function knobEl(value, names, onPick) {
+  function knobEl(value, names, onPick, label = "How much Leanfare takes first") {
     const W = 176, H = 164, cx = 88, cy = 90, r = 60, body = r - 16;
     const g = sv("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, "aria-hidden": "true" });
     g.append(sv("path", { d: knobArc(cx, cy, r, -120, 120), class: "lk-track" }), sv("path", { d: knobArc(cx, cy, r, -120, Math.max(-119, knobAt(value))), class: "lk-fill" }));
@@ -2983,7 +2983,7 @@
     const [px, py] = knobPt(cx, cy, body - 9, knobAt(value));
     g.append(sv("circle", { cx, cy: cy + 2, r: body, class: "lk-shadow" }), sv("circle", { cx, cy, r: body, class: "lk-body" }), sv("circle", { cx: px.toFixed(2), cy: py.toFixed(2), r: 4, class: "lk-dot" }),
       sv("text", { x: cx, y: cy + 6, "text-anchor": "middle", class: "lk-big" }, String(value)), sv("text", { x: cx, y: cy + 23, "text-anchor": "middle", class: "lk-name" }, names[value]));
-    const wrap = h("div", { class: "lvknob", role: "slider", tabindex: "0", "aria-label": "How much Leanfare takes first", "aria-valuemin": "1", "aria-valuemax": "5", "aria-valuenow": String(value), "aria-valuetext": `${value}, ${names[value]}` }, g);
+    const wrap = h("div", { class: "lvknob", role: "slider", tabindex: "0", "aria-label": label, "aria-valuemin": "1", "aria-valuemax": "5", "aria-valuenow": String(value), "aria-valuetext": `${value}, ${names[value]}` }, g);
     wrap.addEventListener("keydown", (e) => {
       const k = e.key;
       const n = k === "ArrowRight" || k === "ArrowUp" ? Math.min(5, value + 1) : k === "ArrowLeft" || k === "ArrowDown" ? Math.max(1, value - 1) : k === "Home" ? 1 : k === "End" ? 5 : /^[1-5]$/.test(k) ? Number(k) : null;
@@ -3047,6 +3047,31 @@
       switchRow(s.askEachChat === true, "Ask me at the start of each new chat", "Off: new chats use the default, and nothing asks again until you change it.",
         (on) => patchSettings({ askEachChat: on }, on ? "Your apps ask for the level at the start of each new chat." : "New chats use the default level.")),
       apps);
+  }
+
+  // What Leanfare keeps of each hand off's words (words.ts): the same knob, what each stop keeps, how long, and Delete all.
+  function keepSettingEl(s) {
+    const K = S.st.keep;
+    if (!K) return null;
+    const value = Number.isInteger(s.keep) && s.keep >= 1 && s.keep <= 5 ? s.keep : 1;
+    const short = { 1: "Numbers", 2: "+ Task", 3: "+ Answer", 4: "+ Files", 5: "Everything" };
+    const pick = (n) => patchSettings({ keep: n }, n === 1 ? "Leanfare keeps numbers only." : `Leanfare keeps: ${K.names[n]}.`);
+    const defs = h("ul", { class: "lv-defs" }, ...[1, 2, 3, 4, 5].map((n) => h("li", { class: n === value ? "on" : null },
+      h("button", { type: "button", "aria-pressed": String(n === value), "aria-label": `Keep ${n}, ${K.names[n]}`, onclick: () => (n === value ? null : pick(n)) },
+        h("b", { class: "n", text: String(n) }), h("span", { class: "d" }, h("b", { text: `${K.names[n]}. ` }), K.says[n], n === 1 ? h("span", { class: "lv-tag", text: "default" }) : null)))));
+    const days = h("select", { "aria-label": "Keep words for", onchange: (e) => patchSettings({ keepDays: Number(e.target.value) }, `Kept words stay ${e.target.value} days.`) },
+      ...K.days.map((d) => h("option", { value: String(d), text: `${d} days`, selected: (s.keepDays ?? 30) === d })));
+    const kb = K.kept.bytes / 1024;
+    const size = K.kept.count ? `${plural(K.kept.count, "hand off")}, ${kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(kb))} KB`} kept now` : "nothing kept now";
+    const del = h("button", { type: "button", class: "btn small", text: "Delete all kept words", disabled: !K.kept.count, onclick: async (e) => {
+      e.target.disabled = true;
+      try { await api("/api/words/delete", { body: {} }); toast("Every kept word is deleted.", "done"); } catch {}
+      refreshState();
+    } });
+    return h("div", { class: "setting lv-setting" }, h("h3", { text: "What Leanfare keeps on this computer" }),
+      h("p", { text: "For each hand off, so you can read and look into every prompt later. It all stays in Leanfare's folder on this computer and is never sent anywhere. It never changes which models get the work." }),
+      h("div", { class: "lv-row" }, h("div", { class: "lv-knobbox" }, knobEl(value, short, pick, "What Leanfare keeps"), h("div", { class: "lv-hint", text: "Turn it, or press 1 to 5" })), defs),
+      h("div", { class: "row" }, h("span", { text: "Keep for" }), days, h("span", { class: "note", text: size }), del));
   }
 
   // The review (mcp.ts: reviewLine; reviewhook.ts): each answer Leanfare hands back is reviewed by your app, graded,
@@ -3194,7 +3219,7 @@
       h("div", { class: "section-title", text: "In your apps" }),
       appsSettingEl(),
       h("div", { class: "section-title", text: "Choices" }),
-      levelSettingEl(s),
+      levelSettingEl(s), keepSettingEl(s),
       h("div", { class: "setting" }, h("h3", { text: "How Auto picks" }), modeSeg,
         h("p", { text: `${st.modes[s.mode].label}: ${st.modes[s.mode].blurb}, for the task Leanfare guesses from your message (coding, math, writing, long prompts and more). Ratings come from the Arena leaderboard.` })),
       speedSettingEl(s),
