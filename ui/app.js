@@ -1782,7 +1782,7 @@
       : !d.prompts.length && !d.speed?.length ? h("div", { class: "empty", text: "Nothing in this span yet. Hand offs and plan parts from your apps, and Claude Code's prompts, show here." })
       : !d.prompts.length ? h("div", { class: "rp-body" }, h("div", { class: "empty", text: "No prompts in this span yet. Hand offs and plan parts from your apps, and Claude Code's prompts, show here. The models' speed so far:" }), reportSpeedEl(d))
       : h("div", { class: "rp-body" + (S.report.loading ? " busy" : "") }, reportTiles(d), reportChartEl(d),
-          h("div", { class: "rp-two" }, reportModelsEl(d), reportKindsEl(d)), reportSpeedEl(d), reportPromptsEl(d), reportHowEl(d));
+          h("div", { class: "rp-two" }, reportModelsEl(d), reportKindsEl(d)), reportLevelsEl(d), reportSpeedEl(d), reportPromptsEl(d), reportHowEl(d));
     return h("section", { class: "rp", id: "reportCard" },
       h("div", { class: "sv-head" }, h("h2", { text: "Report" }), h("span", { class: "muted", text: "what Leanfare did for your apps" })),
       filters, body);
@@ -1912,6 +1912,29 @@
             g ? [["good", k.good], ["warn", k.partly], ["bad", k.wrong]].filter(([, v]) => v).map(([c, v]) => h("i", { class: c, style: { width: `${(v / g) * 100}%` } })) : h("i", { class: "none", style: { width: "100%" } })),
           h("span", { class: "meta" }, h("span", { text: g ? `${k.good} good · ${k.partly} partly · ${k.wrong} wrong${k.score ? ` · ${scoreShort(k.score)}` : ""}` : "not graded yet" }), h("span", { class: "best", text: k.best ? `best: ${k.best.label}` : "" })));
       }));
+  }
+
+  // Quality by level (0.12): each level's grades, all levels together, and those from before the levels; fixed first:
+  // the answers graded partly or wrong that were fixed before your app answered.
+  const LV_NAME = { 1: "Off", 2: "Light", 3: "More", 4: "Most", 5: "All it can" };
+  function reportLevelsEl(d) {
+    const b = d.byLevel;
+    if (!b || !b.all || !b.all.parts) return null;
+    const row = (label, small, r, all) => {
+      const g = r.good + r.partly + r.wrong;
+      return h("div", { class: "rp-level" + (all ? " all" : "") },
+        h("span", { class: "nm" }, h("b", { text: label }), h("small", { text: small })),
+        h("span", { class: "stack", role: "img", "aria-label": `${label}: ${r.good} good, ${r.partly} partly, ${r.wrong} wrong` },
+          g ? [["good", r.good], ["warn", r.partly], ["bad", r.wrong]].filter(([, v]) => v).map(([c, v]) => h("i", { class: c, style: { width: `${(v / g) * 100}%` } })) : h("i", { class: "none", style: { width: "100%" } })),
+        h("span", { class: "meta" }, h("span", { text: g ? `${Math.round((r.good / g) * 100)}% good · ${r.good} good · ${r.partly} partly · ${r.wrong} wrong` : "not graded yet" }),
+          h("span", { class: "best", text: r.bad ? `fixed first: ${r.fixed} of ${r.bad}` : g ? "nothing to fix" : "" })));
+    };
+    return h("div", { class: "card rp-card" }, h("h3", { text: "Quality by level" }),
+      h("p", { class: "muted", text: "The grades of the answers Leanfare brought back, for each level they were handed off at: your app's grade, else a blind check's. Fixed first: answers graded partly or wrong that were fixed before your app answered." }),
+      ...b.levels.map((r) => row(`${r.level} · ${LV_NAME[r.level]}`, plural(r.parts, "hand off"), r, false)),
+      b.before ? row("Before levels", plural(b.before.parts, "hand off"), b.before, false) : null,
+      row("All levels", plural(b.all.parts, "hand off"), b.all, true),
+      h("div", { class: "lv-legend" }, h("span", {}, h("i", { class: "good" }), "good: used as it was"), h("span", {}, h("i", { class: "warn" }), "partly: some of it fixed"), h("span", {}, h("i", { class: "bad" }), "wrong: redone")));
   }
 
   // Speed, failures, cost and quality per model (0.10): every call in the span. A dot for each model (time for an
