@@ -73,7 +73,8 @@ export async function reset(patch: Partial<Settings> = {}) {
   // Side by side is off unless a test turns it on: it would add answers to every hand off now and then.
   // Every kind of job goes to Leanfare and paid work has room, as before 0.11's rules and cap: the tests of those set
   // them (jobs.test.ts).
-  saveSettings({ brief: false, sideBySide: 0, jobs: { read: "leanfare", search: "leanfare", write: "leanfare", reason: "leanfare" }, paidCap: 100, ...patch });
+  // The level is 2 (Light), as Leanfare worked before 0.12's levels: level.test.ts checks the others.
+  saveSettings({ brief: false, sideBySide: 0, jobs: { read: "leanfare", search: "leanfare", write: "leanfare", reason: "leanfare" }, paidCap: 100, level: 2, ...patch });
 }
 
 export async function keys(...ids: string[]) {

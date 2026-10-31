@@ -56,7 +56,8 @@ describe("the mode", () => {
 describe("what the mode changes", () => {
   test("what Claude is told as each prompt goes", () => {
     snap("2026-10-21T11:00:00Z", 74);
-    expect(hookLine()).toBe("Leanfare: your Claude plan is running low: the week 74% used. Hand all reading, searching and drafting you will not change yourself to Leanfare's delegate, and plan tasks with several parts with Leanfare's plan; keep changes to files and your final answers.");
+    // 0.12: running low raises the level (2 in the tests) to 4, and says why.
+    expect(hookLine()).toBe("Leanfare: level 4 (Most) in this session (raised from 2: your Claude plan is running low: the week 74% used). Call Leanfare's plan tool first for each prompt that is more than a quick question, and follow its table; hand reading, searching, summaries, reviews and drafts to Leanfare. Pass level 4 to delegate and plan.");
   });
   test("reminders before big reads come sooner", () => {
     const log = join(dir, "app.log");

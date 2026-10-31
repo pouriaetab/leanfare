@@ -4,7 +4,7 @@ import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { END, START, WORKER, autoView, hookCommand, setAuto, stopHookCommand, withBlock } from "../src/workers";
+import { END, HANDOFF_MATCHER, START, WORKER, autoView, handoffHookCommand, hookCommand, setAuto, stopHookCommand, withBlock } from "../src/workers";
 import { hookLine, saveSnap } from "../src/statusline";
 import { boot, reset, ui } from "./app";
 
@@ -67,6 +67,20 @@ describe("Claude Code plans by itself", () => {
     expect(JSON.parse(readFileSync(settingsFile, "utf8"))).toEqual(theirs);
   });
 
+  test("0.12: the review hooks go in with it, and an older hand off hook (its matcher without the level tool) is brought up to date", () => {
+    mkdirSync(claudeDir(), { recursive: true });
+    writeFileSync(settingsFile, "{}");
+    setAuto("claude-code", true);
+    const j = JSON.parse(readFileSync(settingsFile, "utf8"));
+    expect(j.hooks.PostToolUse).toEqual([{ matcher: HANDOFF_MATCHER, hooks: [{ type: "command", command: handoffHookCommand(), timeout: 5 }] }]);
+    expect(j.hooks.Stop).toEqual([{ hooks: [{ type: "command", command: stopHookCommand(), timeout: 10 }] }]);
+    j.hooks.PostToolUse[0].matcher = "mcp__.*leanfare.*__(delegate|plan_run|plan_status|grade)";
+    writeFileSync(settingsFile, JSON.stringify(j));
+    expect(autoView("claude-code")!.on).toBe(true); // still Leanfare's
+    setAuto("claude-code", true);
+    expect(JSON.parse(readFileSync(settingsFile, "utf8")).hooks.PostToolUse).toEqual([{ matcher: HANDOFF_MATCHER, hooks: [{ type: "command", command: handoffHookCommand(), timeout: 5 }] }]);
+  });
+
   test("a settings file that is not valid JSON stops it before anything changes, and a worker file of the user's is never written over", () => {
     writeFileSync(settingsFile, "{ not json");
     expect(() => setAuto("claude-code", true)).toThrow("not a valid settings file");
@@ -81,11 +95,12 @@ describe("Claude Code plans by itself", () => {
 
   test("the hook's line: the plan's windows as numbers, and the plan tool; running low it says what to hand off", () => {
     const T = (iso: string) => Date.parse(iso);
-    expect(hookLine()).toBe("Leanfare: Leanfare's plan tool splits a task with several parts across cheaper models, and its delegate reads big files you will not change.");
+    const light = "Leanfare: level 2 (Light) in this session. Hand big reads you will not change (about 40 KB of logs or docs, 200 KB of anything else, or more than 5 files) to Leanfare's delegate, and plan tasks with several parts with Leanfare's plan. Pass level 2 to delegate and plan.";
+    expect(hookLine()).toBe(light);
     saveSnap({ at: T("2026-10-21T11:00:00Z"), five: { used: 48.4, resets: T("2026-10-21T15:00:00Z") }, week: { used: 21, resets: T("2026-10-27T12:00:00Z") } });
-    expect(hookLine()).toBe("Leanfare: the Claude plan: its 5 hour window is 48% used, its week 21% used. Leanfare's plan tool splits a task with several parts across cheaper models, and its delegate reads big files you will not change.");
+    expect(hookLine()).toBe(`${light} The Claude plan: its 5 hour window is 48% used, its week 21% used.`);
     saveSnap({ at: T("2026-10-21T11:30:00Z"), five: { used: 91, resets: T("2026-10-21T15:00:00Z") }, week: { used: 22, resets: T("2026-10-27T12:00:00Z") } });
-    expect(hookLine()).toStartWith("Leanfare: your Claude plan is very low: the 5 hours 91% used, the week 22% used. Hand everything you can to Leanfare");
+    expect(hookLine()).toStartWith("Leanfare: level 5 (All it can) in this session (raised from 2: your Claude plan is very low: the 5 hours 91% used, the week 22% used). Plan each prompt with Leanfare");
   });
 
   test("leanfare hook prompt prints the line, reads nothing of the prompt, and always exits 0", async () => {
@@ -94,7 +109,7 @@ describe("Claude Code plans by itself", () => {
     (p.stdin as any).end();
     const out = await new Response(p.stdout as ReadableStream).text();
     expect(await p.exited).toBe(0);
-    expect(out).toContain("Leanfare's plan tool");
+    expect(out).toContain("Leanfare: level 2 (Light) in this session.");
     expect(out).not.toContain("SECRET");
   });
 });
