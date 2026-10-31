@@ -356,6 +356,9 @@ function handOffReply(j: any, before = "") {
     check: j.check.picked ? { verdict: j.check.verdict, by: j.check.checker?.id ?? null, why: j.check.why || null, cost_usd: j.check.cost } : null,
     first: j.first ? { model: j.first.model.id, cost_usd: j.first.cost } : null,
     tokens: j.tokens, cut: j.cut, seconds: j.seconds, handoff: j.row ?? null, ...(j.fixOf ? { fix_of: j.fixOf } : {}),
+    // 0.12: some apps read only this part of a tool's result (Cowork does), so the receipt and what to do with the answer
+    // are here too, not only in the text.
+    receipt: j.receipt, review: review || null,
   });
 }
 
@@ -419,6 +422,13 @@ export function markedBy(text: string, label: string): string {
 export const whoNote = (labels: string[]) => `(Test, Show who wrote what is on in Leanfare: keep the ${labels.map((l) => "`" + l + "`").join(", ")} marks on what you take from ${labels.length === 1 ? "this answer" : "these answers"}, and start each paragraph you write yourself with your own model's name the same way, so the user sees who wrote what.)`;
 const STATUS: Record<string, string> = { waiting: "waiting", running: "running", done: "done", failed: "failed", stopped: "stopped", yours: "yours to do", after_yours: "after yours: hand it to delegate once yours is done", blocked: "waits for a part that is not done", asks: "paid: waits for a yes" };
 const SHOWN = 3000; // characters of an answer in the tool's result (the whole answer is in its file)
+// What the app is asked to do with a plan's answers: review, grade and fix them (0.12), or only grade them.
+export function planReview(v: any): string {
+  const done = v.parts.filter((r: any) => r.answer);
+  if (!done.length) return "";
+  if (v.review !== false) return `Review ${done.length === 1 ? "this answer" : "each answer"} before you use it, then grade ${done.length === 1 ? "it" : "each"} with grade (good, partly or wrong, with the plan's id and the part). If one is partly or wrong, fix it before you answer: yourself (fix "myself"), or with fix "leanfare" and why, and Leanfare asks again one tier up and sends back a new answer to review.`;
+  return `Once you have used ${done.length === 1 ? "this answer" : "these answers"}, grade ${done.length === 1 ? "it" : "each"} with grade (good, partly or wrong, with the plan's id and the part): models graded below good too often are moved down.`;
+}
 export function statusText(v: any, saved: string | null): string {
   const rows = v.parts.map((r: any) => `| ${r.n} | ${String(r.title).replace(/\|/g, "/")} | ${STATUS[r.status] ?? r.status} | ${r.model ?? ""} | ${r.cost === null || r.cost === undefined ? "" : usd(r.cost)} |`);
   const done = v.parts.filter((r: any) => r.answer);
@@ -428,8 +438,8 @@ export function statusText(v: any, saved: string | null): string {
   const shown = (r: any) => (v.whoWrote ? markedBy(r.answer, r.model ?? "Leanfare") : r.answer);
   for (const r of done) lines.push("", `## Part ${r.n}: ${r.title}`, "", r.answer.length > SHOWN ? `${shown({ ...r, answer: r.answer.slice(0, SHOWN) })}\n\n(cut here: the whole answer is in ${saved ?? "Leanfare"}${saved ? `/part-${r.n}.md` : ""})` : shown(r), "", `(${r.receipt})`);
   for (const r of v.parts.filter((x: any) => x.error)) lines.push("", `Part ${r.n} failed: ${r.error}`);
-  if (done.length && v.review !== false) lines.push("", `Review ${done.length === 1 ? "this answer" : "each answer"} before you use it, then grade ${done.length === 1 ? "it" : "each"} with grade (good, partly or wrong, with the plan's id and the part). If one is partly or wrong, fix it before you answer: yourself (fix "myself"), or with fix "leanfare" and why, and Leanfare asks again one tier up and sends back a new answer to review.`);
-  else if (done.length) lines.push("", `Once you have used ${done.length === 1 ? "this answer" : "these answers"}, grade ${done.length === 1 ? "it" : "each"} with grade (good, partly or wrong, with the plan's id and the part): models graded below good too often are moved down.`);
+  const review = planReview(v);
+  if (review) lines.push("", review);
   if (saved) lines.push("", `Saved in ${saved}/ in the project.`);
   if (v.whoWrote && done.length) lines.push("", whoNote([...new Set<string>(done.map((r: any) => String(r.model ?? "Leanfare")))]));
   return lines.join("\n");
@@ -521,7 +531,7 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
     if (set !== undefined) lines.push(scope === "chat" ? `Set for this chat only: follow it until the user changes it. Leanfare's default stays ${levelText(j.default)}.` : scope === "app" ? `Kept for ${ctx.client} from now on, in every chat that sets none of its own.` : "Kept as the default for every app and new chat that sets none of its own.");
     else if (j.ask) lines.push("Ask the user which level they want for this chat (1 Off, 2 Light, 3 More, 4 Most, 5 All it can), then call level with set.");
     lines.push(`The levels: ${LEVELS.map((n) => `${n} ${LEVEL_NAME[n]}`).join(", ")}.`);
-    return text(lines.join("\n"), { level: j.view.level, name: LEVEL_NAME[j.view.level as Level], from: set !== undefined ? scope : j.view.from, default: j.default, raised: j.view.raised });
+    return text(lines.join("\n"), { level: j.view.level, name: LEVEL_NAME[j.view.level as Level], from: set !== undefined ? scope : j.view.from, default: j.default, raised: j.view.raised, advice: lines[0], note: lines.slice(1).join(" ") });
   }
   if (name === "grade") {
     if (!["good", "partly", "wrong"].includes(args?.verdict)) return failure("grade needs a verdict: good, partly or wrong.");
@@ -541,9 +551,9 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
     const { j } = await call("/api/grades", { method: "POST", json: { ...body, ...(fix ? { fix, wait } : {}), ...(fix === "leanfare" && typeof args.why === "string" ? { why: args.why } : {}) } }, signal);
     const graded = `Graded ${args.verdict}. ${j.text}`;
     const f = j.fix;
-    if (!f) return text(fix === "myself" ? `${graded} Kept as fixed by you before you answered.` : graded, j.standing);
-    if (f.error) return text(`${graded}\n\n${f.error}`, { ...j.standing, fix: { error: f.error } });
-    if (f.running) return text(`${graded}\n\nAsked again one tier up. Still working in Leanfare (${f.seconds} seconds so far): call delegate with id "${f.id}" and nothing else to get the new answer.`, { ...j.standing, fix: { running: true, id: f.id } });
+    if (!f) { const said = fix === "myself" ? `${graded} Kept as fixed by you before you answered.` : graded; return text(said, { ...j.standing, said }); }
+    if (f.error) return text(`${graded}\n\n${f.error}`, { ...j.standing, said: graded, fix: { error: f.error } });
+    if (f.running) { const next = `Call delegate with id "${f.id}" and nothing else to get the new answer.`; return text(`${graded}\n\nAsked again one tier up. Still working in Leanfare (${f.seconds} seconds so far): ${next[0].toLowerCase()}${next.slice(1)}`, { ...j.standing, said: graded, fix: { running: true, id: f.id, next } }); }
     return handOffReply(f, `${graded}\n\nAsked again one tier up: the new answer is hand off ${f.row ?? "?"}, a fix of ${f.fixOf}.\n\n`);
   }
   if (name === "local_model") {
@@ -624,7 +634,7 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
     for (let t = 0; t < wait && v.running && key(v) === first && !signal.aborted; t++) { await Bun.sleep(1000); v = await look(); }
     const folder = sharedFolder(args.folder, ctx.cwd);
     const saved = folder ? writeShared(folder, args.id, sharedFiles(v)) : null;
-    return text(statusText(v, saved), { id: v.id, running: v.running, cost_usd: v.cost, asks: v.asks, saved_in: saved, parts: v.parts.map((r: any) => ({ n: r.n, title: r.title, status: r.status, model: r.model, cost_usd: r.cost, seconds: r.seconds, answer: r.answer, receipt: r.receipt, error: r.error })) });
+    return text(statusText(v, saved), { id: v.id, running: v.running, cost_usd: v.cost, asks: v.asks, saved_in: saved, review: planReview(v) || null, parts: v.parts.map((r: any) => ({ n: r.n, title: r.title, status: r.status, model: r.model, cost_usd: r.cost, seconds: r.seconds, answer: r.answer, receipt: r.receipt, error: r.error })) });
   }
   if (name === "plan") {
     if (typeof args?.task !== "string" || !args.task.trim()) return failure("plan needs a task.");
@@ -672,7 +682,7 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
         ...(ctx.client ? { app: ctx.client } : {}), ...(typeof args.your_model === "string" ? { your_model: args.your_model } : {}), ...(isLevel(args.level) ? { level: args.level } : {}) };
       ({ j } = await call("/api/delegate", { method: "POST", json: body }, signal));
     }
-    if (j.running) return text(`Still working in Leanfare (${j.seconds} seconds so far). Call delegate again with id "${j.id}" and nothing else to get the answer.`, { running: true, id: j.id, seconds: j.seconds });
+    if (j.running) { const next = `Call delegate again with id "${j.id}" and nothing else to get the answer.`; return text(`Still working in Leanfare (${j.seconds} seconds so far). ${next}`, { running: true, id: j.id, seconds: j.seconds, next }); }
     return handOffReply(j);
   }
   if (name === "trial") {

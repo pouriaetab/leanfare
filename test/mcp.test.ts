@@ -164,6 +164,7 @@ describe("the tools", () => {
       expect(readFileSync(join(dir, ".leanfare", "plans", id, "part-1.md"), "utf8")).toContain("Three timeouts at 10:02.");
       // Once it used the answer, the app grades it: the grade goes with the model and the kind, never the words.
       expect(t).toContain("Review this answer before you use it, then grade it with grade (good, partly or wrong, with the plan's id and the part). If one is partly or wrong, fix it before you answer");
+      expect(st.result.structuredContent.review).toStartWith("Review this answer before you use it");
       const g = await rpc("tools/call", { name: "grade", arguments: { id, part: 1, verdict: "partly" } });
       expect(g.result.isError).toBeUndefined();
       expect(g.result.content[0].text).toMatch(/^Graded partly\. .+ for reading: 50 of 100 \(7 to 93, 1 grade\): 1 partly \(it moves down below 50, from 3 grades on\)\.$/);
@@ -260,6 +261,9 @@ describe("the tools", () => {
       writeFileSync(join(folder, "app.log"), "10:00 start\n10:01 error: disk full\n");
       const r = await rpc("tools/call", modern({ name: "delegate", arguments: { task: "List the errors.", files: ["app.log"], folder, kind: "read", effort: "low", check: "never" } }));
       const first = r.result.structuredContent.handoff;
+      // Some apps read only the structured part of a result (Cowork does): the receipt and the review line are there too.
+      expect(r.result.structuredContent.receipt).toStartWith("Leanfare delegate: DeepSeek V4 Flash");
+      expect(r.result.structuredContent.review).toStartWith(`(Review it before you use it: check it against the task. Then grade hand off ${first}: good, partly or wrong.`);
       const g = await rpc("tools/call", { name: "grade", arguments: { handoff: first, verdict: "wrong", fix: "leanfare", why: "it missed an error" } });
       expect(g.result.isError).toBeUndefined();
       const fixed = g.result.structuredContent.handoff;
@@ -268,8 +272,11 @@ describe("the tools", () => {
       expect(t).toStartWith("Graded wrong. ");
       expect(t).toContain(`Asked again one tier up: the new answer is hand off ${fixed}, a fix of ${first}.\n\nHello from grok-4.20-beta.`);
       expect(t).toContain(`Then grade hand off ${fixed}: good, partly or wrong.`);
+      expect(g.result.structuredContent.review).toContain(`Then grade hand off ${fixed}: good, partly or wrong.`);
+      expect(g.result.structuredContent.receipt).toStartWith("Leanfare delegate: Grok 4.20 Beta");
       const mine = await rpc("tools/call", { name: "grade", arguments: { handoff: fixed, verdict: "partly", fix: "myself" } });
       expect(mine.result.content[0].text).toEndWith("Kept as fixed by you before you answered.");
+      expect(mine.result.structuredContent.said).toEndWith("Kept as fixed by you before you answered.");
       const bad = await rpc("tools/call", { name: "grade", arguments: { handoff: first, verdict: "good", fix: "leanfare" } });
       expect(bad.result.content[0].text).toBe("fix goes with partly or wrong: a good answer needs no fix.");
     } finally { rmSync(folder, { recursive: true, force: true }); }
