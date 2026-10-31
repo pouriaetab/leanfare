@@ -29,16 +29,23 @@ const OWN = "(Leanfare wrote this file. Take it out in Leanfare's Settings, In y
 // What the app is told (0.11: by size and kind, not only "a task with several parts", which Claude judged most prompts
 // not to be: in a week of Plan by itself, Claude Code handed off nothing in 112 prompts).
 const BY_SIZE = `Before you read a file you will not change that is big (a log, data, docs or notes of about 40 KB or more, any other file over about 200 KB), or more than 5 files to answer one question, hand the reading to Leanfare's delegate tool (kind read, the files as full paths, and a task that says what to find): only the answer comes back, and the files stay out of your context. Keep for yourself the files you will change, short files, and anything you must quote exactly.`;
+// 0.12: how much goes to Leanfare first is its level (level.ts). Claude Code hears it from the prompt hook with each prompt;
+// the other apps ask the level tool. The block stays the same whatever the level, so changing it rewrites nothing.
+const LEVELS_RULE = `How much you hand to Leanfare first is its level, from 1 to 5: 1 Off (only when the user asks), 2 Light (the big reads above, and tasks with several parts), 3 More (also reads over about 10 KB you will not change, project wide searches, summaries, reviews and first drafts), 4 Most (plan every prompt that is more than a quick question with Leanfare's plan tool first), 5 All it can (hand every part a model can do to Leanfare; keep decisions, changes to files and the final answer). Pass the level to delegate and plan. When the user sets one ("Leanfare 4", "use Leanfare less"), call Leanfare's level tool with set.`;
 // 0.12: every answer Leanfare brings back is reviewed, graded and fixed before the app answers (Settings, Review every answer).
 const REVIEW = `Review every answer Leanfare brings back before you use it: check it against its task, grade it with Leanfare's grade tool (good, partly or wrong, with its handoff number), and fix anything partly or wrong before you answer: yourself, or with grade fix leanfare and why, and Leanfare asks again one tier up and sends back a new answer to review. Models graded down too often are picked less.`;
 const RULE_CLAUDE = `## Leanfare
 
 Leanfare hands reading and searching to free or cheap models, so your Claude plan lasts longer. ${BY_SIZE}
 
+${LEVELS_RULE} Leanfare's prompt hook says the level for this session with each prompt.
+
 For a task with several parts (a feature, a fix across files, research across many files), call Leanfare's plan tool first and follow its table: run the parts it gives to Leanfare with delegate (several in the same turn) or with the leanfare-worker subagent (one per part, at once), or call plan_run to run them in the background and plan_status for their answers. Do the parts it leaves to you yourself. ${REVIEW}`;
 const RULE_OTHER = `## Leanfare
 
 Leanfare hands reading and searching to free or cheap models, so your plan lasts longer. ${BY_SIZE}
+
+${LEVELS_RULE} At the start of a chat, call Leanfare's level tool once to learn the level, and follow it.
 
 For a task with several parts (a feature, a fix across files, research across many files), call Leanfare's plan tool first and follow its table: run the parts it gives to Leanfare with delegate (several in the same turn), or call plan_run to run them in the background and plan_status for their answers. Do the parts it leaves to you yourself. ${REVIEW}`;
 
@@ -140,7 +147,7 @@ export const readHookCommand = () => { const c = selfCommand(); return [c.comman
 // The review hooks (reviewhook.ts): which hand offs a session got, and a grade asked for once before Claude finishes.
 export const handoffHookCommand = () => { const c = selfCommand(); return [c.command, ...c.args].map(quote).join(" ") + " hook handoff"; };
 export const stopHookCommand = () => { const c = selfCommand(); return [c.command, ...c.args].map(quote).join(" ") + " hook stop"; };
-export const HANDOFF_MATCHER = "mcp__.*leanfare.*__(delegate|plan_run|plan_status|grade)";
+export const HANDOFF_MATCHER = "mcp__.*leanfare.*__(delegate|plan_run|plan_status|grade|level)";
 const ourHook = (what: "prompt" | "read" | "handoff" | "stop") => (cmd: unknown) => typeof cmd === "string" && new RegExp(`(^|[\\s'"/\\\\])(leanfare(\\.exe)?|cli\\.ts)['"]?\\s+hook\\s+${what}\\b`, "i").test(cmd);
 const isOurHook = ourHook("prompt"), isOurReadHook = ourHook("read"), isOurHandoffHook = ourHook("handoff"), isOurStopHook = ourHook("stop");
 const HOOKS = [
@@ -149,9 +156,12 @@ const HOOKS = [
   { event: "PostToolUse", ours: isOurHandoffHook, entry: () => ({ matcher: HANDOFF_MATCHER, hooks: [{ type: "command", command: handoffHookCommand(), timeout: 5 }] }), command: handoffHookCommand },
   { event: "Stop", ours: isOurStopHook, entry: () => ({ hooks: [{ type: "command", command: stopHookCommand(), timeout: 10 }] }), command: stopHookCommand },
 ];
+// exact: this version's command and matcher (0.12: the hand off hook's matcher grew the level tool, so an older entry
+// is brought up to date).
 const has = (j: any, h: (typeof HOOKS)[number], exact = false) => {
   const groups = j?.hooks?.[h.event];
-  return Array.isArray(groups) && groups.some((g: any) => Array.isArray(g?.hooks) && g.hooks.some((x: any) => (exact ? x?.command === h.command() : h.ours(x?.command))));
+  const matcher = (h.entry() as { matcher?: string }).matcher;
+  return Array.isArray(groups) && groups.some((g: any) => Array.isArray(g?.hooks) && (!exact || g.matcher === matcher) && g.hooks.some((x: any) => (exact ? x?.command === h.command() : h.ours(x?.command))));
 };
 function hookIn(j: any): boolean { return HOOKS.every((h) => has(j, h)); }
 const hookAny = (j: any) => HOOKS.some((h) => has(j, h));

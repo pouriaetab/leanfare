@@ -13,7 +13,9 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import { join } from "node:path";
 import { DATA_DIR } from "./config";
 import { switchedOn } from "./switch";
-import { modeAdvice, planMode } from "./modes";
+import { planMode } from "./modes";
+import { levelAdvice, levelFor } from "./level";
+import { hookSettings, noteSession, sessionFacts } from "./sessionlog";
 
 export interface Win { used: number; resets: number | null } // percent used, 0 to 100; when it resets, epoch ms
 export interface Snap { at: number; five: Win | null; week: Win | null }
@@ -168,17 +170,27 @@ export function runTheirs(cmd: string, input: string, ms = 2000): Promise<string
   });
 }
 
-// Claude Code's prompt hook (workers.ts adds it): what Claude is told as each prompt goes, as a fact,
-// numbers only (the prompt is never read), from the status line's last reading.
-export function hookLine(at = clock()): string {
+// Claude Code's prompt hook (workers.ts adds it): what Claude is told as each prompt goes, as a fact, numbers only (the
+// prompt is never read). 0.12: the session's level (level.ts): one the level tool set for this session, else Claude
+// Code's own, else the default, raised as the plan runs low; and the plan's numbers from the status line's last reading.
+// input: the JSON Claude Code sends (only its session_id is read); set: Leanfare's settings (a hook reads them itself).
+export function hookLine(at = clock(), input: any = null, set: Record<string, any> | null = null): string {
   if (!switchedOn()) return ""; // switched off: Claude is told nothing about Leanfare
   const s = lastSnap();
   const live = (w: { used: number; resets: number | null } | null | undefined) => (w && (w.resets === null || w.resets > at) ? Math.round(w.used) : null);
   const five = live(s?.five), week = live(s?.week);
   const parts = [five !== null ? `its 5 hour window is ${five}% used` : "", week !== null ? `its week ${week}% used` : ""].filter(Boolean);
-  // Low or very low (modes.ts, 0.11): what to hand off, plainly; plenty: the plan's numbers and the plan tool.
-  const advice = modeAdvice(planMode(at));
-  if (advice) return advice;
-  return `Leanfare: ${parts.length ? `the Claude plan: ${parts.join(", ")}. ` : ""}Leanfare's plan tool splits a task with several parts across cheaper models, and its delegate reads big files you will not change.`;
+  const sid = typeof input?.session_id === "string" ? input.session_id : "";
+  const facts = sid ? sessionFacts(sid, at) : null;
+  const st = set ?? hookSettings();
+  const mode = planMode(at);
+  const v = levelFor(st, "Claude Code", facts?.level ?? null, mode);
+  // The plan's numbers, unless the raise already said them.
+  let line = levelAdvice(v, "session") + (parts.length && !v.raised ? ` The Claude plan: ${parts.join(", ")}.` : "");
+  if (st.askEachChat === true && sid) { // the first prompt of a session with no level of its own: ask the user
+    if (!facts?.level && !facts?.prompts) line += " Ask the user which Leanfare level to use for this session (1 Off, 2 Light, 3 More, 4 Most, 5 All it can), then call Leanfare's level tool with set.";
+    noteSession(sid, [["s", 1]], at);
+  }
+  return line;
 }
 

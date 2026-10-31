@@ -143,6 +143,7 @@ const ADDED: [table: string, column: string, type: string][] = [
   ["delegations", "together_by", "TEXT"], // who said so: the app (the grade tool), or you (the report)
   ["delegations", "fixed", "TEXT"], // 0.12: graded partly or wrong, then fixed before the app answered: by the app itself (myself), or one tier up (leanfare)
   ["delegations", "fix_of", "INTEGER"], // 0.12: this hand off is a fix of that one, asked one tier up through the grade tool
+  ["delegations", "level", "INTEGER"], // 0.12: the level in effect when it was handed off (level.ts), for the grades by level
   ["comparisons", "app_alone", "INTEGER"], // 1: the top model was the app's own model, so this is a sample of the app alone
 ];
 

@@ -17,6 +17,8 @@
 // Each task is written to the delegations table with the chance it had of being checked,
 // so pass rates can be weighted back to every task. No words are kept there or in the
 // ledger: only models, verdicts, token counts and costs.
+import { isLevel, LEVEL_CHECKS, levelFor, type Level } from "./level";
+import { planMode } from "./modes";
 import { parseSpeed, secondsText, type SpeedChoice } from "./speed";
 import { TASKS, fitsText, getModel, isRetired, type Model } from "./data";
 import { db } from "./db";
@@ -50,6 +52,7 @@ export interface DelegateInput {
   appModel?: string | null; // the model that app runs on, as it says: the prompt's main model
   fixOf?: number; // 0.12: a fix of that hand off, asked one tier up after the app graded it partly or wrong (fixHandOff)
   fixDepth?: number; // how many fixes deep: a fix of a fix is 2, and Leanfare asks again no further
+  level?: Level; // 0.12: the level a chat or session set (the app passes it); else the app's, else the default (level.ts)
 }
 
 export const KINDS: Kind[] = ["read", "write", "reason"];
@@ -106,9 +109,10 @@ export function checkDelegate(b: any): DelegateInput | string {
     speed = v;
   }
   if (b.private !== undefined && typeof b.private !== "boolean") return "private must be true or false.";
+  if (b.level !== undefined && b.level !== null && !isLevel(b.level)) return "level must be a whole number from 1 to 5.";
   const app = nameOf(b.app), appModel = nameOf(b.your_model ?? b.yourModel);
   if (appModel === false || app === false) return "app and your_model must be short names, like Claude Code and claude-opus-5-5.";
-  return { task: b.task.trim(), files, kind, effort, check, maxOut, ...(speed !== undefined ? { speed } : {}), ...(b.private ? { private: true } : {}), ...(app ? { app } : {}), ...(appModel ? { appModel } : {}) };
+  return { task: b.task.trim(), files, kind, effort, check, maxOut, ...(speed !== undefined ? { speed } : {}), ...(b.private ? { private: true } : {}), ...(app ? { app } : {}), ...(appModel ? { appModel } : {}), ...(isLevel(b.level) ? { level: b.level } : {}) };
 }
 
 // A short name an app gives (its own name, the model it runs on): null when none, false when it is not one.
@@ -221,15 +225,15 @@ const add = (...v: (number | null | undefined)[]) => (v.some((x) => x === null) 
 // Tokens as Leanfare estimates them everywhere (about four characters each).
 const tokensOf = (chars: number) => Math.ceil(chars / 4);
 
-const INSERT = `INSERT INTO delegations(ts, month, day, task, kind, effort, model, cost, files, file_tokens, answer_tokens, status, chance, checker, verdict, check_cost, rerun, rerun_cost, plan, task_tokens, app, app_model, ms, job, ask_tokens, reply_tokens, fix_of)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const INSERT = `INSERT INTO delegations(ts, month, day, task, kind, effort, model, cost, files, file_tokens, answer_tokens, status, chance, checker, verdict, check_cost, rerun, rerun_cost, plan, task_tokens, app, app_model, ms, job, ask_tokens, reply_tokens, fix_of, level)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 // taskTokens: a plan part's own text, which Leanfare wrote from the plan (the part, what the earlier parts
 // found, the task it belongs to): the app that asked never read it. A hand off's task the app wrote itself: 0.
-function writeRow(row: { task: string; kind: string | null; effort: Effort; model: string | null; cost: number | null; files: number; fileTokens: number; answerTokens: number; status: string; chance: number; checker: string | null; verdict: string | null; checkCost: number | null; rerun: string | null; rerunCost: number | null; plan?: string | null; taskTokens?: number; app?: string | null; appModel?: string | null; ms?: number | null; job?: string | null; askTokens?: number | null; replyTokens?: number | null; fixOf?: number | null }): number | null {
+function writeRow(row: { task: string; kind: string | null; effort: Effort; model: string | null; cost: number | null; files: number; fileTokens: number; answerTokens: number; status: string; chance: number; checker: string | null; verdict: string | null; checkCost: number | null; rerun: string | null; rerunCost: number | null; plan?: string | null; taskTokens?: number; app?: string | null; appModel?: string | null; ms?: number | null; job?: string | null; askTokens?: number | null; replyTokens?: number | null; fixOf?: number | null; level?: number | null }): number | null {
   const d = now();
   try {
-    const r = db.query(INSERT).run(d.toISOString(), localMonth(d), localDay(d), row.task, row.kind, row.effort, row.model, row.cost, row.files, row.fileTokens, row.answerTokens, row.status, row.chance, row.checker, row.verdict, row.checkCost, row.rerun, row.rerunCost, row.plan ?? null, row.taskTokens ?? 0, row.app ?? null, row.appModel ?? null, row.ms ?? null, row.job ?? null, row.askTokens ?? null, row.replyTokens ?? null, row.fixOf ?? null);
+    const r = db.query(INSERT).run(d.toISOString(), localMonth(d), localDay(d), row.task, row.kind, row.effort, row.model, row.cost, row.files, row.fileTokens, row.answerTokens, row.status, row.chance, row.checker, row.verdict, row.checkCost, row.rerun, row.rerunCost, row.plan ?? null, row.taskTokens ?? 0, row.app ?? null, row.appModel ?? null, row.ms ?? null, row.job ?? null, row.askTokens ?? null, row.replyTokens ?? null, row.fixOf ?? null, row.level ?? null);
     return Number(r.lastInsertRowid);
   } catch (e) { console.error("leanfare: could not write the delegate's row:", String(e)); return null; } // the answer matters more than the row
 }
@@ -365,9 +369,11 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   // The hand off's own mark: every call made for it carries it in the ledger (its answer, a second try, its check, side
   // by side), so the report can sum what the outside models used for it. The trial's questions keep no row.
   const job = input.trial ? undefined : randomId();
+  // The level in effect (level.ts): the chat's or session's, else the app's, else the default, raised as a Claude plan runs low.
+  const level = input.trial ? null : levelFor(settings(), input.app ?? null, input.level ?? null, planMode()).level;
   const row = { task: guess.task, kind: input.kind, effort: input.effort, files: input.files.length, fileTokens, plan: input.plan ?? null, taskTokens: input.plan ? tokensOf(input.task.length) : 0, app: input.app ?? null, appModel: input.appModel ?? null, job: job ?? null,
     askTokens: input.plan || input.fixOf ? 0 : tokensOf(input.task.length), // what the app wrote to hand it off (a plan part's text, or a fix's, is Leanfare's)
-    fixOf: input.fixOf ?? null };
+    fixOf: input.fixOf ?? null, level };
   const source = input.trial ? "trial" : "delegate";
   const write = (r: Parameters<typeof writeRow>[0]) => (input.trial ? null : writeRow(r));
   const none = { checker: null, verdict: null, checkCost: null, rerun: null, rerunCost: null };
@@ -438,7 +444,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     throw Object.assign(new UserError(first.error!.status, first.error!.message, "delegate_failed"), { spent: first.cost });
   }
   const doer = getModel(first.meta.model.id) ?? null; // null only if the price list changed while it ran
-  const chance = input.check === "always" ? 1 : input.check === "never" ? 0 : CHANCE[input.effort];
+  const chance = input.check === "always" ? 1 : input.check === "never" ? 0 : level ? LEVEL_CHECKS[level][input.effort] : CHANCE[input.effort]; // more checks at higher levels
   const picked = chance >= 1 || (chance > 0 && draw.next() < chance);
   const check: DelegateCheck = { chance, picked, verdict: null, why: "", checker: null, cost: null };
   const spent: (number | null)[] = [...tried, first.cost]; // every call made for this task
