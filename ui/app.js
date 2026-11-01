@@ -455,6 +455,7 @@
     if (t === "setup") { S.setup = null; S.setupError = null; renderSetup(); }
     if (t === "chat") renderChat();
     if (t === "savings") loadSavings();
+    if (t !== "savings") liveStop(); // the live stream runs only while Savings shows
     if (t === "settings") { renderSettings(); loadLocal(); loadPlatforms(); } // a plan's limits change while you are away
     if (t === "plan") renderPlan();
   }
@@ -2152,6 +2153,136 @@
         step(3, "Measured on a sample", sampled ? `in use: ${plural(sampled, "sample")} so far` : `needs ${app}'s own model in Leanfare (an API key)`, `Now and then side by side runs ${app}'s own model on a hand off too, within its monthly limit: its real tokens, and its grade judged blind against the outside answer. These also check step 1.`, sampled > 0)));
   }
 
+  // ---- Live tokens (live.ts, 0.12) ----------------------------------------------------------------
+  // The model calls running now and in the last minute, numbers only: bars that grow as tokens come, lanes over the last
+  // 60 seconds, or the numbers alone; the kinds of tokens to show; a call opened into its four kinds. A stream from the
+  // app while Savings shows (fetch, since the page's header must go with it), asked once a second if it cannot open.
+  const LIVE_KINDS = [["input", "New input"], ["cached", "Cached"], ["thinking", "Thinking"], ["written", "Written"]];
+  const LIVE_SRC = { chat: "Chat", delegate: "Hand off", check: "Check", trial: "Trial", plan: "Plan part", sidebyside: "Side by side", ask: "Ask about prompts", openai: "App (OpenAI address)", anthropic: "App (Anthropic address)" };
+  S.tokens = S.tokens ?? { view: "bars", kinds: { input: true, cached: true, thinking: true, written: true }, data: null, got: 0, open: {}, conn: null, timer: null };
+  function liveStartStream() {
+    if (S.tokens.conn) return;
+    const ac = new AbortController();
+    S.tokens.conn = ac;
+    (async () => {
+      try {
+        const res = await fetch("/api/live/stream", { headers: { "x-leanfare": "1" }, signal: ac.signal });
+        if (!res.ok || !res.body || !res.body.getReader) throw new Error("no stream");
+        const reader = res.body.getReader(), dec = new TextDecoder();
+        let buf = "";
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          for (let i = buf.indexOf("\n\n"); i >= 0; i = buf.indexOf("\n\n")) {
+            const line = buf.slice(0, i).split("\n").find((l) => l.startsWith("data: "));
+            buf = buf.slice(i + 2);
+            if (line) { try { liveGot(JSON.parse(line.slice(6))); } catch {} }
+          }
+        }
+      } catch {}
+      while (!ac.signal.aborted && S.tab === "savings") { // the stream ended or could not open: ask instead
+        try { liveGot(await api("/api/live", { signal: ac.signal })); } catch {}
+        await new Promise((r) => setTimeout(r, S.tokens.data?.running?.length ? 1000 : 3000));
+      }
+    })();
+    S.tokens.timer = setInterval(() => { if (S.tokens.view === "lanes" && liveCalls().length) redrawLive(); }, 250); // the lanes slide on between readings
+  }
+  function liveStop() { S.tokens.conn?.abort(); S.tokens.conn = null; clearInterval(S.tokens.timer); S.tokens.timer = null; }
+  function liveGot(v) { S.tokens.data = v; S.tokens.got = Date.now(); redrawLive(); }
+  const liveNow = () => (S.tokens.data ? S.tokens.data.at + (Date.now() - S.tokens.got) : Date.now());
+  const liveCalls = () => { const v = S.tokens.data; if (!v) return []; const now = liveNow(); return [...v.running, ...v.ended.filter((c) => now - c.ended < 60_000)]; };
+  const liveTotal = (c) => LIVE_KINDS.reduce((n, [k]) => n + (S.tokens.kinds[k] ? c[k] : 0), 0);
+  const liveSig = () => `${S.tokens.view}|${Object.entries(S.tokens.kinds).filter(([, on]) => on).map(([k]) => k).join(",")}|${liveCalls().map((c) => `${c.id}${c.ended ? "e" : ""}${S.tokens.open[c.id] ? "o" : ""}`).join(",")}`;
+  function redrawLive() {
+    const old = $("#liveCard");
+    if (!old) return;
+    // Bars move: when the same calls show the same way, only their widths and numbers change (so they glide).
+    if (S.tokens.view === "bars" && old.dataset.sig === liveSig()) { patchLiveBars(old); return; }
+    old.replaceWith(liveCardEl());
+  }
+  function liveCardEl() {
+    liveStartStream();
+    const v = S.tokens.data, L = S.tokens;
+    const calls = liveCalls();
+    const pick = (view, label) => h("button", { type: "button", "aria-pressed": String(L.view === view), text: label, onclick: () => { L.view = view; redrawLive(); } });
+    const kinds = h("div", { class: "lv-kinds", role: "group", "aria-label": "Kinds of tokens to show" }, ...LIVE_KINDS.map(([k, name], i) =>
+      h("button", { type: "button", class: `chip-btn lk-${i + 1}`, "aria-pressed": String(L.kinds[k]), text: name, onclick: () => { L.kinds[k] = !L.kinds[k]; if (!Object.values(L.kinds).some(Boolean)) L.kinds[k] = true; redrawLive(); } })));
+    const head = h("div", { class: "sv-head lv-head" }, h("h2", {}, h("span", { class: v?.running?.length ? "lv-dot on" : "lv-dot", "aria-hidden": "true" }), "Live"),
+      h("span", { class: "muted", text: !v ? "connecting…" : v.running.length ? `${plural(v.running.length, "call")} running · ${tokShort(v.rate)} tokens a second` : "nothing running now" }),
+      h("span", { class: "grow" }), h("div", { class: "seg", role: "group", "aria-label": "How to show it" }, pick("bars", "Bars"), pick("lanes", "Lanes"), pick("numbers", "Numbers")));
+    const body = !v ? h("div", { class: "empty", text: "Connecting to the live numbers…" })
+      : L.view === "numbers" ? liveNumbersEl(v)
+      : !calls.length ? h("div", { class: "empty", text: "No model calls in the last minute. Hand offs, checks and plan parts show here as they run, with their tokens as they come." })
+      : L.view === "lanes" ? liveLanesEl(calls) : liveBarsEl(calls);
+    const card = h("section", { class: "lv-card", id: "liveCard" }, head, kinds, body,
+      h("p", { class: "fine", text: "Numbers only: Leanfare counts the tokens as they come and keeps no words for this. Input is its estimate until the provider gives its own counts." }));
+    card.dataset.sig = liveSig();
+    return card;
+  }
+  function liveBarsEl(calls) {
+    const most = Math.max(1, ...calls.map(liveTotal));
+    const rows = [];
+    for (const c of calls) {
+      const secs = Math.round(((c.ended ?? liveNow()) - c.started) / 1000);
+      rows.push(h("button", { type: "button", class: "lv-bar-row" + (c.ended ? " ended" : ""), "data-id": c.id, "aria-expanded": String(!!S.tokens.open[c.id]), onclick: () => { S.tokens.open[c.id] = !S.tokens.open[c.id]; redrawLive(); } },
+        h("span", { class: "lv-who" }, h("b", { text: c.model?.label ?? "a model" }), h("span", { class: "muted lv-secs", text: `${LIVE_SRC[c.source] ?? c.source} · ${secs} s${c.ended ? " · done" : ""}` })),
+        h("span", { class: "lv-bar" }, ...LIVE_KINDS.map(([k], i) => S.tokens.kinds[k] ? h("span", { class: `lv-seg lk-${i + 1}`, "data-k": k, style: { width: `${((c[k] / most) * 100).toFixed(2)}%` } }) : null)),
+        h("span", { class: "lv-tot", text: tokShort(liveTotal(c)) })));
+      if (S.tokens.open[c.id]) {
+        const top = Math.max(1, ...LIVE_KINDS.map(([k]) => c[k]));
+        rows.push(h("div", { class: "lv-open", "data-open": c.id }, ...LIVE_KINDS.map(([k, name], i) => h("div", { class: "lv-kind" },
+          h("span", { text: name }), h("span", { class: "lv-bar" }, h("span", { class: `lv-seg lk-${i + 1}`, "data-k": k, style: { width: `${((c[k] / top) * 100).toFixed(2)}%` } })), h("span", { class: "lv-tot", "data-k": k, text: tokShort(c[k]) }))),
+          h("div", { class: "tiny muted", text: c.exact ? "the provider's own counts" : "estimates until the provider's own counts come" })));
+      }
+    }
+    return h("div", { class: "lv-bars" }, ...rows);
+  }
+  function patchLiveBars(card) {
+    const calls = liveCalls(), most = Math.max(1, ...calls.map(liveTotal));
+    for (const c of calls) {
+      const row = card.querySelector(`.lv-bar-row[data-id="${c.id}"]`);
+      if (!row) continue;
+      for (const seg of row.querySelectorAll(".lv-seg")) seg.style.width = `${((c[seg.dataset.k] / most) * 100).toFixed(2)}%`;
+      row.querySelector(".lv-tot").textContent = tokShort(liveTotal(c));
+      row.querySelector(".lv-secs").textContent = `${LIVE_SRC[c.source] ?? c.source} · ${Math.round(((c.ended ?? liveNow()) - c.started) / 1000)} s${c.ended ? " · done" : ""}`;
+      const open = card.querySelector(`.lv-open[data-open="${c.id}"]`);
+      if (open) {
+        const top = Math.max(1, ...LIVE_KINDS.map(([k]) => c[k]));
+        for (const seg of open.querySelectorAll(".lv-seg")) seg.style.width = `${((c[seg.dataset.k] / top) * 100).toFixed(2)}%`;
+        for (const t of open.querySelectorAll(".lv-tot")) t.textContent = tokShort(c[t.dataset.k]);
+      }
+    }
+    const v = S.tokens.data, sub = card.querySelector(".lv-head .muted");
+    if (sub && v) sub.textContent = v.running.length ? `${plural(v.running.length, "call")} running · ${tokShort(v.rate)} tokens a second` : "nothing running now";
+  }
+  // The last 60 seconds as lanes: a call per lane, from its start to its end (or now), sliding left as time goes on.
+  function liveLanesEl(calls) {
+    const W = Math.max(320, ($("#liveCard")?.clientWidth || 628) - 28), lane = 22, top = 6, H = top + calls.length * lane + 22, now = liveNow(); // drawn at the card's own width, so its text stays its size
+    const x = (t) => Math.max(0, Math.min(W, W - ((now - t) / 60_000) * W));
+    const g = sv("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: "lv-lanes", role: "img", "aria-label": `${plural(calls.length, "call")} in the last minute, each a lane from its start to its end` });
+    for (const s of [60, 45, 30, 15, 0]) {
+      const at = W - (s / 60) * W;
+      g.append(sv("line", { x1: at, x2: at, y1: top, y2: H - 18, class: "lv-grid" }), sv("text", { x: Math.min(W - 2, Math.max(2, at)), y: H - 5, "text-anchor": s === 60 ? "start" : s === 0 ? "end" : "middle", class: "lv-axis" }, s ? `${s} s ago` : "now"));
+    }
+    calls.forEach((c, i) => {
+      const y = top + i * lane, x1 = x(c.started), x2 = Math.max(x1 + 3, x(c.ended ?? now));
+      g.append(sv("rect", { x: x1, y: y + 4, width: x2 - x1, height: lane - 8, rx: 4, class: c.ended ? "lv-lane ended" : "lv-lane" }));
+      const label = `${c.model?.label ?? "a model"} · ${tokShort(liveTotal(c))}`;
+      const left = x2 > W - 190; // near now: the label goes before the bar
+      g.append(sv("text", { x: left ? Math.max(4, x1 - 6) : x2 + 6, y: y + lane / 2 + 4, "text-anchor": left ? "end" : "start", class: "lv-lane-label" }, label));
+    });
+    return h("div", { class: "lv-lanes-box" }, g);
+  }
+  function liveNumbersEl(v) {
+    const sum = LIVE_KINDS.reduce((n, [k]) => n + (S.tokens.kinds[k] ? v.minute[k] : 0), 0);
+    return h("div", { class: "lv-numbers" },
+      h("div", { class: "rp-tiles" }, rtile("Tokens a second", tokShort(v.rate), "thinking and writing, of what runs now"), rtile("Running", String(v.running.length), `${plural(v.ended.length, "call")} ended lately`), rtile("The last minute", tokShort(sum), "of the kinds picked above")),
+      h("table", { class: "lv-table" }, h("thead", {}, h("tr", {}, h("th", { text: "Kind" }), h("th", { text: "The last minute" }), h("th", { text: "Running now" }))),
+        h("tbody", {}, ...LIVE_KINDS.map(([k, name], i) => h("tr", { class: S.tokens.kinds[k] ? null : "off" },
+          h("td", {}, h("span", { class: `lv-swatch lk-${i + 1}`, "aria-hidden": "true" }), name), h("td", { class: "num", text: tokShort(v.minute[k]) }), h("td", { class: "num", text: tokShort(v.running.reduce((n, c) => n + c[k], 0)) }))))));
+  }
+
   // Ask about these prompts (askreport.ts, 0.12): a model on this computer reads the span's prompts and answers; another
   // of your models only when picked. Neither the question nor the answer is kept.
   const ASK_SAMPLES = ["Which prompts cost the most, and why?", "Which hand offs were graded partly or wrong?", "Where did Leanfare save the most?"];
@@ -2281,6 +2412,7 @@
     const SOURCES = { chat: "Chat", openai: "Apps (OpenAI address)", anthropic: "Apps (Anthropic address)", delegate: "Delegated", check: "Checks", trial: "Trial", plan: "Plans", sidebyside: "Side by side", ask: "Asked about prompts" };
     const src = v.bySource.map((s) => `${SOURCES[s.source] ?? s.source}: ${num(s.answers)}`).join(" · ");
     el.replaceChildren(
+      liveCardEl(),
       reportCardEl(),
       h("div", { class: "sv-head" }, h("h2", { text: title }), h("span", { class: "grow" }), pickMonth, runButton("Refresh", async (signal) => { await loadSavings(); await loadPlans(true, signal); loadReport(); toast("Up to date.", "done"); })),
       workCardEl(v.work, v.delegate),
