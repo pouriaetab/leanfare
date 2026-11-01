@@ -24,6 +24,8 @@ It works with Claude Desktop, Cowork, Claude Code, Cursor, Codex, Gemini CLI, Wi
    powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/pouriaetab/leanfare/main/install.ps1 | iex"
    ```
 
+   **Claude Desktop, one click:** download `leanfare-darwin-arm64.mcpb` (Apple silicon), `leanfare-darwin-x64.mcpb` (Intel) or `leanfare-windows-x64.mcpb` from the [latest release](https://github.com/pouriaetab/leanfare/releases/latest) and double-click it.
+
 2. **Open it.** Type `leanfare`. The app opens in your browser.
 3. **Press Turn on Leanfare.** Leanfare finds the AI apps on your computer and adds itself to each one. Then do the one step it shows for each app (most need a restart).
 
@@ -45,12 +47,15 @@ Leanfare needs a model to hand work to. It uses an API key your computer already
 - **Fair grades:** a sample of the answers is checked blind, by a model of another company when one can take it, and now and then compared with the best model you ticked.
 - **Picks that learn:** your grades move each model's rating for each kind of work, its time is learned from its own answers, and a model that keeps failing rests while Auto picks others.
 - **Your plan's mode and your rules:** as your Claude plan runs low, Leanfare pushes more work out of it (Settings shows the mode), and Settings, Jobs, says where each kind of job goes, with a cap for paid work. Grades show as a score out of 100 with its range.
+- **Three knobs in Settings:** the level, from 1 Off to 5 All it can, says how much your apps hand to Leanfare first; what Leanfare keeps, from numbers only to each hand off's words, on your computer; and where work may go, from only this computer to anywhere you ticked.
+- **Every answer reviewed:** your app checks, grades and fixes each answer Leanfare brings back before it answers you.
+- **Live, and ask:** Savings shows each model call's tokens as they come, and answers questions about your prompts with a model on your computer.
 - **Your own models:** Settings, Local models says where they are and tests one on your computer. One that passes takes reading work first, for free. **Where Leanfare may send work** turns each platform off or on, with what is left before its nearest limit.
 - The [guide](https://github.com/pouriaetab/leanfare/blob/main/docs/GUIDE.md) explains each part.
 
 ## Privacy
 
-Leanfare reads usage numbers, never your words. Your keys stay on your computer, and requests go from your computer straight to the AI company you use. No telemetry. The [guide](https://github.com/pouriaetab/leanfare/blob/main/docs/GUIDE.md#privacy) has the details.
+Leanfare reads usage numbers, never your words, unless you choose in Settings to keep a hand off's words on your computer to read later. Your keys stay on your computer, and requests go from your computer straight to the AI company you use. No telemetry. The [guide](https://github.com/pouriaetab/leanfare/blob/main/docs/GUIDE.md#privacy) has the details.
 
 ## Update, stop or take it out
 
