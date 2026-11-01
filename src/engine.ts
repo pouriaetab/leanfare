@@ -8,14 +8,16 @@ import { ZERO, costOf, fromAnthropicUsage, fromOpenAIUsage, mediaIn, promptChars
 import { db } from "./db";
 import { getKey } from "./keys";
 import { MODES, saveSettings, settings, type Mode } from "./settings";
-import { estimateFor, expectedOutput, guessTask, ledgerWhy, pickModel, resolveModel, type Candidate, type Guess, type Msg } from "./router";
+import { estimateFor, expectedOutput, guessTask, ledgerWhy, pickModel, rating, resolveModel, type Candidate, type Guess, type Msg } from "./router";
 import { forgetSpeeds, parseSpeed, secondsFor, speedOf, type SpeedChoice } from "./speed";
 import { successor } from "./retire";
 import { addSpent, budgetState, release, tryReserve, wouldFit } from "./budget";
 import { failOfStatus, failOfText, type FailKind } from "./fails";
 import { noteFailure, restOf, restText } from "./rest";
 import { SAYS_GONE, noQuota, noQuotaNow, noQuotaText, noteRefusal } from "./quota";
-import { needsCredit, notNowWhy, unsteady, usedUp } from "./allowance";
+import { firstMedian, needsCredit, notNowWhy, unsteady, usedUp } from "./allowance";
+import { TASK_OF, shareFor } from "./share";
+import type { GradedKind } from "./grades";
 import { fitsFree, onFreePlan } from "./freeplans";
 import { learnedShift } from "./learn";
 import { EFFORT_REFUSED, NO_EFFORT, RESPONSES_PATH, ResponsesStreamTranslator, responsesToOpenAI, toResponses } from "./upstream";
@@ -177,6 +179,7 @@ export interface PlanInput {
   effort?: string | null; // thinking effort asked for (the chat screen); sent only to models that take it
   copies?: number; // answers asked for at once (OpenAI's n): each is billed
   guess?: Guess; // the task, when the caller knows it (the delegate): used instead of the guess
+  share?: { interactive: boolean }; // a hand off or a plan's part: the share planner shares out the free allowances (share.ts)
   only?: (m: Model) => boolean; // a further limit on the models Auto may pick (the delegate: long enough, stronger)
   onlyWhy?: string; // what to say when that limit leaves no model
   optional?: boolean; // work that can be skipped (the delegate's check): never sent past the budget
@@ -297,7 +300,15 @@ export async function plan(input: PlanInput): Promise<Plan> {
   if (amode) {
     const all = usableModels(only);
     // A model resting after failing too often, or unsteady today (allowance.ts), is left out while another can take it.
-    const awake = all.filter((m) => !restOf(m.id) && !unsteady(m.id));
+    const awake0 = all.filter((m) => !restOf(m.id) && !unsteady(m.id));
+    // The share planner (share.ts): for a hand off or a plan's part, a scarce strong model is saved for what it is best
+    // at, a model near its allowance is spared while others have room, or, for someone waiting, the fastest is taken.
+    let awake = awake0;
+    if (input.share && input.guess?.kind && awake0.length > 1) {
+      const sh = shareFor(input.guess.kind as GradedKind, awake0, input.share.interactive, (m, k) => rating(m, TASK_OF[k]), (m) => firstMedian(m.id));
+      const kept = awake0.filter((m) => !sh.leaveOut.has(m.id));
+      if (kept.length && sh.why) { awake = kept; notes.push(`${sh.why}.`); }
+    }
     const usable = awake.length ? awake : all;
     if (!usable.length && extra && usableModels(base).length) throw new UserError(400, input.onlyWhy ?? "None of the models you ticked can take this request.", "no_model_fits");
     if (!usable.length && usableModels(base).length) {
@@ -991,6 +1002,7 @@ export interface ChatOptions {
   speed?: SpeedChoice; // cheapest, fastest or within N seconds (the delegate passes its own)
   job?: string; // the hand off this is for: the ledger marks each of its calls with it (delegate.ts)
   startWithin?: number; // ms: each try must start answering within this, or Auto passes it to the next pick (a plan's split)
+  share?: { interactive: boolean }; // a hand off or a plan's part: the share planner shares out the free allowances (share.ts)
 }
 
 // The chat's instructions go first, as a system message (Claude's translation moves it to "system").
@@ -1002,7 +1014,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
   if (paused) emit({ type: "waiting", message: "Paused. This message goes out when you press Start again." });
   let p: Plan;
   try {
-    p = await plan({ source: "chat", asked, messages, system: opts.system || undefined, maxOut: opts.maxOut ?? null, signal: ac.signal, effort: opts.effort ?? null, guess: opts.guess, only: opts.only, onlyWhy: opts.onlyWhy, optional: opts.optional, speed: opts.speed, ledgerSource: opts.source });
+    p = await plan({ source: "chat", asked, messages, system: opts.system || undefined, maxOut: opts.maxOut ?? null, signal: ac.signal, effort: opts.effort ?? null, guess: opts.guess, only: opts.only, onlyWhy: opts.onlyWhy, optional: opts.optional, speed: opts.speed, ledgerSource: opts.source, share: opts.share });
   } catch (e: any) {
     const status = e instanceof UserError ? e.status : 500;
     const message = e instanceof UserError ? e.message : String(e?.message ?? e);

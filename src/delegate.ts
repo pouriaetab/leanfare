@@ -442,7 +442,8 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     if (usableModels((m) => doFit.ok(m) && (!limit || limit(m))).length)
       throw Object.assign(new UserError(409, "The models that could take it are on platforms turned off for plans and the delegate (Settings, Where Leanfare may send work). Turn one on there, or do it yourself.", "platform_off"), { spent: 0 });
   }
-  const opts: ChatOptions = { system, source, guess, only: within(doFit.ok), onlyWhy: tooMuch(doFit.need), effort: input.effort, maxOut: input.maxOut, speed: input.speed, job };
+  // The share planner (share.ts) shares out the free allowances: a plan's part runs in the background, a hand off has someone waiting.
+  const opts: ChatOptions = { system, source, guess, only: within(doFit.ok), onlyWhy: tooMuch(doFit.need), effort: input.effort, maxOut: input.maxOut, speed: input.speed, job, ...(input.trial ? {} : { share: { interactive: !input.plan } }) };
   // Reading at low or medium effort goes first to a model on this computer that passed its test here
   // (localpass.ts), when nothing is named and Auto is to be the cheapest: it is free.
   const local = !input.model && !input.trial && input.kind === "read" && input.effort !== "high" && (input.speed ?? settings().speed) === "cheapest" ? passedLocal(within((m) => doFit.ok(m) && !restOf(m.id))) : null;
@@ -550,7 +551,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     rerunError,
     swap,
     // What Auto said on the way to the answer: a model resting (rest.ts), busy, or slow to start (engine.ts).
-    passed: ((final.meta?.notes ?? []) as string[]).filter((n) => /is resting|passed the request to its next pick|is resting after failing/.test(n)).slice(0, 3),
+    passed: ((final.meta?.notes ?? []) as string[]).filter((n) => /is resting|passed the request to its next pick|is resting after failing|is unsteady today|^Saving |^Fastest first|^Spreading the work/.test(n)).slice(0, 3),
     row: null,
     total: add(...spent),
     task: guess.task,
