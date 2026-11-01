@@ -41,13 +41,13 @@ async function appNewer(start: boolean): Promise<string | null> {
 }
 let told = false; // the app was said to be newer, and the tool list to have changed, once
 const META = { "io.modelcontextprotocol/serverInfo": SERVER };
-const INSTRUCTIONS = "Leanfare runs every top AI model on this computer with the user's own keys, shows what each answer costs, and keeps a monthly budget. At the start of a task with several parts, call plan: it splits the task and says, in a short table, which parts to hand to Leanfare and on which model, and which to do yourself. Use delegate to hand work that reads a lot (big files, logs, many documents) to a cheaper model: Leanfare reads the files itself, so their text stays out of your context, and returns a short answer with a receipt. Use ask to hand a question to another model (Auto picks the cheapest one that rates well for the task); spend to see what was spent and saved; models to see which models and prices are available; estimate to price a prompt before sending it; trial to measure how well delegate answers on the user's models before relying on it.";
+const INSTRUCTIONS = "Leanfare runs every top AI model on this computer with the user's own keys, shows what each answer costs, and keeps a monthly budget. At the start of a task with several parts, call plan: it splits the task, starts Leanfare's parts at once by itself, and says in a short table which parts are yours; collect the rest of Leanfare's answers with plan_status, then review and grade each. Use delegate to hand work that reads a lot (big files, logs, many documents) to a cheaper model: Leanfare reads the files itself, so their text stays out of your context, and returns a short answer with a receipt. Use ask to hand a question to another model (Auto picks the cheapest one that rates well for the task); spend to see what was spent and saved; models to see which models and prices are available; estimate to price a prompt before sending it; trial to measure how well delegate answers on the user's models before relying on it.";
 
 export const TOOLS = [
   {
     name: "plan",
     title: "Split a task across models",
-    description: "Before a task with several parts (a feature, a fix across files, a refactor, research across many files, reverse engineering a project), ask Leanfare how to split it. It answers with a short table: each part, its kind, where it runs (you, or Leanfare on a local, free or pay per use model), the model, about how long, the tokens it keeps out of the user's plan, and the cost; then what to do next. Run the parts it gives to Leanfare with delegate, several in the same turn when they do not wait for each other, and do the parts it leaves to you yourself. Name the files or folders the task is about in files: here Leanfare only measures them, it reads them when delegate runs a part. A model the user ticked does the split (a few cents or less, $0 on free models; one that takes more than 40 seconds is let go, and the rules split it); split rules makes it by rules, with no model.",
+    description: "Before a task with several parts (a feature, a fix across files, a refactor, research across many files, reverse engineering a project), ask Leanfare how to split it. It answers with a short table: each part, its kind, where it runs (you, or Leanfare on a local, free or pay per use model), the model, about how long, the tokens it keeps out of the user's plan, and the cost; then what to do next. Leanfare starts its own parts at once by itself (local and free ones, paid ones within the user's cap) and this answers with those that finish within about 25 seconds: do not run them again with delegate. Do the parts it leaves to you, then call plan_status with the plan's id (wait 50) for the rest of Leanfare's answers, and review and grade each. Name the files or folders the task is about in files: here Leanfare only measures them, it reads them when delegate runs a part. A model the user ticked does the split (a few cents or less, $0 on free models; one that takes more than 40 seconds is let go, and the rules split it); split rules makes it by rules, with no model.",
     inputSchema: {
       type: "object",
       properties: {
@@ -58,12 +58,13 @@ export const TOOLS = [
         private: { type: "boolean", description: "true keeps the whole plan on the user's computer: the split and every Leanfare part go only to models there (Ollama), and a part none of them can take stays with you. Use it for anything sensitive or personal, or when the user asks." },
         your_model: { type: "string", description: "The model you run on, as your own instructions name it (for example claude-opus-5-5). Leanfare names it for the work that stays with you, and the report shows it as the prompt's main model." },
         level: { type: "integer", minimum: 1, maximum: 5, description: "The Leanfare level for this chat or session, as the level tool or Leanfare's prompt line gave it. Leave it out when none was given." },
+        run: { type: "boolean", description: "false: only split the task; Leanfare runs nothing. By default Leanfare starts its parts at once." },
       },
       required: ["task"],
       additionalProperties: false,
     },
     annotations: { title: "Split a task across models", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-    // Apps that show MCP Apps (Claude Desktop, Cowork) draw the plan as a table with a Run button (planapp.ts).
+    // Apps that show MCP Apps (Claude Desktop, Cowork) draw the plan as a table that follows each part as it runs (planapp.ts).
     _meta: { ui: { resourceUri: PLAN_APP_URI }, "ui/resourceUri": PLAN_APP_URI },
   },
   {
@@ -91,12 +92,13 @@ export const TOOLS = [
   {
     name: "plan_status",
     title: "Progress of a plan",
-    description: "Where each part of a plan stands (waiting, running, done, failed, yours, after yours, waiting for a yes) and the answers of the parts Leanfare finished. Each answer is also saved in the project, in .leanfare/plans/<id>/ (a folder git ignores), where you and the user can read it. wait: up to that many seconds for something to change before answering (default 0, at most 50).",
+    description: "Where each part of a plan stands (waiting, running, done, failed, yours, after yours, waiting for a yes) and the answers of the parts Leanfare finished. Each answer is also saved in the project, in .leanfare/plans/<id>/ (a folder git ignores), where you and the user can read it. wait: up to that many seconds for the running parts to end (it answers as soon as none is running; default 0, at most 50).",
     inputSchema: {
       type: "object",
       properties: {
         id: { type: "string", description: "The plan's id, from plan." },
-        wait: { type: "integer", minimum: 0, maximum: 50, description: "Seconds to wait for a part to change before answering." },
+        wait: { type: "integer", minimum: 0, maximum: 50, description: "Seconds to wait for the running parts to end before answering." },
+        peek: { type: "boolean", description: "true: only look, without taking the answers (Leanfare's plan card uses it)." },
         folder: { type: "string", description: "The project folder to save the answers in. By default, the folder the MCP client started Leanfare in." },
       },
       required: ["id"],
@@ -456,6 +458,12 @@ export function planReview(v: any): string {
   if (v.review !== false) return `Review ${done.length === 1 ? "this answer" : "each answer"} before you use it, then grade ${done.length === 1 ? "it" : "each"} with grade (good, partly or wrong, with the plan's id and the part). If one is partly or wrong, fix it before you answer: yourself (fix "myself"), or with fix "leanfare" and why, and Leanfare asks again one tier up and sends back a new answer to review.`;
   return `Once you have used ${done.length === 1 ? "this answer" : "these answers"}, grade ${done.length === 1 ? "it" : "each"} with grade (good, partly or wrong, with the plan's id and the part): models graded below good too often are moved down.`;
 }
+// A run's parts as the tools give them; took: the app has had the answer, verdict: its grade.
+const runParts = (v: any) => v.parts.map((r: any) => ({ n: r.n, title: r.title, status: r.status, model: r.model, cost_usd: r.cost, seconds: r.seconds, answer: r.answer, receipt: r.receipt, error: r.error, took: !!r.took, verdict: r.verdict ?? null }));
+// Nothing of Leanfare's left running in a run: every part is done, failed, stopped, waiting for a yes or for yours.
+const ENDED = new Set(["done", "failed", "stopped", "asks", "blocked", "yours", "after_yours"]);
+export const settled = (v: any) => !v.running || v.parts.every((r: any) => ENDED.has(r.status));
+export const PLAN_WAIT = 25; // seconds the plan tool waits for Leanfare's quick parts before answering (0.13)
 export function statusText(v: any, saved: string | null): string {
   const rows = v.parts.map((r: any) => `| ${r.n} | ${String(r.title).replace(/\|/g, "/")} | ${STATUS[r.status] ?? r.status} | ${r.model ?? ""} | ${r.cost === null || r.cost === undefined ? "" : usd(r.cost)} |`);
   const done = v.parts.filter((r: any) => r.answer);
@@ -475,6 +483,24 @@ function sharedFiles(v: any): Record<string, string> {
   const files: Record<string, string> = { "status.md": statusText(v, null) + "\n" };
   for (const r of v.parts.filter((x: any) => x.answer)) files[`part-${r.n}.md`] = `# Part ${r.n}: ${r.title}\n\n${r.answer}\n\n---\n${r.receipt}\n`;
   return files;
+}
+
+// A plan's paid parts over the user's cap wait for a yes: asked here where the app shows questions (MCP elicitation).
+// off: Leanfare was switched off while the question was open, so nothing more runs.
+async function askPaid(ctx: ToolCtx, id: string, v: any, signal: AbortSignal): Promise<any> {
+  if (!v.asks || !ctx.canAsk) return v;
+  const yesTo = (a: any) => a?.action === "accept" && a.content?.run === true;
+  const a = await askUser({
+    message: `Leanfare's plan has paid parts (${v.asks.parts.map((n: number) => `part ${n}`).join(", ")}), about ${usd(v.asks.estimate)} on pay per use, over your cap of ${usd(v.asks.cap)}. The free and local parts are running. Run the paid ones too?`,
+    requestedSchema: { type: "object", properties: { run: { type: "boolean", title: "Run the paid parts", description: `About ${usd(v.asks.estimate)}, within your monthly budget in Leanfare.`, default: false } }, required: ["run"] },
+  }, {
+    // A yes after the tool stopped waiting: the person said yes to these parts, so they run (once: a run that has them going is left as it is).
+    // Not once Leanfare is switched off: the yes was for a Leanfare that was on.
+    late: (r) => { if (yesTo(r) && switchedOn()) call("/api/plan/run", { method: "POST", json: { id, paid: true } }, new AbortController().signal).catch(() => {}); },
+  });
+  if (!yesTo(a)) return v;
+  if (!switchedOn()) return { ...v, off: true };
+  return (await call("/api/plan/run", { method: "POST", json: { id, paid: true } }, signal)).j;
 }
 
 // Asking the user, where the app can show a question (MCP elicitation): yes or no to the paid parts.
@@ -635,21 +661,7 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
     if (typeof args?.id !== "string" || !PLAN_ID.test(args.id)) return failure("plan_run needs the plan's id, from plan.");
     const yes = args.paid === "yes";
     let { j: v } = await call("/api/plan/run", { method: "POST", json: { id: args.id, paid: yes } }, signal);
-    if (v.asks && !yes && ctx.canAsk) {
-      const yesTo = (a: any) => a?.action === "accept" && a.content?.run === true;
-      const a = await askUser({
-        message: `Leanfare's plan has paid parts (${v.asks.parts.map((n: number) => `part ${n}`).join(", ")}), about ${usd(v.asks.estimate)} on pay per use, over your cap of ${usd(v.asks.cap)}. The free and local parts are running. Run the paid ones too?`,
-        requestedSchema: { type: "object", properties: { run: { type: "boolean", title: "Run the paid parts", description: `About ${usd(v.asks.estimate)}, within your monthly budget in Leanfare.`, default: false } }, required: ["run"] },
-      }, {
-        // A yes after the tool stopped waiting: the person said yes to these parts, so they run (once: a run that has them going is left as it is).
-        // Not once Leanfare is switched off: the yes was for a Leanfare that was on.
-        late: (r) => { if (yesTo(r) && switchedOn()) call("/api/plan/run", { method: "POST", json: { id: args.id, paid: true } }, new AbortController().signal).catch(() => {}); },
-      });
-      if (yesTo(a)) {
-        if (!switchedOn()) return text(OFF_TEXT, { off: true }); // switched off while the question was open
-        ({ j: v } = await call("/api/plan/run", { method: "POST", json: { id: args.id, paid: true } }, signal));
-      }
-    }
+    if (!yes) { v = await askPaid(ctx, args.id, v, signal); if (v.off) return text(OFF_TEXT, { off: true }); }
     return text(statusText(v, null), { id: v.id, running: v.running, parts: v.parts.map((r: any) => ({ n: r.n, status: r.status })), asks: v.asks });
   }
   if (name === "plan_stop") {
@@ -660,32 +672,47 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
   if (name === "plan_status") {
     if (typeof args?.id !== "string" || !PLAN_ID.test(args.id)) return failure("plan_status needs the plan's id, from plan.");
     const wait = Number.isInteger(args.wait) ? Math.min(50, Math.max(0, args.wait)) : 0;
-    const look = async () => (await call(`/api/plan/run?id=${encodeURIComponent(args.id)}`, {}, signal)).j;
+    const look = async (took = false) => (await call(`/api/plan/run?id=${encodeURIComponent(args.id)}${took ? "&took=1" : ""}`, {}, signal)).j;
     let v = await look();
-    const key = (x: any) => x.parts.map((r: any) => r.status).join(",");
-    const first = key(v);
-    for (let t = 0; t < wait && v.running && key(v) === first && !signal.aborted; t++) { await Bun.sleep(1000); v = await look(); }
+    for (let t = 0; t < wait && !settled(v) && !signal.aborted; t++) { await Bun.sleep(1000); v = await look(); }
+    if (args.peek !== true) v = await look(true); // the app has the answers now: the plan card says so
     const folder = sharedFolder(args.folder, ctx.cwd);
     const saved = folder ? writeShared(folder, args.id, sharedFiles(v)) : null;
-    return text(statusText(v, saved), { id: v.id, running: v.running, cost_usd: v.cost, asks: v.asks, saved_in: saved, review: planReview(v) || null, parts: v.parts.map((r: any) => ({ n: r.n, title: r.title, status: r.status, model: r.model, cost_usd: r.cost, seconds: r.seconds, answer: r.answer, receipt: r.receipt, error: r.error })) });
+    return text(statusText(v, saved), { id: v.id, running: v.running, cost_usd: v.cost, asks: v.asks, saved_in: saved, review: planReview(v) || null, parts: runParts(v) });
   }
   if (name === "plan") {
     if (typeof args?.task !== "string" || !args.task.trim()) return failure("plan needs a task.");
     const files = sizesForPlan(args.files, args.folder, ctx.cwd);
     if (typeof files === "string") return failure(files);
-    const { j } = await call("/api/plan", { method: "POST", json: { task: args.task, files, manager: ctx.client, split: args.split === "rules" ? "rules" : "auto", ...(args.private === true ? { private: true } : {}), ...(isLevel(args.level) ? { level: args.level } : {}), ...(typeof args.your_model === "string" ? { your_model: args.your_model } : {}) } }, signal);
+    const t0 = Date.now();
+    const { j } = await call("/api/plan", { method: "POST", json: { task: args.task, files, manager: ctx.client, split: args.split === "rules" ? "rules" : "auto", ...(args.run !== false ? { run: true } : {}), ...(args.private === true ? { private: true } : {}), ...(isLevel(args.level) ? { level: args.level } : {}), ...(typeof args.your_model === "string" ? { your_model: args.your_model } : {}) } }, signal);
     const note = j.split?.note ? `\n\n(${j.split.note})` : j.split?.model ? `\n\n(Split by ${j.split.model.label}${typeof j.split.cost === "number" ? `, ${usd(j.split.cost)}` : ""}.)` : "";
     const folder = sharedFolder(args.folder, ctx.cwd);
     const saved = folder ? writeShared(folder, j.id, { "plan.md": `# Plan ${j.id}\n\n${args.task.trim()}\n\n${j.table}\n\n${j.next}\n` }) : null;
-    const runNote = j.totals.out - (j.totals.later ?? 0) > 0 ? `\n\nOr call plan_run with id ${j.id} to run Leanfare's parts in the background, then plan_status for their answers.${saved ? ` The plan is saved in ${saved}/plan.md.` : ""}` : "";
-    return text(`${j.table}\n\n${j.next}${runNote}${note}`, {
+    const shape = {
       id: j.id, saved_in: saved,
       parts: j.parts.map((p: any) => ({ n: p.n, title: p.title, kind: p.kind, effort: p.effort, needs: p.needs, runs_on: p.where, risk: p.risk ?? null, model: p.model?.id ?? null, model_label: p.model?.label ?? null,
         your_model: p.use ?? null, // a part that stays with you: the model to pick for it in your app (alias: Claude Code's name for it)
         seconds: p.seconds, tokens: p.tokens, cost_usd: p.cost,
         files: p.files.slice(0, 50), more_files: Math.max(0, p.files.length - 50), task: p.task })),
       totals: j.totals, split: j.split, limits: j.limits, local: j.local ?? null, you: j.you ?? null,
-    });
+    };
+    if (!j.run) {
+      const runNote = j.totals.out - (j.totals.later ?? 0) > 0 ? `\n\nOr call plan_run with id ${j.id} to run Leanfare's parts in the background, then plan_status for their answers.${saved ? ` The plan is saved in ${saved}/plan.md.` : ""}` : "";
+      return text(`${j.table}\n\n${j.next}${runNote}${note}`, shape);
+    }
+    // Leanfare started its parts by itself (0.13): paid ones over the cap ask first, then the quick ones are waited for,
+    // so most plans come back with their answers in this one call and nobody presses anything.
+    let v = await askPaid(ctx, j.id, j.run, signal);
+    if (v.off) return text(OFF_TEXT, { off: true });
+    let next = j.next;
+    if (v !== j.run) next = (await call(`/api/plan/next?id=${encodeURIComponent(j.id)}`, {}, signal)).j?.next ?? next; // the yes started the paid parts too
+    const look = async (took = false) => (await call(`/api/plan/run?id=${encodeURIComponent(j.id)}${took ? "&took=1" : ""}`, {}, signal)).j;
+    const wait = Math.max(0, Math.min(PLAN_WAIT, 40 - (Date.now() - t0) / 1000));
+    for (let s = 0; s < wait && !settled(v) && !signal.aborted; s++) { await Bun.sleep(1000); v = await look(); }
+    v = await look(true);
+    const savedRun = folder ? writeShared(folder, j.id, sharedFiles(v)) : null;
+    return text(`${j.table}\n\n${next}${note}\n\n${statusText(v, savedRun)}`, { ...shape, saved_in: savedRun ?? saved, review: planReview(v) || null, run: { running: v.running, cost_usd: v.cost, asks: v.asks, parts: runParts(v) } });
   }
   if (name === "ask") {
     if (typeof args?.prompt !== "string" || !args.prompt.trim()) return failure("ask needs a prompt.");
@@ -843,7 +870,7 @@ export async function handleMessage(msg: any, send = { reply, error }): Promise<
   if (method === "server/discover") return send.reply(id, { resultType: "complete", supportedVersions: [...MODERN, ...LEGACY], capabilities: { tools: { listChanged: true }, resources: {} }, _meta: META, instructions: INSTRUCTIONS });
   // The plan's page (an MCP App): listed and read like any resource.
   if (method === "resources/list") return done({ resources: [
-    { uri: PLAN_APP_URI, name: "Leanfare plan", title: "Leanfare plan", description: "The plan as a table with a Run button, for apps that show MCP Apps.", mimeType: APP_MIME },
+    { uri: PLAN_APP_URI, name: "Leanfare plan", title: "Leanfare plan", description: "The plan as a table that follows each part as it runs, for apps that show MCP Apps.", mimeType: APP_MIME },
     { uri: REPORT_APP_URI, name: "Leanfare report", title: "Leanfare report", description: "The report as a card with spans to pick, for apps that show MCP Apps.", mimeType: APP_MIME },
     { uri: LIVE_APP_URI, name: "Leanfare live", title: "Leanfare live", description: "Live tokens as a card that keeps moving, for apps that show MCP Apps.", mimeType: APP_MIME },
   ] });
