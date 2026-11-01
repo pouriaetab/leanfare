@@ -331,6 +331,8 @@ else if (command === "statusline") { const { runStatusline } = await import("./s
 // the prompt; the read hook (0.11), a reminder before Claude Code reads a big file itself (readhook.ts). They must
 // never get in the way: anything that goes wrong prints nothing.
 else if (command === "hook") {
+  // From the Leanfare plugin (plugin/scripts/leanfare.sh): quiet when the app's own hooks are in Claude Code's settings.
+  if (process.env.LEANFARE_HOOK_FROM === "plugin") { const { appHooksOn } = await import("./workers"); if (appHooksOn()) process.exit(0); }
   try {
     if (args.includes("read")) { const { runReadHook } = await import("./readhook"); await runReadHook(); }
     else if (args.includes("handoff")) { const { runHandoffHook } = await import("./reviewhook"); await runHandoffHook(); }
