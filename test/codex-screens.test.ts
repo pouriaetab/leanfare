@@ -1,5 +1,5 @@
-// Your ChatGPT plan through Codex, on the screens: Settings says whether Codex is there and signed in and
-// has the switch (off until you turn it on); the Plan tab shows a part on Codex as such.
+// Your ChatGPT plan through Codex, on the screens: the ChatGPT row next to your apps says whether Codex is there and
+// signed in, with one button (Connect, Turn on or Turn off); the Plan tab shows a part on Codex as such.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,37 +23,36 @@ afterEach(closeApp);
 async function waitFor(ok: () => boolean, ms = 8000) { for (let i = 0; i < ms / 50 && !ok(); i++) await Bun.sleep(50); }
 const card = (doc: any) => doc.querySelector("#codexCard");
 
-describe("Settings: your ChatGPT plan, through Codex", () => {
-  test("says Codex is here and signed in, and the switch turns plans' use of it on and off", async () => {
+describe("Settings: the ChatGPT row, next to your apps", () => {
+  test("signed in with ChatGPT: Turn on and Turn off switch hand offs on the ChatGPT plan (off until you turn it on)", async () => {
     const doc = await open(url);
     doc.querySelector('.tabs button[data-tab="settings"]').click();
     await waitFor(() => !!card(doc)?.textContent.includes("signed in"));
-    expect(card(doc).textContent).toContain("Your ChatGPT plan, through Codex");
-    expect(card(doc).textContent).toContain("Codex 0.159.0 is here and signed in.");
-    expect(card(doc).textContent).toContain("they count toward your ChatGPT plan's Codex limits");
-    const box = card(doc).querySelector("input[type=checkbox]");
-    expect(box.checked).toBe(false); // off until you turn it on
-    box.checked = true; box.dispatchEvent(new win.Event("change", { bubbles: true }));
+    expect(card(doc).textContent).toContain("ChatGPT · signed in");
+    expect(card(doc).textContent).toContain("Codex is signed in with ChatGPT: turn it on to hand work to your ChatGPT plan.");
+    expect(card(doc).querySelector("details").textContent).toContain("they count toward your ChatGPT plan's Codex limits");
+    expect(settings().codexPlan).toBe(false); // off until you turn it on
+    ([...card(doc).querySelectorAll("button")].find((b: any) => b.textContent === "Turn on") as any).click();
     await waitFor(() => settings().codexPlan === true);
-    expect(settings().codexPlan).toBe(true);
+    await waitFor(() => !!card(doc)?.textContent.includes("· connected"));
+    expect(card(doc).textContent).toContain("Hand offs and web searches can run on your ChatGPT plan, before any paid model.");
+    ([...card(doc).querySelectorAll("button")].find((b: any) => b.textContent === "Turn off") as any).click();
+    await waitFor(() => settings().codexPlan === false);
   }, 20000);
-  test("signed out, or not on this computer: says what to run", async () => {
+  test("signed out, or not on this computer: one Connect button", async () => {
     writeFileSync(join(dir, "signed-out"), "");
     const doc = await open(url);
     doc.querySelector('.tabs button[data-tab="settings"]').click();
-    await waitFor(() => !!card(doc)?.textContent.includes("not signed in"));
-    expect(card(doc).textContent).toContain("Codex 0.159.0 is here, but not signed in. In Terminal: codex login (sign in with ChatGPT).");
-    process.env.LEANFARE_CODEX_BIN = "";
-    [...card(doc).querySelectorAll("button")].find((b: any) => b.textContent === "Look again").click();
-    await waitFor(() => !!card(doc)?.textContent.includes("not on this computer"));
-    expect(card(doc).textContent).toContain("Codex is not on this computer. To get it, in Terminal: npm install -g @openai/codex, then codex login (sign in with ChatGPT).");
+    await waitFor(() => !!card(doc)?.textContent.includes("not connected"));
+    expect(card(doc).textContent).toContain("Hand reading, drafting and web searches to your ChatGPT plan. A free account works.");
+    expect([...card(doc).querySelectorAll("button")].map((b: any) => b.textContent)).toEqual(["Connect"]);
   }, 20000);
-  test("signed in with an API key: says Leanfare uses Codex only on the ChatGPT plan", async () => {
+  test("signed in with an API key: says Leanfare uses only a ChatGPT sign in, and how to change it", async () => {
     writeFileSync(join(dir, "apikey"), "");
     const doc = await open(url);
     doc.querySelector('.tabs button[data-tab="settings"]').click();
     await waitFor(() => !!card(doc)?.textContent.includes("API key"));
-    expect(card(doc).textContent).toContain("Codex 0.159.0 is signed in with an API key or another login, not with ChatGPT, so Leanfare does not use it: that would be billed per use. In Terminal: codex login (sign in with ChatGPT).");
+    expect(card(doc).textContent).toContain("Codex is signed in with an API key, which bills per use. In Terminal: codex logout, then press Connect.");
   }, 20000);
 });
 

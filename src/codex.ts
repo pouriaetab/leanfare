@@ -12,7 +12,7 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "nod
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { planView, windowsNow } from "./plans";
-import { settings } from "./settings";
+import { saveSettings, settings } from "./settings";
 import { shellEnv } from "./shellenv";
 import { UserError } from "./upstream";
 import { redact } from "./util";
@@ -196,12 +196,13 @@ async function mcpOff(bin: string, cwd: string, signal: AbortSignal): Promise<st
   return on.flatMap((n) => ["-c", `mcp_servers.${n}.enabled=false`]);
 }
 
-export interface CodexPart { n: number; title: string; task: string; folder: string | null; files: string[]; effort: "low" | "medium" | "high" }
+export interface CodexPart { n: number; title: string; task: string; folder: string | null; files: string[]; effort: "low" | "medium" | "high"; search?: boolean } // search: Codex's own web search on (0.13)
 export function codexPrompt(p: CodexPart): string {
   return [
     "This is one part of a larger task, handed to you on its own. Read what it needs and answer. Do not change any file, and do not run anything that changes the project.",
     "", `Part ${p.n}: ${p.title}`, "", p.task, "",
     p.files.length ? `The files it reads, from this folder: ${p.files.join(", ")}` : "No files were named for this part: answer from the task itself.",
+    ...(p.search ? ["", "Search the web for what the part asks, and name the pages you used."] : []),
     "", "Answer in Markdown, as briefly as the part allows.",
   ].join("\n");
 }
@@ -225,7 +226,7 @@ export async function runCodex(p: CodexPart, signal: AbortSignal, ms = CODEX_WAI
     const servers = await mcpOff(bin, cwd, signal);
     if (signal.aborted) throw new UserError(499, "Stopped.", "stopped");
     const t0 = performance.now();
-    const r = await run(bin, codexArgs(p.effort, answerFile, servers), { cwd, input: codexPrompt(p), signal, ms });
+    const r = await run(bin, [...(p.search ? ["--search"] : []), ...codexArgs(p.effort, answerFile, servers)], { cwd, input: codexPrompt(p), signal, ms });
     if (signal.aborted) throw new UserError(499, "Stopped.", "stopped");
     if (r.timedOut) throw new UserError(504, `Codex did not finish this part within ${Math.round(ms / 60_000)} minutes.`, "codex_timeout");
     if (r.code !== 0) throw new UserError(502, `Codex stopped with an error: ${tail(r.err || r.out)}`, "codex_failed");
@@ -236,4 +237,84 @@ export async function runCodex(p: CodexPart, signal: AbortSignal, ms = CODEX_WAI
     free();
     if (dir) rmSync(dir, { recursive: true, force: true });
   }
+}
+
+// ---- one press: Connect ChatGPT (0.13) -------------------------------------------------------------
+// The ChatGPT row next to your apps does the steps a person would do in Terminal: install Codex when it is not here
+// (npm's package, else Homebrew's), start `codex login` (it opens ChatGPT's sign in page in the browser; the link is
+// shown too, in case it cannot), and, once Codex says it is signed in with ChatGPT, turn on hand offs on the ChatGPT
+// plan. Making a ChatGPT account, in the browser, is the person's part. Nothing else on the computer changes.
+export type ConnectStep = "idle" | "installing" | "signing_in" | "connected" | "failed";
+export interface Connect { step: ConnectStep; why: string | null; url: string | null; since: string | null }
+let connect: Connect = { step: "idle", why: null, url: null, since: null };
+let loginProc: ChildProcess | null = null;
+export const connectState = (): Connect => connect;
+export function forgetConnect() { if (loginProc) endAll(loginProc); loginProc = null; connect = { step: "idle", why: null, url: null, since: null }; }
+const SIGN_IN_MS = 10 * 60_000; // how long the sign in page may wait for the person
+
+async function findTool(name: string): Promise<string | null> {
+  const sh = await shellEnv();
+  const dirs = [...(process.env.PATH ?? "").split(delimiter), ...(sh.PATH ?? "").split(delimiter), "/opt/homebrew/bin", "/usr/local/bin"];
+  for (const d of dirs) if (d && existsSync(join(d, name))) return join(d, name);
+  return null;
+}
+
+// Installs Codex: npm's package first, else Homebrew's. LEANFARE_CODEX_INSTALL names the command instead (the tests).
+export async function installCodex(signal?: AbortSignal): Promise<{ ok: boolean; why: string | null }> {
+  const given = process.env.LEANFARE_CODEX_INSTALL;
+  const npm = given ? null : await findTool(process.platform === "win32" ? "npm.cmd" : "npm");
+  const brew = given || npm || process.platform === "win32" ? null : await findTool("brew");
+  const cmd = given ? [given] : npm ? [npm, "install", "-g", "@openai/codex"] : brew ? [brew, "install", "codex"] : null;
+  if (!cmd) return { ok: false, why: "Codex installs with npm (part of Node.js, from nodejs.org) or Homebrew (brew.sh), and neither is on this computer. Install one, then press Connect again." };
+  const r = await run(cmd[0], cmd.slice(1), { signal, ms: 5 * 60_000 });
+  forgetCodex();
+  if (r.code !== 0) return { ok: false, why: `Installing Codex did not work (${tail(r.err || r.out)}). In Terminal: ${brew ? "brew install codex" : "npm install -g @openai/codex"}, then press Connect again.` };
+  return { ok: true, why: null };
+}
+
+// Starts `codex login` and keeps the sign in link it prints; it ends by itself once the person has signed in.
+async function startLogin(bin: string) {
+  if (loginProc && loginProc.exitCode === null) return;
+  const env = await childEnv(bin);
+  let p: ChildProcess;
+  try { p = spawn(bin, ["login"], { env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32", windowsHide: true }); }
+  catch (e: any) { connect = { ...connect, step: "failed", why: `Codex could not start its sign in (${String(e?.message ?? e)}). In Terminal: codex login.` }; return; }
+  loginProc = p;
+  live.add(p);
+  const seen = (d: unknown) => { const m = /https:\/\/[^\s"'<>]*(auth|login|oauth)[^\s"'<>]*/i.exec(String(d)); if (m && !connect.url) connect = { ...connect, url: m[0] }; };
+  p.stdout?.on("data", seen);
+  p.stderr?.on("data", seen);
+  const timer = setTimeout(() => endAll(p), SIGN_IN_MS);
+  p.on("exit", () => { clearTimeout(timer); live.delete(p); if (loginProc === p) loginProc = null; });
+}
+
+// One press: where Codex stands, and the next step taken. The screen asks again every 2 seconds while it is going.
+export async function connectChatGPT(): Promise<Connect> {
+  if (connect.step === "installing") return connect;
+  connect = { step: "installing", why: null, url: null, since: new Date().toISOString() };
+  let s = await codexState(true);
+  if (!s.installed) {
+    const r = await installCodex();
+    if (!r.ok) return (connect = { ...connect, step: "failed", why: r.why });
+    s = await codexState(true);
+    if (!s.installed) return (connect = { ...connect, step: "failed", why: "Codex was installed but Leanfare cannot find it. In Terminal: codex --version, then press Connect again." });
+  }
+  if (s.login === "other") return (connect = { ...connect, step: "failed", why: "Codex is signed in with an API key, which bills per use, so Leanfare does not use it. In Terminal: codex logout, then press Connect again to sign in with ChatGPT." });
+  if (s.signedIn) return connected();
+  await startLogin((await codexBin())!);
+  if (connect.step !== "failed") connect = { ...connect, step: "signing_in" };
+  return connect;
+}
+function connected(): Connect {
+  if (!settings().codexPlan) saveSettings({ codexPlan: true });
+  if (loginProc) { endAll(loginProc); loginProc = null; }
+  return (connect = { ...connect, step: "connected", why: null });
+}
+// While the sign in is open: the screen's look at Codex finishes the connection once Codex says it is signed in.
+export async function connectProgress(): Promise<Connect> {
+  if (connect.step !== "signing_in") return connect;
+  const s = await codexState(true);
+  if (s.signedIn) return connected();
+  if (!loginProc) connect = { ...connect, step: "failed", why: "The ChatGPT sign in ended before it finished. Press Connect to try again." };
+  return connect;
 }
