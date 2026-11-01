@@ -1788,7 +1788,7 @@
       : !d.prompts.length && !d.speed?.length ? h("div", { class: "empty", text: "Nothing in this span yet. Hand offs and plan parts from your apps, and Claude Code's prompts, show here." })
       : !d.prompts.length ? h("div", { class: "rp-body" }, h("div", { class: "empty", text: "No prompts in this span yet. Hand offs and plan parts from your apps, and Claude Code's prompts, show here. The models' speed so far:" }), reportSpeedEl(d))
       : h("div", { class: "rp-body" + (S.report.loading ? " busy" : "") }, reportTiles(d), reportChartEl(d),
-          h("div", { class: "rp-two" }, reportModelsEl(d), reportKindsEl(d)), reportLevelsEl(d), reportSpeedEl(d), reportPromptsEl(d), reportHowEl(d));
+          h("div", { class: "rp-two" }, reportModelsEl(d), reportKindsEl(d)), reportLevelsEl(d), reportSpeedEl(d), reportAskEl(d), reportPromptsEl(d), reportHowEl(d));
     return h("section", { class: "rp", id: "reportCard" },
       h("div", { class: "sv-head" }, h("h2", { text: "Report" }), h("span", { class: "muted", text: "what Leanfare did for your apps" })),
       filters, body);
@@ -2152,6 +2152,45 @@
         step(3, "Measured on a sample", sampled ? `in use: ${plural(sampled, "sample")} so far` : `needs ${app}'s own model in Leanfare (an API key)`, `Now and then side by side runs ${app}'s own model on a hand off too, within its monthly limit: its real tokens, and its grade judged blind against the outside answer. These also check step 1.`, sampled > 0)));
   }
 
+  // Ask about these prompts (askreport.ts, 0.12): a model on this computer reads the span's prompts and answers; another
+  // of your models only when picked. Neither the question nor the answer is kept.
+  const ASK_SAMPLES = ["Which prompts cost the most, and why?", "Which hand offs were graded partly or wrong?", "Where did Leanfare save the most?"];
+  function reportAskEl(d) {
+    S.ask ??= { models: null, model: "", busy: false, out: null, error: null, question: "" };
+    const a = S.ask;
+    if (a.models === null) { a.models = []; api("/api/report/ask").then((r) => { a.models = r.models; redrawAsk(); }).catch(() => {}); }
+    const here = a.models.filter((m) => m.local), others = a.models.filter((m) => !m.local);
+    const picked = a.models.find((m) => m.id === a.model);
+    const ask = async (e) => {
+      e?.preventDefault?.();
+      const question = a.question.trim();
+      if (!question || a.busy) return;
+      a.busy = true; a.error = null; a.out = null; redrawAsk();
+      try { a.out = await api("/api/report/ask", { body: { question, q: S.report.q, model: a.model || null } }); }
+      catch (err) { a.error = String(err?.message ?? err); }
+      a.busy = false; redrawAsk();
+    };
+    const input = h("input", { type: "text", class: "rp-ask-q", placeholder: "Ask about these prompts", maxlength: "2000", "aria-label": "Your question about these prompts", value: a.question, oninput: (e) => { a.question = e.target.value; } });
+    const sel = h("select", { "aria-label": "Which model answers", onchange: (e) => { a.model = e.target.value; redrawAsk(); } },
+      h("option", { value: "", text: here.length ? "A model on this computer" : "A model on this computer (none ready)", selected: !a.model }),
+      others.length ? h("optgroup", { label: "Your other models" }, ...others.map((m) => h("option", { value: m.id, text: m.label, selected: a.model === m.id }))) : null);
+    const note = picked && !picked.local ? `${picked.label} is sent these prompts' numbers and their kept words to answer${picked.risk ? ` (${picked.risk})` : ""}.`
+      : here.length ? `${here[0].label}${here.length > 1 ? " or another model here" : ""} reads them on this computer; nothing leaves it.`
+      : "Open Ollama with a model in it to ask on this computer, or pick one of your other models.";
+    const total = d.prompts.length + (d.more ?? 0);
+    return h("div", { class: "rp-ask", id: "rpAsk" },
+      h("div", { class: "rp-ask-head" }, h("b", { text: "Ask about these prompts" }), h("span", { class: "muted", text: `${total} ${total === 1 ? "prompt" : "prompts"} in this span, with the filters above` })),
+      h("form", { class: "rp-ask-row", onsubmit: ask }, input, sel, h("button", { class: "btn small primary", type: "submit", text: a.busy ? "Asking…" : "Ask", disabled: a.busy })),
+      h("div", { class: "rp-ask-chips" }, ...ASK_SAMPLES.map((t) => h("button", { type: "button", class: "chip-btn", text: t, onclick: () => { a.question = t; ask(); } }))),
+      h("div", { class: "tiny muted", text: note }),
+      a.busy ? h("div", { class: "rp-ask-out busy", text: "Reading the prompts…" })
+        : a.error ? h("div", { class: "rp-ask-out err", text: a.error })
+        : a.out ? h("div", { class: "rp-ask-out" }, h("div", { class: "rp-ask-text", text: a.out.answer }),
+            h("div", { class: "tiny muted", text: `${a.out.model.label}${a.out.local ? " on this computer" : ""} · ${a.out.seconds} s · ${a.out.cost ? `$${a.out.cost.toFixed(4)}` : "$0"}${a.out.shown < a.out.total ? ` · read the newest ${a.out.shown} of ${a.out.total} prompts` : ""} · not kept` }))
+        : null);
+  }
+  function redrawAsk() { const old = $("#rpAsk"); if (old && S.report.data) old.replaceWith(reportAskEl(S.report.data)); }
+
   // A part's kept words (words.ts, 0.12): read on demand, and shown under the part with Copy.
   async function toggleWords(id) {
     S.words ??= { open: {}, got: {} };
@@ -2239,7 +2278,7 @@
     const notes = [];
     if (v.unpriced) notes.push(`${num(v.unpriced)} answer${v.unpriced === 1 ? " has" : "s have"} no listed price and count as $0 here.`);
     if (v.estimated) notes.push(`Token counts were estimated for ${num(v.estimated)} answer${v.estimated === 1 ? "" : "s"} (the provider did not report them).`);
-    const SOURCES = { chat: "Chat", openai: "Apps (OpenAI address)", anthropic: "Apps (Anthropic address)", delegate: "Delegated", check: "Checks", trial: "Trial", plan: "Plans", sidebyside: "Side by side" };
+    const SOURCES = { chat: "Chat", openai: "Apps (OpenAI address)", anthropic: "Apps (Anthropic address)", delegate: "Delegated", check: "Checks", trial: "Trial", plan: "Plans", sidebyside: "Side by side", ask: "Asked about prompts" };
     const src = v.bySource.map((s) => `${SOURCES[s.source] ?? s.source}: ${num(s.answers)}`).join(" · ");
     el.replaceChildren(
       reportCardEl(),

@@ -813,3 +813,16 @@ tr.wd td { background: var(--panel-2); }
 .wd-title { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-bottom: 4px; }
 .wd-text { margin: 0; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; font: 12px/1.5 var(--mono); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
 .wd-files { font-size: 12px; color: var(--muted); margin: 2px 0 8px; }
+
+/* Ask about these prompts (0.12) */
+.rp-ask { border: 1px solid var(--line); background: var(--panel); border-radius: var(--radius); padding: 12px 14px; box-shadow: var(--shadow); display: grid; gap: 8px; min-width: 0; }
+.rp-ask-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.rp-ask-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.rp-ask-q { flex: 1 1 260px; min-width: 0; padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-2); color: var(--text); font: inherit; }
+.rp-ask-q:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+.rp-ask-row select { max-width: 100%; }
+.rp-ask-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.rp-ask-out { border-left: 3px solid var(--accent); padding: 6px 12px; display: grid; gap: 6px; }
+.rp-ask-out.busy { color: var(--muted); border-left-color: var(--line-strong); }
+.rp-ask-out.err { color: var(--bad); border-left-color: var(--bad); }
+.rp-ask-text { white-space: pre-wrap; line-height: 1.5; overflow-wrap: anywhere; }
