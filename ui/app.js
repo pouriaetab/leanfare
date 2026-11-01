@@ -2791,6 +2791,8 @@
     // Left out because your key has no quota for it (quota.ts): why, and Try again.
     const nq = (S.st.noQuota ?? []).find((q) => q.model === m.id);
     if (nq) notes.push(`left out: ${nq.why}`);
+    // Ticked but not used now: needs credit on a free key, or its free allowance for today is used (allowance.ts).
+    else if (m.notNow) notes.push(m.notNow);
     const again = nq ? h("button", { class: "btn small", type: "button", text: "Try again", onclick: async (e) => {
       e.preventDefault(); e.stopPropagation(); e.target.disabled = true;
       try { const r = await api("/api/quota/clear", { body: { model: m.id } }); S.st = r.state; toast(`${m.label} may be picked again.`, "done"); } catch (err) { toast(err.message, "error"); }

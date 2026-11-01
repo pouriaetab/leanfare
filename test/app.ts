@@ -1,4 +1,5 @@
 // One Leanfare server per test run, with the fixed test catalogue.
+import { forgetAllowances } from "../src/allowance";
 import { unlinkSync } from "node:fs";
 import { paths } from "../src/config";
 import { db, openDb, putSetting } from "../src/db";
@@ -48,6 +49,7 @@ export async function reset(patch: Partial<Settings> = {}) {
   forgetGrades();
   forgetRests();
   forgetNoQuota();
+  forgetAllowances(); // allowance.ts reads the ledger again
   Object.assign(ANSWER_TIME, { start: 0, idle: 90_000 });
   resetSettingsCache();
   resetBudget();
