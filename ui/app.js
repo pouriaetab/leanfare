@@ -2317,7 +2317,7 @@
       a.busy ? h("div", { class: "rp-ask-out busy", text: "Reading the prompts…" })
         : a.error ? h("div", { class: "rp-ask-out err", text: a.error })
         : a.out ? h("div", { class: "rp-ask-out" }, h("div", { class: "rp-ask-text", text: a.out.answer }),
-            h("div", { class: "tiny muted", text: `${a.out.model.label}${a.out.local ? " on this computer" : ""} · ${a.out.seconds} s · ${a.out.cost ? `$${a.out.cost.toFixed(4)}` : "$0"}${a.out.shown < a.out.total ? ` · read the newest ${a.out.shown} of ${a.out.total} prompts` : ""} · not kept` }))
+            h("div", { class: "tiny muted", text: `${a.out.model.label}${a.out.local ? " on this computer" : ""} · ${a.out.seconds} s · ${a.out.cost ? `$${a.out.cost.toFixed(4)}` : "$0"}${a.out.shown < a.out.total ? ` · read the newest ${a.out.shown} of ${a.out.total} prompts` : ""}${a.out.cut ? " · the newest prompt was cut to fit the model" : ""} · not kept` }))
         : null);
   }
   function redrawAsk() { const old = $("#rpAsk"); if (old && S.report.data) old.replaceWith(reportAskEl(S.report.data)); }
