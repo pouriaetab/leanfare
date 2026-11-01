@@ -24,7 +24,7 @@ import { BRIEF, MAX_INSTRUCTIONS, MODES, saveSettings, settings, validatePatch }
 import { budgetState } from "./budget";
 import * as connect from "./connect";
 import * as local from "./local";
-import { CODEX_ID, codexState } from "./codex";
+import { CODEX_ID, codexState, connectChatGPT, connectProgress, connectState } from "./codex";
 import { GRADED_KINDS, VERDICTS, addGrade, giveAnotherChance, standing, standingText, standings } from "./grades";
 import { plansBrief, plansView } from "./plans";
 import { meterViews, setStatusline } from "./meter";
@@ -636,7 +636,9 @@ async function api(req: Request, url: URL): Promise<Response> {
     giveAnotherChance(b.model, b.kind);
     return json({ standings: standings().map((x) => ({ ...x, text: standingText(x) })) });
   }
-  if (p === "/api/codex" && m === "GET") return json({ ...(await codexState(url.searchParams.get("fresh") === "1")), on: settings().codexPlan });
+  // The ChatGPT row (0.13): a look also finishes a connection whose sign in went through (codex.ts connectProgress).
+  if (p === "/api/codex" && m === "GET") { const connect = await connectProgress(); return json({ ...(await codexState(url.searchParams.get("fresh") === "1")), on: settings().codexPlan, connect }); }
+  if (p === "/api/codex/connect" && m === "POST") { const started = connectChatGPT(); const first = await Promise.race([started, Bun.sleep(1500).then(() => connectState())]); return json({ connect: first, on: settings().codexPlan }); }
   if (p === "/api/local/pull" && m === "POST") { const b = await readBody(req); return json({ pull: await local.startPull(b.name, b.sizeBytes) }); }
   if (p === "/api/local/pull/stop" && m === "POST") { local.stopPull(); return json({ pull: local.pullView() }); }
   if (p === "/api/local/pull/dismiss" && m === "POST") { local.dismissPull(); return json({ pull: null }); }
