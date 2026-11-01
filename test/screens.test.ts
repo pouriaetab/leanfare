@@ -1064,7 +1064,7 @@ describe("Setting up with no typing (Settings)", () => {
   test("Paste any key: Leanfare says whose it is, saves it, and the provider moves up from More providers", async () => {
     const doc = await openApp();
     await goSettings(doc);
-    const names = () => [...doc.querySelectorAll(".colL > .prov .prov-head .name")].map((n: any) => n.textContent);
+    const names = () => [...doc.querySelectorAll(".colL > details.group > .prov .prov-head .name")].map((n: any) => n.textContent);
     expect(names().some((n: string) => n.startsWith("More providers (Perplexity, Groq"))).toBe(true);
     expect(names()).not.toContain("Perplexity");
     set(doc.querySelector("input[aria-label='Any API key']"), SHAPED.perplexity);
