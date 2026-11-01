@@ -82,7 +82,7 @@ export function levelAdvice(v: LevelView, where: "session" | "chat"): string {
     2: "Hand big reads you will not change (about 40 KB of logs or docs, 200 KB of anything else, or more than 5 files) to Leanfare's delegate, and plan tasks with several parts with Leanfare's plan.",
     3: "Hand reading over about 10 KB that you will not change, project wide searches, summaries, reviews and first drafts to Leanfare first (delegate, or plan for several parts); keep decisions, changes to files and the final answer.",
     4: "Call Leanfare's plan tool first for each prompt that is more than a quick question, and follow its table; hand reading, searching, summaries, reviews and drafts to Leanfare.",
-    5: "Plan each prompt with Leanfare and hand every part a model can do to it (delegate, or plan_run); keep only decisions, changes to files and your final answer, and tell the user before any big job.",
+    5: "Plan each prompt with Leanfare and hand every part a model can do to it (delegate, or plan, which starts Leanfare's parts itself); keep only decisions, changes to files and your final answer, and tell the user before any big job.",
   };
   return `${head} ${what[v.level]}${tail}`;
 }

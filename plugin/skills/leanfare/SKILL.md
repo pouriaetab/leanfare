@@ -15,7 +15,7 @@ Leanfare is a tool on the user's computer that runs simple work on cheaper or fr
 ## When to hand work over
 
 1. Big reads: logs, data, docs or code you will not change. Call `delegate` with the files in `files` (Leanfare reads them itself, so their text never enters your context) and a task that says what to find and the form of answer you want.
-2. Tasks with several parts: call `plan` first, run the parts it gives to Leanfare with `plan_run`, read them with `plan_status`, and do the parts it leaves to you yourself.
+2. Tasks with several parts: call `plan` first. Leanfare starts its own parts by itself; do the parts it leaves to you, then read the rest of Leanfare's answers with `plan_status` (wait 50). Never run Leanfare's parts again with `delegate`.
 3. Anything sensitive or personal: set `private: true`, so only models on the user's computer take it.
 4. Code changes, decisions and anything the user must see you do yourself stay with you.
 

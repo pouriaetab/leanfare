@@ -7,7 +7,7 @@
       { "matcher": "Read", "hooks": [{ "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/leanfare.sh\" hook read", "timeout": 5 }] }
     ],
     "PostToolUse": [
-      { "matcher": "mcp__.*leanfare.*__(delegate|plan_run|plan_status|grade|level)", "hooks": [{ "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/leanfare.sh\" hook handoff", "timeout": 5 }] }
+      { "matcher": "mcp__.*leanfare.*__(delegate|plan|plan_run|plan_status|grade|level)", "hooks": [{ "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/leanfare.sh\" hook handoff", "timeout": 5 }] }
     ],
     "Stop": [
       { "hooks": [{ "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/leanfare.sh\" hook stop", "timeout": 10 }] }

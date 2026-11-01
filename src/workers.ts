@@ -40,14 +40,14 @@ Leanfare hands reading and searching to free or cheap models, so your Claude pla
 
 ${LEVELS_RULE} Leanfare's prompt hook says the level for this session with each prompt.
 
-For a task with several parts (a feature, a fix across files, research across many files), call Leanfare's plan tool first and follow its table: run the parts it gives to Leanfare with delegate (several in the same turn) or with the leanfare-worker subagent (one per part, at once), or call plan_run to run them in the background and plan_status for their answers. Do the parts it leaves to you yourself. ${REVIEW}`;
+For a task with several parts (a feature, a fix across files, research across many files), call Leanfare's plan tool first: Leanfare starts its own parts by itself and the plan answers with those that finish quickly. Do the parts it leaves to you, then call plan_status with the plan's id (wait 50) for the rest; never run Leanfare's parts again with delegate. ${REVIEW}`;
 const RULE_OTHER = `## Leanfare
 
 Leanfare hands reading and searching to free or cheap models, so your plan lasts longer. ${BY_SIZE}
 
 ${LEVELS_RULE} At the start of a chat, call Leanfare's level tool once to learn the level, and follow it.
 
-For a task with several parts (a feature, a fix across files, research across many files), call Leanfare's plan tool first and follow its table: run the parts it gives to Leanfare with delegate (several in the same turn), or call plan_run to run them in the background and plan_status for their answers. Do the parts it leaves to you yourself. ${REVIEW}`;
+For a task with several parts (a feature, a fix across files, research across many files), call Leanfare's plan tool first: Leanfare starts its own parts by itself and the plan answers with those that finish quickly. Do the parts it leaves to you, then call plan_status with the plan's id (wait 50) for the rest; never run Leanfare's parts again with delegate. ${REVIEW}`;
 
 export const WORKER = `---
 name: leanfare-worker
@@ -147,7 +147,7 @@ export const readHookCommand = () => { const c = selfCommand(); return [c.comman
 // The review hooks (reviewhook.ts): which hand offs a session got, and a grade asked for once before Claude finishes.
 export const handoffHookCommand = () => { const c = selfCommand(); return [c.command, ...c.args].map(quote).join(" ") + " hook handoff"; };
 export const stopHookCommand = () => { const c = selfCommand(); return [c.command, ...c.args].map(quote).join(" ") + " hook stop"; };
-export const HANDOFF_MATCHER = "mcp__.*leanfare.*__(delegate|plan_run|plan_status|grade|level)";
+export const HANDOFF_MATCHER = "mcp__.*leanfare.*__(delegate|plan|plan_run|plan_status|grade|level)";
 const ourHook = (what: "prompt" | "read" | "handoff" | "stop") => (cmd: unknown) => typeof cmd === "string" && new RegExp(`(^|[\\s'"/\\\\])(leanfare(\\.exe)?|cli\\.ts)['"]?\\s+hook\\s+${what}\\b`, "i").test(cmd);
 const isOurHook = ourHook("prompt"), isOurReadHook = ourHook("read"), isOurHandoffHook = ourHook("handoff"), isOurStopHook = ourHook("stop");
 const HOOKS = [
