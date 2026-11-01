@@ -58,7 +58,7 @@ describe("the protocol", () => {
     const unknown = await rpc("initialize", { protocolVersion: "2019-01-01", capabilities: {} });
     expect(unknown.result.protocolVersion).toBe("2025-11-25");
     const list = await rpc("tools/list", {});
-    expect(list.result.tools.map((t: any) => t.name)).toEqual(["plan", "plan_run", "plan_stop", "plan_status", "grade", "ask", "delegate", "spend", "report", "models", "estimate", "trial", "local_model", "level"]);
+    expect(list.result.tools.map((t: any) => t.name)).toEqual(["plan", "plan_run", "plan_stop", "plan_status", "grade", "ask", "delegate", "spend", "report", "models", "estimate", "trial", "local_model", "level", "live"]);
     expect(list.result.resultType).toBeUndefined();
   });
 
@@ -68,7 +68,7 @@ describe("the protocol", () => {
     expect(d.result._meta["io.modelcontextprotocol/serverInfo"].name).toBe("leanfare");
     const list = await rpc("tools/list", modern());
     expect(list.result.resultType).toBe("complete");
-    expect(list.result.tools).toHaveLength(14);
+    expect(list.result.tools).toHaveLength(15);
     for (const t of list.result.tools) expect(t.inputSchema.type).toBe("object");
   });
 
@@ -92,7 +92,7 @@ describe("the plan's page (an MCP App)", () => {
     const tools = (await rpc("tools/list", {})).result.tools;
     expect(tools.find((t: any) => t.name === "plan")._meta).toEqual({ ui: { resourceUri: "ui://leanfare/plan" }, "ui/resourceUri": "ui://leanfare/plan" });
     const list = await rpc("resources/list", {});
-    expect(list.result.resources).toEqual([expect.objectContaining({ uri: "ui://leanfare/plan", mimeType: "text/html;profile=mcp-app" }), expect.objectContaining({ uri: "ui://leanfare/report", mimeType: "text/html;profile=mcp-app" })]);
+    expect(list.result.resources).toEqual([expect.objectContaining({ uri: "ui://leanfare/plan", mimeType: "text/html;profile=mcp-app" }), expect.objectContaining({ uri: "ui://leanfare/report", mimeType: "text/html;profile=mcp-app" }), expect.objectContaining({ uri: "ui://leanfare/live", mimeType: "text/html;profile=mcp-app" })]);
     expect(tools.find((t: any) => t.name === "report")._meta).toEqual({ ui: { resourceUri: "ui://leanfare/report" }, "ui/resourceUri": "ui://leanfare/report" });
     const read = await rpc("resources/read", { uri: "ui://leanfare/plan" });
     const c = read.result.contents[0];
@@ -352,7 +352,9 @@ describe("the tools", () => {
     expect(r.result.structuredContent).toMatchObject({ range: "today", prompts: [{ id: "PRM-1", app: "Claude", model: "Claude Opus 5.5", parts: ["Gemini 3.8 Flash"], kept: 20000, grade: "good" }] });
     expect(r.result.structuredContent.open_url).toMatch(/\/#report$/);
     const list = await rpc("resources/list", {});
-    expect(list.result.resources.map((x: any) => x.uri)).toEqual(["ui://leanfare/plan", "ui://leanfare/report"]);
+    expect(list.result.resources.map((x: any) => x.uri)).toEqual(["ui://leanfare/plan", "ui://leanfare/report", "ui://leanfare/live"]);
+    const live = await rpc("resources/read", { uri: "ui://leanfare/live" });
+    expect(live.result.contents[0].text).toContain("<title>Leanfare live</title>");
     const page = await rpc("resources/read", { uri: "ui://leanfare/report" });
     expect(page.result.contents[0]).toMatchObject({ uri: "ui://leanfare/report", mimeType: "text/html;profile=mcp-app" });
     expect(page.result.contents[0].text).toContain("<title>Leanfare report</title>");
@@ -389,6 +391,6 @@ describe("the end of the input", () => {
     expect((await run('{"jsonrpc":"2.0","id":1,"method":"ping"}')).map((m) => m.id)).toEqual([1]);
     const two = await run('{"jsonrpc":"2.0","id":1,"method":"ping"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}');
     expect(two.map((m) => m.id)).toEqual([1, 2]);
-    expect(two[1].result.tools).toHaveLength(14);
+    expect(two[1].result.tools).toHaveLength(15);
   }, 20000);
 });

@@ -21,6 +21,7 @@ import { RESPONSES_PATH, ResponsesStreamTranslator, responsesToOpenAI, toRespons
 import { AnthropicStreamTranslator, UserError, anthropicDefaultMax, anthropicToOpenAI, effortFor, headersFor, networkError, ollamaChunks, ollamaPlain, ollamaToOpenAI, openaiBody, plainError, thinkRoom, toAnthropic, toOllama } from "./upstream";
 import { SSEParser, dollars, localDay, localMonth, median, now, providerMessage, randomId, redact, usd8 } from "./util";
 import { takesImages, takesPdfs } from "./files";
+import { liveAdd, liveEnd, liveModel, liveStart, liveUsage } from "./live";
 
 // ---- which models can be used right now ---------------------------------------
 
@@ -704,11 +705,13 @@ const headerMode = (req: Request): Mode | undefined => {
 // x-leanfare-speed: cheapest, balanced, fastest, or a number of seconds to answer within.
 const headerSpeed = (req: Request): SpeedChoice | undefined => parseSpeed(req.headers.get("x-leanfare-speed")?.toLowerCase() ?? null) ?? undefined;
 
-function register(source: string, label: string, ac: AbortController) {
+function register(source: string, label: string, ac: AbortController, p?: Pick<Plan, "model" | "inTok">) {
   const id = randomId(6);
   running.set(id, { id, source, label, started: Date.now(), ac });
+  liveStart(id, source, label, p?.model ?? null, p?.inTok ?? 0); // live tokens (live.ts): numbers only
   return id;
 }
+const unregister = (rid: string) => { running.delete(rid); liveEnd(rid); };
 
 // ---- POST /v1/chat/completions ---------------------------------------------------
 
@@ -722,15 +725,16 @@ export async function handleOpenAI(req: Request, body: any): Promise<Response> {
     const hasTools = !!(body.tools || body.functions || body.tool_choice || body.messages.some((m: any) => m?.role === "tool" || m?.role === "function" || m?.tool_calls));
     p = await plan({ source: "openai", asked: typeof body.model === "string" ? body.model : null, messages: body.messages, tools: body.tools ?? body.functions, hasTools, plain: ollamaPlain(body), maxOut: toNum(body.max_completion_tokens ?? body.max_tokens), mode: headerMode(req), speed: headerSpeed(req), signal: ac.signal, copies: toNum(body.n) ?? 1 });
   } catch (e) { return errorResponse(e); }
-  const rid = register("openai", p.model.label, ac);
+  const rid = register("openai", p.model.label, ac, p);
   let sent: { res: Response; model: Model; t0: number };
   try {
     sent = await sendWithFallback(p, "openai", body, stream, ac.signal);
   } catch (e) {
-    release(p.reservation); running.delete(rid);
+    release(p.reservation); unregister(rid);
     return errorResponse(e);
   }
   const { res, model, t0 } = sent;
+  liveModel(rid, model);
   const def = provider(model.provider)!;
   const headers = leanHeaders(p, model);
   const name = typeof body.model === "string" && !autoMode(body.model, p.mode) ? body.model : model.apiId;
@@ -787,7 +791,7 @@ export async function handleOpenAI(req: Request, body: any): Promise<Response> {
     } catch (e) {
       return errorResponse(e);
     } finally {
-      release(p.reservation); running.delete(rid);
+      release(p.reservation); unregister(rid);
     }
   }
 
@@ -797,7 +801,7 @@ export async function handleOpenAI(req: Request, body: any): Promise<Response> {
   const finish = (status: "ok" | "stopped" | "error") => {
     if (finished) return null;
     finished = true;
-    release(p.reservation); running.delete(rid);
+    release(p.reservation); unregister(rid);
     return record(p, model, "openai", usage ?? estimatedUsage(p, chars), { status: failed ? "error" : status, error: failed ?? undefined, ms: performance.now() - t0, firstMs, reportedCost: reported, estimated: !usage });
   };
   const chunks = openaiChunks(res, model, name);
@@ -820,11 +824,12 @@ export async function handleOpenAI(req: Request, body: any): Promise<Response> {
           if (value.j === null && value.data === "[DONE]") { ended = true; continue; } // sent once, at the end, after the cost line
           const c = readChunk(value.j);
           if (c.finish) ended = true;
-          if (c.usage) usage = c.usage;
+          if (c.usage) { usage = c.usage; liveUsage(rid, c.usage); }
           if (c.cost !== null) reported = c.cost;
           if (c.error) failed = c.error;
           if ((c.text || c.thinking) && firstMs === null) firstMs = performance.now() - t0;
           chars += c.text.length + c.thinking.length;
+          liveAdd(rid, c.text.length, c.thinking.length);
           if (c.usageOnly && !clientWantsUsage) continue;
           controller.enqueue(enc.encode(`data: ${value.data}\n\n`));
           return;
@@ -849,7 +854,7 @@ export async function handleAnthropic(req: Request, body: any): Promise<Response
   try {
     p = await plan({ source: "anthropic", asked: typeof body.model === "string" ? body.model : null, messages: body.messages, system: body.system, tools: body.tools, maxOut: toNum(body.max_tokens), mode: headerMode(req), speed: headerSpeed(req), signal: ac.signal });
   } catch (e) { return errorResponse(e, "anthropic"); }
-  const rid = register("anthropic", p.model.label, ac);
+  const rid = register("anthropic", p.model.label, ac, p);
   // Pass through the client's beta flags (Claude Code uses them).
   const extra: Record<string, string> = {};
   const beta = req.headers.get("anthropic-beta");
@@ -858,10 +863,11 @@ export async function handleAnthropic(req: Request, body: any): Promise<Response
   try {
     sent = await sendWithFallback(p, "anthropic", body, stream, ac.signal, true, extra);
   } catch (e) {
-    release(p.reservation); running.delete(rid);
+    release(p.reservation); unregister(rid);
     return errorResponse(e, "anthropic");
   }
   const { res, model, t0 } = sent;
+  liveModel(rid, model);
   const headers = leanHeaders(p, model);
   if (!stream) {
     try {
@@ -873,28 +879,29 @@ export async function handleAnthropic(req: Request, body: any): Promise<Response
       headers["x-leanfare-cost-usd"] = r.cost === null ? "unknown" : usd8(r.cost);
       return new Response(text, { status: 200, headers: { ...headers, "content-type": "application/json" } });
     } finally {
-      release(p.reservation); running.delete(rid);
+      release(p.reservation); unregister(rid);
     }
   }
   let usage: Usage = { ...ZERO }, gotUsage = false, chars = 0, firstMs: number | null = null, failed: string | null = null, finished = false, stopped = false;
   const parser = new SSEParser((event, data) => {
     let j: any; try { j = JSON.parse(data); } catch { return; }
     const t = j.type ?? event;
-    if (t === "message_start") { const u = fromAnthropicUsage(j.message?.usage); if (u) { usage = u; gotUsage = true; } }
+    if (t === "message_start") { const u = fromAnthropicUsage(j.message?.usage); if (u) { usage = u; gotUsage = true; liveUsage(rid, u); } }
     else if (t === "message_delta" && j.usage) {
       // The final counts are running totals; server tools (web search) can add input on the way.
       const u = fromAnthropicUsage(j.usage)!;
       usage = { uncached: Math.max(usage.uncached, u.uncached), cacheRead: Math.max(usage.cacheRead, u.cacheRead), cacheWrite: Math.max(usage.cacheWrite, u.cacheWrite), cacheWrite1h: Math.max(usage.cacheWrite1h ?? 0, u.cacheWrite1h ?? 0), output: typeof j.usage.output_tokens === "number" ? j.usage.output_tokens : usage.output };
       gotUsage = true;
+      liveUsage(rid, usage);
     }
     else if (t === "message_stop") stopped = true;
-    else if (t === "content_block_delta") { const s = j.delta?.text ?? j.delta?.thinking ?? j.delta?.partial_json ?? ""; if (s && firstMs === null) firstMs = performance.now() - t0; chars += String(s).length; }
+    else if (t === "content_block_delta") { const s = j.delta?.text ?? j.delta?.thinking ?? j.delta?.partial_json ?? ""; if (s && firstMs === null) firstMs = performance.now() - t0; chars += String(s).length; liveAdd(rid, String(j.delta?.text ?? j.delta?.partial_json ?? "").length, String(j.delta?.thinking ?? "").length); }
     else if (t === "error") failed = j.error?.message ?? "the provider stopped with an error";
   });
   const finish = (status: "ok" | "stopped" | "error") => {
     if (finished) return;
     finished = true;
-    release(p.reservation); running.delete(rid);
+    release(p.reservation); unregister(rid);
     record(p, model, "anthropic", gotUsage ? usage : estimatedUsage(p, chars), { status: failed ? "error" : status, error: failed ?? undefined, ms: performance.now() - t0, firstMs, estimated: !gotUsage });
   };
   const reader = res.body!.getReader();
@@ -993,7 +1000,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
   p.job = opts.job ?? null;
   p.startWithin = opts.startWithin ?? null;
   const picks = p.auto ? [...p.candidates] : []; // Auto's picks in order, to pass the request on
-  const rid = register(source, `${label} · ${p.model.label}`, ac);
+  const rid = register(source, `${label} · ${p.model.label}`, ac, p);
   emit({ type: "meta", plan: planView(p) });
   const body = { messages: withSystem(messages, opts.system) };
 
@@ -1012,18 +1019,20 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
     try {
       const sent = await sendWithFallback(p, source, body, true, tc.signal);
       t.model = sent.model; t.t0 = sent.t0; t.answered = true;
+      liveModel(rid, sent.model);
       if (p.notes.length > notesBefore) emit({ type: "meta", plan: planView(p) }); // Auto passed it on: say so
       for await (const { j, data } of openaiChunks(sent.res, t.model, t.model.apiId)) {
         if (!j) { if (data === "[DONE]") t.ended = true; continue; }
         const c = readChunk(j);
         if (c.finish) { t.ended = true; t.finish = c.finish; }
-        if (c.usage) t.usage = c.usage;
+        if (c.usage) { t.usage = c.usage; liveUsage(rid, c.usage); }
         if (c.cost !== null) t.reported = c.cost;
         if (c.error) { t.failed = c.error; break; }
         if ((c.text || c.thinking) && t.firstMs === null) t.firstMs = performance.now() - t.t0;
         if (t.firstMs !== null) quiet(); // started: from now on, only a long silence ends it
         if (c.thinking) { t.thinking += c.thinking; emit({ type: "thinking", text: c.thinking }); }
         if (c.text) { t.text += c.text; emit({ type: "delta", text: c.text }); }
+        liveAdd(rid, c.text.length, c.thinking.length);
       }
       if (!t.ended && !t.failed && !ac.signal.aborted) t.failed = incomplete(t.model);
     } catch (e: any) {
@@ -1125,7 +1134,7 @@ export async function runChat(messages: Msg[], asked: string | null, signal: Abo
   if (finishReason === "length" && p.capped && text.trim()) p.notes.push(`The answer stopped at ${(p.capOverride ?? outCap(model)).toLocaleString("en-US")} tokens, the limit Leanfare sets while a budget is on. Ask it to continue, or raise the budget.`);
   const status: "ok" | "stopped" | "error" = ac.signal.aborted ? "stopped" : failed ? "error" : "ok";
   release(p.reservation);
-  running.delete(rid);
+  unregister(rid);
   const r = written !== undefined ? written : t.timedOut === "start" && !ac.signal.aborted ? recordStart(t) : recordTry(t, status, failed ?? undefined);
   const cat = store.catalog;
   const meta = {

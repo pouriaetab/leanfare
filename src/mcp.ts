@@ -18,6 +18,8 @@ import { scoreText } from "./score";
 import { reportText } from "./trialtext";
 import { APP_MIME, PLAN_APP_HTML, PLAN_APP_URI } from "./planapp";
 import { REPORT_APP_HTML, REPORT_APP_URI } from "./reportapp";
+import { LIVE_APP_HTML, LIVE_APP_URI } from "./liveapp";
+import { LIVE_SOURCE } from "./live";
 import { readForDelegate, resolvePath, sizesForPlan } from "./readfiles";
 import { existsSync, lstatSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -247,6 +249,14 @@ export const TOOLS = [
     },
     annotations: { title: "Leanfare's level", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
+  {
+    name: "live",
+    title: "Live tokens",
+    description: "The model calls Leanfare is running right now, and those that ended in the last minute, as numbers only: the model, what it is for (a hand off, its check, a plan's part, an app through Leanfare's address), how long it has run, and its tokens so far by kind (new input, cached, thinking, written), with tokens a second. Use it when the user asks what Leanfare is doing now, or to watch a plan's parts run. Apps that show MCP Apps draw it as a live card that keeps moving.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { title: "Live tokens", readOnlyHint: true, openWorldHint: false },
+    _meta: { ui: { resourceUri: LIVE_APP_URI }, "ui/resourceUri": LIVE_APP_URI },
+  },
 ];
 
 // ---- the tools -------------------------------------------------------------------------
@@ -338,6 +348,19 @@ function compactReport(r: any, range: string, app: string | null = null) {
       both: p.both ? { alone: p.both.alone.mid, saved: p.both.saved.mid } : null, together: p.together ?? null })),
     open_url: `${where().base}/#report`,
   };
+}
+// The live tool's lines (live.ts): each call running, then those ended in the last minute, then the minute's sums.
+const tk = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(Math.round(n)));
+function liveLines(v: any): string {
+  const one = (c: any) => `${c.model?.label ?? "a model"}, ${LIVE_SOURCE[c.source] ?? c.source}, ${Math.round(((c.ended ?? v.at) - c.started) / 1000)} s: new input ${tk(c.input)}, cached ${tk(c.cached)}, thinking ${tk(c.thinking)}, written ${tk(c.written)}${c.exact ? "" : " (estimates until the provider's counts come)"}`;
+  const ended = (v.ended ?? []).filter((c: any) => v.at - c.ended < 60_000);
+  return [
+    v.running.length ? `Running now: ${v.running.length} ${v.running.length === 1 ? "call" : "calls"}, ${tk(v.rate)} tokens a second.` : "Nothing is running now.",
+    ...v.running.map((c: any, i: number) => `${i + 1}. ${one(c)}`),
+    ended.length ? "Ended in the last minute:" : "",
+    ...ended.map((c: any) => `- ${one(c)}`),
+    `The last minute: new input ${tk(v.minute.input)}, cached ${tk(v.minute.cached)}, thinking ${tk(v.minute.thinking)}, written ${tk(v.minute.written)}. Numbers only; no words are kept for this.`,
+  ].filter(Boolean).join("\n");
 }
 const text = (t: string, structured?: unknown) => ({ content: [{ type: "text", text: t }], ...(structured !== undefined ? { structuredContent: structured } : {}) });
 const failure = (t: string) => ({ content: [{ type: "text", text: t }], isError: true });
@@ -523,6 +546,10 @@ const here = (): ToolCtx => ({ client, cwd: process.cwd(), canAsk });
 export const runToolFor = (ctx: ToolCtx, name: string, args: any, signal: AbortSignal) => runTool(name, args, signal, ctx);
 async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCtx = here()): Promise<any> {
   if ((HANDS_OVER.has(name) || (name === "trial" && args?.action === "start")) && !switchedOn()) return text(OFF_TEXT, { off: true });
+  if (name === "live") {
+    const { j: v } = await call("/api/live", {}, signal);
+    return text(liveLines(v), v);
+  }
   if (name === "level") {
     const set = args?.set, scope = args?.scope ?? "chat";
     if (set !== undefined && !isLevel(set)) return failure("set is a level from 1 to 5: 1 Off, 2 Light, 3 More, 4 Most, 5 All it can.");
@@ -818,6 +845,7 @@ export async function handleMessage(msg: any, send = { reply, error }): Promise<
   if (method === "resources/list") return done({ resources: [
     { uri: PLAN_APP_URI, name: "Leanfare plan", title: "Leanfare plan", description: "The plan as a table with a Run button, for apps that show MCP Apps.", mimeType: APP_MIME },
     { uri: REPORT_APP_URI, name: "Leanfare report", title: "Leanfare report", description: "The report as a card with spans to pick, for apps that show MCP Apps.", mimeType: APP_MIME },
+    { uri: LIVE_APP_URI, name: "Leanfare live", title: "Leanfare live", description: "Live tokens as a card that keeps moving, for apps that show MCP Apps.", mimeType: APP_MIME },
   ] });
   if (method === "resources/read" && (await appNewer(false))) {
     const { j } = await call("/api/mcp/resource", { method: "POST", json: { uri: params?.uri } });
@@ -825,7 +853,7 @@ export async function handleMessage(msg: any, send = { reply, error }): Promise<
     return done({ contents: j.contents });
   }
   if (method === "resources/read") {
-    const page = params?.uri === PLAN_APP_URI ? PLAN_APP_HTML : params?.uri === REPORT_APP_URI ? REPORT_APP_HTML : null;
+    const page = params?.uri === PLAN_APP_URI ? PLAN_APP_HTML : params?.uri === REPORT_APP_URI ? REPORT_APP_HTML : params?.uri === LIVE_APP_URI ? LIVE_APP_HTML : null;
     if (!page) return send.error(id, -32002, `Leanfare has no resource ${String(params?.uri)}.`);
     return done({ contents: [{ uri: params.uri, mimeType: APP_MIME, text: page, _meta: { ui: { csp: { connectDomains: [], resourceDomains: [] }, prefersBorder: true } } }] });
   }
@@ -855,7 +883,7 @@ export async function handleMessage(msg: any, send = { reply, error }): Promise<
 
 // The app's side of a door older than it (server.ts /api/mcp/resource): the page for an MCP App's resource.
 export function resourceContents(uri: unknown): any[] | null {
-  const page = uri === PLAN_APP_URI ? PLAN_APP_HTML : uri === REPORT_APP_URI ? REPORT_APP_HTML : null;
+  const page = uri === PLAN_APP_URI ? PLAN_APP_HTML : uri === REPORT_APP_URI ? REPORT_APP_HTML : uri === LIVE_APP_URI ? LIVE_APP_HTML : null;
   return page ? [{ uri, mimeType: APP_MIME, text: page, _meta: { ui: { csp: { connectDomains: [], resourceDomains: [] }, prefersBorder: true } } }] : null;
 }
 
