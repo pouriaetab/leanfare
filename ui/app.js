@@ -3115,27 +3115,43 @@
     try { S.platforms = await api("/api/platforms", { body: { id, on } }); renderSettings(); toast(on ? "Plans and the delegate can use it again." : "Plans and the delegate leave it out now.", "done"); } catch (e) { failed(e); }
   }
 
-  // ---- Your ChatGPT plan, through Codex (Settings) ------------------------------------------------
-  // A plan's reading, drafting and working out parts on Codex (codex.ts), once you turn it on here.
+  // ---- ChatGPT, next to your apps (0.13) --------------------------------------------------------------
+  // One press: Leanfare installs Codex if it is not here, opens ChatGPT's sign in, and turns hand offs on the ChatGPT
+  // plan on once Codex says it is signed in (codex.ts). Making a ChatGPT account, in the browser, is the person's part.
   async function loadCodex(fresh) {
     try { S.codex = await api(`/api/codex${fresh ? "?fresh=1" : ""}`); } catch { S.codex = { installed: false, signedIn: false, version: null }; }
     renderSettings();
+    clearTimeout(S.codexTimer);
+    const step = S.codex?.connect?.step;
+    if (step === "installing" || step === "signing_in") S.codexTimer = setTimeout(() => loadCodex(true), 2000);
+  }
+  async function connectCodex() {
+    try { const r = await api("/api/codex/connect", { body: {} }); S.codex = { ...(S.codex || {}), connect: r.connect, on: r.on }; renderSettings(); }
+    catch (err) { toast(err.message, "error"); }
+    clearTimeout(S.codexTimer); S.codexTimer = setTimeout(() => loadCodex(true), 2000);
   }
   function codexSettingEl(s) {
     if (S.codex === undefined) { S.codex = null; loadCodex(false); }
-    const c = S.codex;
-    const v = c?.version ? ` ${c.version}` : "";
-    const status = !c ? "Looking for Codex…"
-      : !c.installed ? "Codex is not on this computer. To get it, in Terminal: npm install -g @openai/codex, then codex login (sign in with ChatGPT)."
-      : c.login === "other" ? `Codex${v} is signed in with an API key or another login, not with ChatGPT, so Leanfare does not use it: that would be billed per use. In Terminal: codex login (sign in with ChatGPT).`
-      : !c.signedIn ? `Codex${v} is here, but not signed in. In Terminal: codex login (sign in with ChatGPT).`
-      : `Codex${v} is here and signed in.`;
-    return h("div", { class: "setting", id: "codexCard" }, h("h3", { text: "Your ChatGPT plan, through Codex" }),
-      h("p", { class: "note", text: status }),
-      h("label", { class: "check" }, h("input", { type: "checkbox", checked: !!s.codexPlan, onchange: (e) => patchSettings({ codexPlan: e.target.checked }, e.target.checked ? "Plans can run reading and drafting on Codex now." : "Plans no longer use Codex.") }),
-        " Let plans run their reading, drafting and working out on Codex, before pay per use"),
-      h("p", { text: "Codex runs those parts read only, in the folder of their files, without your MCP servers, apps or plugins, and they count toward your ChatGPT plan's Codex limits; Leanfare pays nothing for them. Codex itself decides what it reads there, as when you use it. Parts that change your project stay with the app you work in. Near 85% of your ChatGPT plan's 5 hours or week, Leanfare leaves Codex alone." }),
-      runButton("Look again", () => loadCodex(true), "btn small quiet"));
+    const c = S.codex, k = (c && c.connect) || { step: "idle" };
+    const on = !!s.codexPlan && !!c?.signedIn;
+    const going = k.step === "installing" || k.step === "signing_in";
+    const line = !c ? "Looking for Codex…"
+      : k.step === "installing" ? "Installing Codex, OpenAI's tool that signs in with ChatGPT…"
+      : k.step === "signing_in" ? "Sign in to ChatGPT on the page that opened in your browser. A free account works."
+      : k.step === "failed" ? k.why
+      : on ? "Hand offs and web searches can run on your ChatGPT plan, before any paid model."
+      : c.login === "other" ? "Codex is signed in with an API key, which bills per use. In Terminal: codex logout, then press Connect."
+      : c.signedIn ? "Codex is signed in with ChatGPT: turn it on to hand work to your ChatGPT plan."
+      : "Hand reading, drafting and web searches to your ChatGPT plan. A free account works.";
+    const btn = going ? null
+      : on ? h("button", { class: "btn small", type: "button", text: "Turn off", onclick: () => patchSettings({ codexPlan: false }, "ChatGPT is no longer used for hand offs.") })
+      : c?.signedIn ? h("button", { class: "btn small primary", type: "button", text: "Turn on", onclick: () => patchSettings({ codexPlan: true }, "Hand offs can run on your ChatGPT plan now.") })
+      : h("button", { class: "btn small primary", type: "button", text: "Connect", onclick: connectCodex });
+    return h("div", { class: "app-row", id: "codexCard" },
+      h("div", { class: "row" }, h("span", { class: "grow" }, h("b", { text: "ChatGPT" }), h("span", { class: "note", text: !c ? " · looking" : on ? " · connected" : going ? " · connecting" : c.signedIn ? " · signed in" : " · not connected" })), btn),
+      h("div", { class: "note", text: line }),
+      k.step === "signing_in" && k.url ? h("div", { class: "note" }, "No page opened? ", h("a", { href: k.url, target: "_blank", rel: "noopener", text: "Sign in to ChatGPT" }), ".") : null,
+      h("details", { class: "more" }, h("summary", { text: "Details" }), h("p", { class: "note", text: "Codex runs those parts read only, in the folder of their files, without your MCP servers, apps or plugins, and they count toward your ChatGPT plan's Codex limits; Leanfare pays nothing for them. Codex itself decides what it reads there, as when you use it. Parts that change your project stay with the app you work in. Near 85% of your ChatGPT plan's 5 hours or week, Leanfare leaves Codex alone." })));
   }
 
   // ---- How the models did for you (Settings) ---------------------------------------------------------
@@ -3433,6 +3449,7 @@
     const right = h("div", { class: "colR" },
       h("div", { class: "section-title", text: "In your apps" }),
       appsSettingEl(),
+      h("div", { class: "setting workers", id: "workersSetting" }, h("h3", { text: "Hand work to your other AI plans" }), codexSettingEl(s)),
       h("div", { class: "section-title", text: "Choices" }),
       levelSettingEl(s), keepSettingEl(s),
       h("div", { class: "setting" }, h("h3", { text: "How Auto picks" }), modeSeg,
@@ -3445,7 +3462,7 @@
         h("div", { class: "seg", role: "group", "aria-label": "Thinking effort" }, ...[["auto", "Model's default"], ["low", "Low"], ["medium", "Medium"], ["high", "High"]].map(([k, label]) =>
           h("button", { type: "button", "aria-pressed": String((s.effort ?? "auto") === k), text: label, onclick: () => patchSettings({ effort: k }, k === "auto" ? "Thinking models think as they do by default." : `Thinking effort: ${label.toLowerCase()}.`) }))),
         h("p", { text: "For models that think before they answer, at the levels each one takes. Thinking is billed as output, so a higher effort costs more and takes longer; the estimate learns from your answers at each level." })),
-      planCapSettingEl(s), jobsSettingEl(s), platformsSettingEl(), codexSettingEl(s), reviewSettingEl(s), gradesSettingEl(), sideBySideSettingEl(s), whoWroteSettingEl(s),
+      planCapSettingEl(s), jobsSettingEl(s), platformsSettingEl(), reviewSettingEl(s), gradesSettingEl(), sideBySideSettingEl(s), whoWroteSettingEl(s),
       h("div", { class: "setting" }, h("h3", { text: "Your usual model" }), usualSel,
         h("p", { text: "The model you would use without Leanfare. Savings are measured against it." })),
       h("div", { class: "setting", id: "budgetSetting" }, h("h3", { text: "Monthly budget" }),

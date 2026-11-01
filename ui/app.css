@@ -626,6 +626,8 @@ main { flex: 1 1 auto; min-height: 0; position: relative; }
 .prov-body input[type="url"], .prov-body input[type="text"] { flex: 1; min-width: 0; }
 .apps .app-row { border-top: 1px solid var(--line); padding: 8px 0 2px; }
 .apps .app-row:first-of-type { border-top: 0; }
+.workers .app-row { padding: 4px 0 2px; }
+.workers details.more summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .apps .manual code { word-break: break-all; }
 
 /* The delegate trial (Savings) */
