@@ -12,6 +12,7 @@ export let win: any = null;
 export async function closeApp() {
   const w = win;
   win = null;
+  try { w?.__streams?.abort(); } catch {} // ends its streams still open (Savings' Live card reads one), as a closed tab does
   try { await w?.happyDOM?.abort(); } catch {} // ends the page's timers (window.close() does not)
 }
 
@@ -26,7 +27,8 @@ export async function openApp(url: string, opts: { screen?: string | null; width
   const doc = w.document;
   doc.write(html.replace(/<script[^>]*><\/script>/g, "")); // the page's scripts run below, theme.js's job included
   // A closed page sends nothing more: its next request never leaves, and nothing waits on it.
-  const f = (path: string, opts: any = {}) => (win === w ? fetch(new URL(path, url), opts) : new Promise<Response>(() => {}));
+  const streams = new AbortController(); w.__streams = streams;
+  const f = (path: string, opts: any = {}) => (win === w ? fetch(new URL(path, url), String(path).includes("/stream") ? { ...opts, signal: streams.signal } : opts) : new Promise<Response>(() => {}));
   const run = new Function("window", "document", "localStorage", "fetch", "matchMedia", "requestAnimationFrame", "navigator", "location", "Event", "AbortController", "TextDecoder", "Element", "DocumentFragment", "Node", "setTimeout", "setInterval", "clearTimeout", appJs);
   run(win, doc, win.localStorage, f, win.matchMedia.bind(win), (cb: any) => setTimeout(() => cb(Date.now()), 16), win.navigator, win.location, win.Event, AbortController, TextDecoder, win.Element, win.DocumentFragment, win.Node, win.setTimeout.bind(win), win.setInterval.bind(win), win.clearTimeout.bind(win));
   for (let i = 0; i < 100 && !doc.querySelector("textarea"); i++) await Bun.sleep(30);
