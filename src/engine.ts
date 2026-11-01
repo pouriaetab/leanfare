@@ -15,6 +15,7 @@ import { addSpent, budgetState, release, tryReserve, wouldFit } from "./budget";
 import { failOfStatus, failOfText, type FailKind } from "./fails";
 import { noteFailure, restOf, restText } from "./rest";
 import { SAYS_GONE, noQuota, noQuotaNow, noQuotaText, noteRefusal } from "./quota";
+import { needsCredit, notNowWhy, unsteady, usedUp } from "./allowance";
 import { fitsFree, onFreePlan } from "./freeplans";
 import { learnedShift } from "./learn";
 import { EFFORT_REFUSED, NO_EFFORT, RESPONSES_PATH, ResponsesStreamTranslator, responsesToOpenAI, toResponses } from "./upstream";
@@ -43,10 +44,11 @@ export function notReadyMessage(id: ProviderId): string {
   return `There is no ${def.name} key in Leanfare yet. Add one in Settings at http://127.0.0.1:${runtime.port}.`;
 }
 
-// The models Auto, plans, checks and side by side may use: ticked, their provider ready, still served, and not one your key
-// has no quota for (quota.ts). A model you name yourself is asked anyway.
+// The models Auto, plans, checks and side by side may use: ticked, their provider ready, still served, not one your key
+// has no quota for (quota.ts), not a paid only one on a free key, and not one whose free allowance for today is used up
+// (allowance.ts). A model you name yourself is asked anyway.
 export function usableModels(only?: (m: Model) => boolean): Model[] {
-  return settings().ticked.map((id) => getModel(id)).filter((m): m is Model => !!m && providerReady(m.provider) && served(m) && !noQuota(m.id) && (!only || only(m)));
+  return settings().ticked.map((id) => getModel(id)).filter((m): m is Model => !!m && providerReady(m.provider) && served(m) && !noQuota(m.id) && !needsCredit(m) && !usedUp(m) && (!only || only(m)));
 }
 
 // A provider you have but ticked none of the models of (a key just added, Ollama just found, or Set up's
@@ -294,8 +296,8 @@ export async function plan(input: PlanInput): Promise<Plan> {
   let inMargin: Model[] = []; // Auto: the models at the same quality, cheapest first, for when the pick would pass the budget
   if (amode) {
     const all = usableModels(only);
-    // A model resting after failing too often is left out while another can take it (rest.ts).
-    const awake = all.filter((m) => !restOf(m.id));
+    // A model resting after failing too often, or unsteady today (allowance.ts), is left out while another can take it.
+    const awake = all.filter((m) => !restOf(m.id) && !unsteady(m.id));
     const usable = awake.length ? awake : all;
     if (!usable.length && extra && usableModels(base).length) throw new UserError(400, input.onlyWhy ?? "None of the models you ticked can take this request.", "no_model_fits");
     if (!usable.length && usableModels(base).length) {
@@ -306,6 +308,9 @@ export async function plan(input: PlanInput): Promise<Plan> {
     if (!usable.length && mediaWords && usableModels(byAddress).length) {
       throw new UserError(400, `None of the models you ticked takes ${mediaWords} through Leanfare. In Settings, tick one that does: ${media.pdfs ? "a Claude or GPT model reads PDFs" : "most Claude, GPT and Gemini models see images"}.`, "unsupported_attachment");
     }
+    // Every model that could take it has used its free allowance for today, or needs credit: say so, and when it comes back.
+    const spent = usable.length ? [] : settings().ticked.map((id) => getModel(id)).filter((m): m is Model => !!m && providerReady(m.provider) && served(m) && !noQuota(m.id) && (!only || only(m)) && (usedUp(m) || needsCredit(m)));
+    if (spent.length) throw new UserError(400, `${spent.map((m) => `${m.label}: ${notNowWhy(m)}`).slice(0, 3).join("; ")}. The work stays with your app until then, or tick another model.`, "no_model_ready");
     // Every model that could take it is one your key has no quota for: say which, and what to do.
     const leftOut = usable.length ? [] : noQuotaNow().filter((q) => settings().ticked.includes(q.model)).filter((q) => { const m = getModel(q.model); return !!m && (!only || only(m)); });
     if (leftOut.length) throw new UserError(400, `${noQuotaText(leftOut[0], provider(leftOut[0].provider as ProviderId)?.name)}. Tick another model, or press Try again next to it in Settings.`, "no_model_ready");
@@ -327,8 +332,10 @@ export async function plan(input: PlanInput): Promise<Plan> {
     if (p && awake.length && awake.length < all.length) {
       const would = pick(all);
       const r = would && would.model.id !== p.model.id ? restOf(would.model.id) : null;
+      const u = would && would.model.id !== p.model.id && !r ? unsteady(would.model.id) : null;
       if (r) notes.push(`${restText(r)}, so Auto picked ${p.model.label}.`);
-    } else if (p && !awake.length) notes.push("Every model you ticked for this is resting after failing too often lately, so Auto tries them anyway.");
+      else if (u) notes.push(`${would!.model.label} is unsteady today (${u.why}), so Auto picked ${p.model.label}.`);
+    } else if (p && !awake.length) notes.push(all.some((m) => !restOf(m.id) && unsteady(m.id)) ? "Every model you ticked for this is resting or unsteady lately, so Auto tries them anyway." : "Every model you ticked for this is resting after failing too often lately, so Auto tries them anyway.");
     if (p) {
       model = p.model; guess = p.guess; reason = p.reason;
       candidates = p.candidates.map((c) => c.model);

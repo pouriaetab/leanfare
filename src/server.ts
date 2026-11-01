@@ -37,6 +37,7 @@ import { setSelf } from "./client";
 import { checkReport, report } from "./report";
 import { askModels, askReport, checkAsk } from "./askreport";
 import { liveVersion, liveView } from "./live";
+import { notNowWhy } from "./allowance";
 import { checkPlan, gradePart, keptPlan, makePlan, nextStarted, runView, startRun, stopAllRuns, stopRun, tookAnswers } from "./planner";
 import { setAuto } from "./workers";
 import { setUp, setupView } from "./setup";
@@ -93,6 +94,8 @@ function modelView(m: Model, ticked: Set<string>, day: string) {
     retire: m.retire, retired: isRetired(m, day), retiringSoon: retiresWithin(m, day, 30),
     reasoning: m.skills.includes("reasoning"), vision: takesImages(m), pdf: takesPdfs(m), effort: effortLevels(m),
     context: m.context, added: m.added,
+    // A ticked model Auto does not use now: needs credit on a free key, or its free allowance for today is used (allowance.ts).
+    notNow: ticked.has(m.id) ? notNowWhy(m) : null,
   };
 }
 

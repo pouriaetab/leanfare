@@ -799,11 +799,16 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
     const ticked = new Set<string>(st.settings.ticked);
     const ready = new Set<string>(st.providers.filter((p: any) => p.ready).map((p: any) => p.id));
     const want = typeof args?.provider === "string" ? args.provider.toLowerCase() : null;
-    const rows = (Object.values(st.models).flat() as any[]).filter((m) => ticked.has(m.id) && ready.has(m.provider) && !m.retired && (!want || m.provider === want));
-    if (!rows.length) return text(want ? `No ticked, ready models from ${want}.` : "No models are ready. Add a key in Leanfare's Settings and tick some models.", { models: [] });
+    const mineAll = (Object.values(st.models).flat() as any[]).filter((m) => ticked.has(m.id) && ready.has(m.provider) && (!want || m.provider === want));
+    // Retired, needing credit, its free allowance used for today, or no quota on the key: said apart, never as usable now.
+    const gone = new Set<string>((st.noQuota ?? []).map((q: any) => q.model));
+    const rows = mineAll.filter((m) => !m.retired && !m.notNow && !gone.has(m.id));
+    const leftOut = mineAll.filter((m) => !rows.includes(m)).map((m) => ({ id: m.id, label: m.label, why: m.retired ? "retired by its provider" : m.notNow ?? "your key has no quota for it" }));
+    if (!rows.length) return text(want ? `No ticked, ready models from ${want}.` : "No models are ready. Add a key in Leanfare's Settings and tick some models.", { models: [], left_out: leftOut });
     const per = (v: number | null) => (v === null ? "?" : `$${v}`);
-    return text(rows.map((m) => `${m.id}: ${m.label}, ${m.local || m.free ? "free" : `${per(m.input)} in / ${per(m.output)} out per 1M tokens`}${m.rating ? `, rated ${Math.round(m.rating)}` : ""}`).join("\n"),
-      { models: rows.map((m) => ({ id: m.id, label: m.label, provider: m.provider, input_per_m: m.input, output_per_m: m.output, rating: m.rating })) });
+    const notes = leftOut.length ? `\n\nTicked but not used now:\n${leftOut.map((m) => `${m.id}: ${m.label}, ${m.why}`).join("\n")}` : "";
+    return text(rows.map((m) => `${m.id}: ${m.label}, ${m.local || m.free ? "free" : `${per(m.input)} in / ${per(m.output)} out per 1M tokens`}${m.rating ? `, rated ${Math.round(m.rating)}` : ""}`).join("\n") + notes,
+      { models: rows.map((m) => ({ id: m.id, label: m.label, provider: m.provider, input_per_m: m.input, output_per_m: m.output, rating: m.rating })), left_out: leftOut });
   }
   if (name === "estimate") {
     if (typeof args?.prompt !== "string" || !args.prompt.trim()) return failure("estimate needs a prompt.");

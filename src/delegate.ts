@@ -17,6 +17,7 @@
 // Each task is written to the delegations table with the chance it had of being checked,
 // so pass rates can be weighted back to every task. No words are kept there or in the
 // ledger: only models, verdicts, token counts and costs.
+import { notNowWhy, unsteady } from "./allowance";
 import { keepWords, pruneWords } from "./words";
 import { isLevel, LEVEL_CHECKS, levelFor, type Level } from "./level";
 import { planMode } from "./modes";
@@ -423,12 +424,16 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   // (localpass.ts), when nothing is named and Auto is to be the cheapest: it is free.
   const local = !input.model && !input.trial && input.kind === "read" && input.effort !== "high" && (input.speed ?? settings().speed) === "cheapest" ? passedLocal(within((m) => doFit.ok(m) && !restOf(m.id))) : null;
   const named = input.model ? getModel(input.model) ?? null : local;
-  // A plan's model resting after failing too often (rest.ts) gives the part to Auto, while another model can take it.
+  // A plan's model resting after failing too often (rest.ts), or unsteady today (allowance.ts), gives the part to Auto,
+  // while another model can take it.
   const namedRest = named && input.model ? restOf(named.id) : null;
-  const othersUp = !!namedRest && usableModels(within((m) => doFit.ok(m) && m.id !== named!.id && !restOf(m.id))).length > 0;
-  const namedOk = !!named && usableModels(within(doFit.ok)).some((m) => m.id === named.id) && !(namedRest && othersUp);
+  const namedShaky = named && input.model && !namedRest ? unsteady(named.id) : null;
+  const othersUp = !!(namedRest || namedShaky) && usableModels(within((m) => doFit.ok(m) && m.id !== named!.id && !restOf(m.id) && !unsteady(m.id))).length > 0;
+  const namedOk = !!named && usableModels(within(doFit.ok)).some((m) => m.id === named.id) && !((namedRest || namedShaky) && othersUp);
   let swap: string | null = input.model && !namedOk
     ? namedRest && othersUp ? `The plan named ${named!.label}, but ${restText(namedRest).replace(/^.*? is resting/, "it is resting")}, so Auto picked another.`
+      : namedShaky && othersUp ? `The plan named ${named!.label}, but it is unsteady today (${namedShaky.why}), so Auto picked another.`
+      : named && notNowWhy(named) ? `The plan named ${named.label}, but ${notNowWhy(named)}, so Auto picked another.`
       : named && noQuota(named.id) ? `The plan named ${named.label}, but ${noQuotaWhy(noQuota(named.id)!, provider(named.provider)?.name)}, so Auto picked another.`
       : `The plan named ${named?.label ?? input.model}, which cannot take it here now, so Auto picked another.`
     : null;
