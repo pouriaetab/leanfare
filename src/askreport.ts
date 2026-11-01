@@ -60,7 +60,8 @@ function promptLines(p: ReportPrompt): string {
 
 // The report as lines a model can read: what it covers, the sums (worked out here, so a small model need not add),
 // then each prompt, newest first, as many as fit.
-export function promptsText(r: Report, room: number): { text: string; shown: number; total: number } {
+export const CUT_NOTE = "  (cut here: this prompt is longer than the model can read at once)";
+export function promptsText(r: Report, room: number): { text: string; shown: number; total: number; cut: boolean } {
   const total = r.prompts.length + r.more;
   const parts = r.prompts.flatMap((p) => p.parts);
   const grades = (g: string) => parts.filter((x) => x.grade === g).length;
@@ -70,14 +71,22 @@ export function promptsText(r: Report, room: number): { text: string; shown: num
     "Each prompt: its id, time, app, project, the app's own model, then each part it handed off (where it ran, tokens, cost, grade), with its task and answer when they are kept.",
   ].join("\n");
   const lines: string[] = [];
-  let used = head.length;
+  let used = head.length + 120, cut = false; // with room for the line that says how many were shown
   for (const p of [...r.prompts].sort((a, b) => b.ts.localeCompare(a.ts))) {
-    const t = promptLines(p);
-    if (used + t.length + 2 > room && lines.length) break;
+    let t = promptLines(p);
+    if (used + t.length + 2 > room) {
+      if (lines.length) break;
+      // The newest prompt alone is longer than the model can read: its first whole lines that fit, and a note, so the
+      // ask still answers (before, it failed as too much text).
+      const fit = t.slice(0, Math.max(0, room - used - CUT_NOTE.length - 2));
+      t = `${fit.includes("\n") ? fit.slice(0, fit.lastIndexOf("\n")) : fit}\n${CUT_NOTE}`;
+      cut = true;
+    }
     lines.push(t); used += t.length + 2;
   }
   const more = total - lines.length;
-  return { text: `${head}\n${more > 0 ? `Shown: the newest ${lines.length} prompts; ${more} older ones did not fit.\n` : ""}\n${lines.join("\n\n")}\n`, shown: lines.length, total };
+  const shownLine = more > 0 ? `Shown: the newest ${lines.length} ${lines.length === 1 ? "prompt" : "prompts"}${cut ? ", cut to fit" : ""}; ${more} older ${more === 1 ? "one" : "ones"} did not fit.\n` : cut ? "Shown: the prompt, cut to fit.\n" : "";
+  return { text: `${head}\n${shownLine}\n${lines.join("\n\n")}\n`, shown: lines.length, total, cut };
 }
 
 export function checkAsk(b: any): { question: string; q: URLSearchParams; model: string | null } | string {
@@ -105,7 +114,7 @@ export async function askReport(a: { question: string; q: URLSearchParams; model
   }
   const r = await report(q);
   if (!r.prompts.length) throw new UserError(400, "There are no prompts in this span to ask about. Pick a longer span or other filters.");
-  const { text, shown, total } = promptsText(r, Math.min(MOST, room));
+  const { text, shown, total, cut } = promptsText(r, Math.min(MOST, room));
   const task = `Answer the user's question about their prompts from Leanfare's report in prompts.txt: the numbers, models and grades of each prompt and of the parts it handed off, and their kept words when there are any. Answer only from that file, and say so when it does not hold the answer. Name prompt ids (like PRM-41) when you point to prompts. Keep it short: a few lines or a short list.\n\nThe question: ${a.question}`;
   const ac = new AbortController();
   const stop = () => ac.abort();
@@ -113,7 +122,7 @@ export async function askReport(a: { question: string; q: URLSearchParams; model
   const timer = setTimeout(stop, TIMEOUT);
   try {
     const res = await runDelegate({ task, files: [{ name: "prompts.txt", text }], kind: "read", effort: "low", check: "never", maxOut: OUT, private: !a.model, model: a.model ?? undefined, only, app: "Leanfare", as: "ask" }, ac.signal);
-    return { answer: res.answer, model: { id: res.model.id, label: res.model.label }, local: !!getModel(res.model.id)?.local, cost: res.cost, seconds: Math.round(res.seconds * 10) / 10, shown, total };
+    return { answer: res.answer, model: { id: res.model.id, label: res.model.label }, local: !!getModel(res.model.id)?.local, cost: res.cost, seconds: Math.round(res.seconds * 10) / 10, shown, total, cut };
   } catch (e: any) {
     if (ac.signal.aborted && !signal.aborted) throw new UserError(504, "The model took too long to answer. Ask a shorter question, pick a shorter span, or pick a faster model.");
     throw e;
