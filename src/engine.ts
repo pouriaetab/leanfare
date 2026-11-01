@@ -17,7 +17,7 @@ import { noteFailure, restOf, restText } from "./rest";
 import { SAYS_GONE, noQuota, noQuotaNow, noQuotaText, noteRefusal } from "./quota";
 import { fitsFree, onFreePlan } from "./freeplans";
 import { learnedShift } from "./learn";
-import { RESPONSES_PATH, ResponsesStreamTranslator, responsesToOpenAI, toResponses } from "./upstream";
+import { EFFORT_REFUSED, NO_EFFORT, RESPONSES_PATH, ResponsesStreamTranslator, responsesToOpenAI, toResponses } from "./upstream";
 import { AnthropicStreamTranslator, UserError, anthropicDefaultMax, anthropicToOpenAI, effortFor, headersFor, networkError, ollamaChunks, ollamaPlain, ollamaToOpenAI, openaiBody, plainError, thinkRoom, toAnthropic, toOllama } from "./upstream";
 import { SSEParser, dollars, localDay, localMonth, median, now, providerMessage, randomId, redact, usd8 } from "./util";
 import { takesImages, takesPdfs } from "./files";
@@ -531,7 +531,14 @@ async function sendWithFallback(p: Plan, source: string, body: any, stream: bool
     }
     const t0 = performance.now();
     try {
-      const res = await send(m, body, stream, signal, native, extraHeaders, p.capOverride ?? (p.capped ? outCap(m) : null), p.effortAsked);
+      let res = await send(m, body, stream, signal, native, extraHeaders, p.capOverride ?? (p.capped ? outCap(m) : null), p.effortAsked);
+      // A provider that refuses the thinking effort it was sent: the same model, asked once more without it, and never
+      // sent one again (upstream.ts: NO_EFFORT).
+      if (res.status === 400 && effortFor(m, p.effortAsked) && EFFORT_REFUSED.test(await res.clone().text().catch(() => ""))) {
+        NO_EFFORT.add(m.id);
+        p.notes.push(`${m.label} does not take a thinking effort, so Leanfare asked it again without one.`);
+        res = await send(m, body, stream, signal, native, extraHeaders, p.capOverride ?? (p.capped ? outCap(m) : null), p.effortAsked);
+      }
       const type = res.headers.get("content-type") ?? "";
       if (res.ok && !/text\/html/i.test(type)) return { res, model: m, t0 };
       const text = await res.text();

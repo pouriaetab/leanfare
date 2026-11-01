@@ -26,7 +26,11 @@ export function headersFor(def: ProviderDef, key: string | null): Record<string,
 // thinks as it does by default.
 // Providers Leanfare sends an effort to (DeepSeek, Mistral and Ollama decide for themselves).
 const EFFORT_PROVIDERS = new Set(["openai", "google", "xai", "openrouter", "anthropic"]);
-export const effortLevels = (m: Model): string[] => (EFFORT_PROVIDERS.has(m.provider) ? m.effort ?? [] : []);
+// A model whose provider refused a thinking effort (Google, 1 Nov 2026: "Thinking level is not supported for this model",
+// though the price list said it takes one) is sent none from then on, while the app runs (engine.ts: sendWithFallback).
+export const NO_EFFORT = new Set<string>();
+export const EFFORT_REFUSED = /\b(thinking|reasoning)\b[^.\n]{0,40}\b(not supported|unsupported|isn't supported|not available)|\bdoes not support (thinking|reasoning)/i;
+export const effortLevels = (m: Model): string[] => (EFFORT_PROVIDERS.has(m.provider) && !NO_EFFORT.has(m.id) ? m.effort ?? [] : []);
 export function effortFor(m: Model, level: string | null | undefined): string | null {
   if (!level || level === "auto") return null;
   return effortLevels(m).includes(level) ? level : null;

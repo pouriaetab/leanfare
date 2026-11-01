@@ -64,6 +64,7 @@ export async function reset(patch: Partial<Settings> = {}) {
   for (const id of Object.keys(KEYS)) await removeKey(id as any);
   fake.seen.length = 0;
   fake.hooks.answer = null;
+  fake.hooks.refuse = null;
   fake.hooks.fail = null;
   fake.hooks.slow = null;
   Object.assign(fake.oauth, { expireNext: false, deny: false, failExchange: 0, failMessage: "fake failure", badKey: false, credits: true });
