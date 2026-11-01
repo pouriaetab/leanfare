@@ -109,6 +109,7 @@ export function startFake() {
     answer: null as null | ((prompt: string, provider: string, model: string) => string | null),
     fail: null as null | ((prompt: string, provider: string) => number | null),
     slow: null as null | ((prompt: string, provider: string) => number), // milliseconds to wait before answering
+    refuse: null as null | ((body: any, provider: string) => { status: number; message: string } | null), // an error with the provider's own words
   };
   const onceSeen = new Set<string>();
   // OpenRouter's sign in: /openrouter/auth shows the "Authorize" step and sends the browser back with a
@@ -268,6 +269,8 @@ export function startFake() {
       if (!keyOk) return Response.json({ error: { message: "wrong key for this provider" } }, { status: 401 });
 
       const text = promptText(body);
+      const refused = hooks.refuse?.(body, provider);
+      if (refused) return Response.json({ error: { message: refused.message } }, { status: refused.status });
       const fail = hooks.fail?.(text, provider) ? [hooks.fail(text, provider)!] : directive(text, "fail", provider);
       if (fail?.[0]) return Response.json({ error: { message: `fake failure ${fail[0]}` } }, { status: fail[0] });
       const zero = /\[quota0(?:@([a-z]+))?(?: ([\w.:\/-]+))?\]/.exec(text);
