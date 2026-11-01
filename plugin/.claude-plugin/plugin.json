@@ -1,0 +1,11 @@
+{
+  "name": "leanfare",
+  "displayName": "Leanfare",
+  "version": "0.12.0",
+  "description": "Hands reading, drafting and checks to cheaper models you pick, so your Claude plan lasts longer, and shows what it saved. Needs the free Leanfare app on your computer.",
+  "author": { "name": "pouriaetab" },
+  "homepage": "https://github.com/pouriaetab/leanfare",
+  "repository": "https://github.com/pouriaetab/leanfare",
+  "license": "MIT",
+  "keywords": ["tokens", "cost", "delegate", "models", "ollama", "usage"]
+}

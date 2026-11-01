@@ -1,0 +1,11 @@
+{
+  "name": "leanfare",
+  "owner": { "name": "pouriaetab" },
+  "plugins": [
+    {
+      "name": "leanfare",
+      "source": "./plugin",
+      "description": "Hands reading, drafting and checks to cheaper models you pick, so your Claude plan lasts longer. Needs the free Leanfare app on your computer."
+    }
+  ]
+}
