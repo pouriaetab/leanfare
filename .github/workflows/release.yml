@@ -3,7 +3,8 @@ name: release
 # Builds Leanfare as one file for each kind of computer, checks that each build starts and serves
 # its screens (Linux, Linux on Arm, macOS on Apple silicon and Intel, Windows), attaches the
 # archives and their checksums to the release, and only then publishes it, so the installers
-# never meet a release without its files.
+# never meet a release without its files. Since 0.12 also a one-click .mcpb bundle for each
+# computer Claude Desktop runs on, and server.json for the official MCP Registry (scripts/mcpb.ts).
 #
 #   gh release create v0.4.0 --draft --target main --title "..." --notes-file release.md
 #   gh workflow run release.yml -f tag=v0.4.0        (notes/ship.sh does both)
@@ -50,6 +51,7 @@ jobs:
           bun-version: 1.4.3
       - run: bun install --frozen-lockfile
       - run: bun scripts/compile.ts --check
+      - run: bun scripts/mcpb.ts
       - uses: actions/upload-artifact@v4
         with:
           name: dist
@@ -73,6 +75,14 @@ jobs:
           for i in $(seq 1 100); do curl -fs http://127.0.0.1:4791/healthz >/dev/null && break; sleep 0.2; done
           curl -fs http://127.0.0.1:4791/ | grep -q "<title>Leanfare"
           kill %1
+      - name: The one-click bundle holds the program, and its MCP door answers
+        run: |
+          mkdir b && unzip -q dist/leanfare-darwin-arm64.mcpb -d b
+          test "$(jq -r .server.mcp_config.command b/manifest.json)" = '${__dirname}/server/leanfare'
+          b/server/leanfare --version | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$'
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+            | LEANFARE_DATA_DIR="$PWD/data-mcpb" LEANFARE_NO_OPEN=1 LEANFARE_KEYSTORE=file LEANFARE_PORT=4792 b/server/leanfare mcp > door.jsonl
+          grep -q '"name":"leanfare"' door.jsonl && grep -q '"name":"delegate"' door.jsonl
       - name: The Intel build starts (through Rosetta, where this runner has it)
         run: |
           mkdir i && tar -xzf dist/leanfare-darwin-x64.tar.gz -C i
@@ -140,13 +150,14 @@ jobs:
           WINDOWS_OK: ${{ needs.check-windows.outputs.ok }}
         run: |
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null || { echo "There is no release $TAG yet: make it (a draft is fine), then run this again."; exit 1; }
-          files="dist/leanfare-darwin-arm64.tar.gz dist/leanfare-darwin-x64.tar.gz dist/leanfare-linux-x64.tar.gz dist/leanfare-linux-arm64.tar.gz"
-          if [ "$WINDOWS_OK" = true ]; then files="$files dist/leanfare-windows-x64.zip"
+          files="dist/leanfare-darwin-arm64.tar.gz dist/leanfare-darwin-x64.tar.gz dist/leanfare-linux-x64.tar.gz dist/leanfare-linux-arm64.tar.gz dist/leanfare-darwin-arm64.mcpb dist/leanfare-darwin-x64.mcpb"
+          if [ "$WINDOWS_OK" = true ]; then files="$files dist/leanfare-windows-x64.zip dist/leanfare-windows-x64.mcpb"
           else
-            echo "::warning::The Windows check failed: its file stays off this release."
-            grep -v "leanfare-windows-x64.zip" dist/SHA256SUMS > dist/SHA256SUMS.tmp && mv dist/SHA256SUMS.tmp dist/SHA256SUMS
+            echo "::warning::The Windows check failed: its files stay off this release."
+            grep -v "leanfare-windows-x64" dist/SHA256SUMS > dist/SHA256SUMS.tmp && mv dist/SHA256SUMS.tmp dist/SHA256SUMS
+            jq '.packages |= map(select(.identifier | contains("windows") | not))' dist/server.json > dist/server.json.tmp && mv dist/server.json.tmp dist/server.json
           fi
-          gh release upload "$TAG" $files dist/SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload "$TAG" $files dist/SHA256SUMS dist/server.json --clobber --repo "$GITHUB_REPOSITORY"
           if [ "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true ]; then
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --target "$GITHUB_SHA"
             echo "Published $TAG at $GITHUB_SHA, with its files."
