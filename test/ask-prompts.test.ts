@@ -1,7 +1,7 @@
 // 0.12, ask about these prompts (askreport.ts): a question over Savings' span and filters, read by a model on this
 // computer unless you pick another of yours; it keeps no row and nothing of the question or the answer.
 import { afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
-import { promptsText } from "../src/askreport";
+import { CUT_NOTE, promptsText } from "../src/askreport";
 import { draw } from "../src/delegate";
 import { db } from "../src/db";
 import { saveSettings } from "../src/settings";
@@ -70,6 +70,21 @@ test("only the newest prompts that fit are sent, and the text says how many were
   expect(t.text).toContain(`Shown: the newest ${t.shown} prompts; ${50 - t.shown} older ones did not fit.`);
   expect(t.text).toContain("PRM-49"); // the newest first
   expect(t.text).not.toContain("PRM-0 ");
+});
+
+test("a newest prompt longer than the model's room is cut to its first whole lines, with a note, not refused", () => {
+  const part = (i: number) => ({ id: i, ref: `PRM-9.${i}`, ts: "2026-10-21T10:00:00Z", kind: "read", model: "x/y", label: "Some Model", provider: "x", where: "free", read: 50_000, back: 300, cost: 0, ms: 4000, grade: "good", gradedBy: "app", check: null, checker: null, side: null, plan: "P1", used: null, both: { alone: { mid: 1, low: 1, high: 1 }, spent: 1, saved: { mid: 1, low: 1, high: 1 }, how: "outside" }, together: null, togetherBy: null, level: 4, fixed: null, fixOf: null, words: false, alone: null });
+  const big: any = { key: "9", id: "PRM-9", ts: "2026-10-21T10:00:00Z", app: "Claude Code", thread: null, project: "app", model: null, plan: null, prompt: 1000, own: null, parts: Array.from({ length: 200 }, (_, i) => part(i + 1)), kept: 0, back: 0, cost: 0, saved: null, grade: null, used: null, both: null, together: null, togetherBy: null, alone: null };
+  const r: any = { from: "2026-10-21T00:00:00Z", to: "2026-10-21T12:00:00Z", prompts: [big], more: 0 };
+  const t = promptsText(r, 4000);
+  expect([t.shown, t.total, t.cut]).toEqual([1, 1, true]);
+  expect(t.text.length).toBeLessThanOrEqual(4000);
+  expect(t.text).toContain("Shown: the prompt, cut to fit.");
+  expect(t.text).toContain("PRM-9 · ");
+  expect(t.text.trimEnd().endsWith(CUT_NOTE.trim())).toBe(true);
+  expect(t.text).not.toContain("PRM-9.200"); // the last parts did not fit
+  // Room enough: nothing is cut.
+  expect(promptsText(r, 1_000_000).cut).toBe(false);
 });
 
 test("Savings: the ask box, its sample questions, and the answer with who answered", async () => {
