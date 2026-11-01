@@ -1776,7 +1776,13 @@
       pick("All kinds", "kind", keep(o.kinds.map((k) => [k, RP_KIND[k] ?? k]), q.kind)),
       pick("All threads", "thread", keep(o.threads.map((t) => [t.id, `${t.project ?? "Claude Code"} · ${new Date(t.first).toLocaleDateString(undefined, { month: "short", day: "numeric" })} (${t.prompts})`]), q.thread)),
       h("span", { class: "grow" }),
-      d?.prompts?.length ? h("button", { class: "btn small", type: "button", text: "Export CSV", onclick: () => download(`leanfare-report-${new Date().toISOString().slice(0, 10)}.csv`, reportCsv(d), "text/csv") }) : null);
+      d?.prompts?.length ? h("button", { class: "btn small", type: "button", text: "Export CSV", onclick: () => download(`leanfare-report-${new Date().toISOString().slice(0, 10)}.csv`, reportCsv(d), "text/csv") }) : null,
+      d?.prompts?.some((p) => p.parts.some((x) => x.words)) ? h("button", { class: "btn small", type: "button", text: "Export CSV with the words", onclick: async () => {
+        const ids = d.prompts.flatMap((p) => p.parts.filter((x) => x.words).map((x) => x.id));
+        let words = {};
+        try { words = (await api(`/api/words?handoffs=${ids.join(",")}`)).words; } catch {}
+        download(`leanfare-report-words-${new Date().toISOString().slice(0, 10)}.csv`, reportCsv(d, words), "text/csv");
+      } }) : null);
     const body = S.report.error ? h("div", { class: "empty", text: `The report could not be read: ${S.report.error}` })
       : !d ? h("div", { class: "empty", text: "Reading the report…" })
       : !d.prompts.length && !d.speed?.length ? h("div", { class: "empty", text: "Nothing in this span yet. Hand offs and plan parts from your apps, and Claude Code's prompts, show here." })
@@ -2098,7 +2104,8 @@
       if (!open) continue;
       p.parts.forEach((x, i) => rows.push(h("tr", { class: "part" },
         h("td", { class: "ind pid", text: x.ref ?? `${i + 1}` }), h("td", { class: "when", text: when(x.ts) }),
-        h("td", {}, `${(RP_KIND[x.kind] ?? x.kind ?? "part").toLowerCase()} · ${x.label}`, h("span", { class: "tiny", text: `${RP_WHERE[x.where]}${secs(x.ms)}` })),
+        h("td", {}, `${(RP_KIND[x.kind] ?? x.kind ?? "part").toLowerCase()} · ${x.label}`, h("span", { class: "tiny", text: `${RP_WHERE[x.where]}${secs(x.ms)}` }),
+          x.words ? h("button", { type: "button", class: "lv-back", text: S.words?.open?.[x.id] ? "Hide the words" : "Read the words", onclick: () => toggleWords(x.id) }) : null),
         usedCell(x.used, "not measured (before 0.10)"),
         two(approx(x.both.alone.mid), `reads what it read, thinks and writes as ${x.label} did (from its numbers)`, "est"),
         two(approx(x.both.saved.mid), `minus ${tokShort(x.back)} read back, ${tokShort(x.both.spent - x.back)} for the call`, "est"),
@@ -2108,6 +2115,7 @@
         h("td", {}, x.alone ? [h("span", { class: "tiny", text: "sampled" }), h("span", { class: x.alone.verdict === "better" ? "gw" : "gg", text: SIDE_WORD[x.alone.verdict] }),
           x.alone.used !== null ? h("span", { class: "tiny", text: `${x.alone.label} used ${tokShort(x.alone.used)}` }) : null]
           : h("span", { class: "muted", text: x.side ? `the best model you have: ${x.side === "worse" ? "better" : x.side === "better" ? "not as good" : "as good"}` : "not sampled" })))));
+      for (const x of p.parts) if (x.words && S.words?.open?.[x.id]) rows.push(wordsRowEl(x, p.app));
       rows.push(h("tr", { class: "part own" },
         h("td", {}), h("td", {}), h("td", { class: "nw", text: p.app }),
         h("td", { colspan: 7, class: "muted", text: p.own ? `prompt ${tokShort(p.prompt ?? 0)}, its own work ${tokShort(p.own.fresh)} new tokens (measured)${p.own.cached ? `, ${tokShort(p.own.cached)} more read again from the cache` : ""}` : "its own work: not known (this app does not share it)" })));
@@ -2144,20 +2152,39 @@
         step(3, "Measured on a sample", sampled ? `in use: ${plural(sampled, "sample")} so far` : `needs ${app}'s own model in Leanfare (an API key)`, `Now and then side by side runs ${app}'s own model on a hand off too, within its monthly limit: its real tokens, and its grade judged blind against the outside answer. These also check step 1.`, sampled > 0)));
   }
 
+  // A part's kept words (words.ts, 0.12): read on demand, and shown under the part with Copy.
+  async function toggleWords(id) {
+    S.words ??= { open: {}, got: {} };
+    if (!S.words.open[id] && !S.words.got[id]) { try { S.words.got[id] = (await api(`/api/words?handoffs=${id}`)).words[id]; } catch { S.words.got[id] = null; } }
+    S.words.open[id] = !S.words.open[id];
+    const old = $("#reportCard"); if (old) old.replaceWith(reportCardEl());
+  }
+  function wordsRowEl(x, app) {
+    const w = S.words?.got?.[x.id];
+    const copy = (t) => h("button", { type: "button", class: "btn small", text: "Copy", onclick: () => { try { navigator.clipboard.writeText(t); toast("Copied.", "done"); } catch {} } });
+    const block = (title, t) => h("div", { class: "wd-block" }, h("div", { class: "wd-title" }, h("b", { text: title }), copy(t)), h("pre", { class: "wd-text", text: t }));
+    return h("tr", { class: "part wd" }, h("td", {}), h("td", { colspan: "8" }, !w ? h("span", { class: "muted", text: "These words are no longer kept." }) : [
+      block(`The task ${app} wrote`, w.task),
+      w.files?.length ? h("div", { class: "wd-files", text: `Files: ${w.files.map((f) => `${f.name} (${Math.max(1, Math.round(f.size / 1024))} KB)`).join(", ")}` }) : null,
+      w.answer !== null && w.answer !== undefined ? block("The answer that came back", w.answer) : null]));
+  }
+
   // The prompts and their parts as rows of a CSV file.
-  function reportCsv(d) {
+  function reportCsv(d, words = null) {
     // A text that starts like a formula (=, +, -, @) is kept as text, so a spreadsheet never runs it.
     const cell = (v) => { let s = v === null || v === undefined ? "" : String(v); if (typeof v === "string" && /^[=+\-@\t\r]/.test(s)) s = "'" + s; return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
     const head = ["prompt_id", "time", "app", "thread", "project", "main_model", "plan", "prompt_tokens", "own_new_tokens", "own_cache_reads", "part_id", "handoff", "kind", "model", "where", "tokens_read", "tokens_back", "kept_out", "saved", "cost_usd", "grade", "graded_by", "side_by_side",
       "outside_read", "outside_thinking", "outside_written", // what the outside models used, measured (empty: not measured; thinking empty: not known)
       "app_alone_est", "app_alone_low", "app_alone_high", "app_spent", "saved_est", "together", "app_alone_grade"]; // both sides (estimates) and the grades
+    if (words) head.push("task", "answer", "files"); // 0.12: the kept words (words.ts), on each part's row
+    const wordCols = (w) => (w ? [w.task, w.answer ?? "", (w.files ?? []).map((f) => f.name).join("; ")] : ["", "", ""]);
     const used = (u) => (u ? [u.read, u.thought, u.wrote] : ["", "", ""]);
     const both = (b) => (b ? [b.alone.mid, b.alone.low, b.alone.high, b.spent, b.saved.mid] : ["", "", "", "", ""]);
     const lines = [head.join(",")];
     for (const p of d.prompts) {
       const base = [p.id, p.ts, p.app, p.thread, p.project, p.model?.label, p.plan, p.prompt, p.own?.fresh, p.own?.cached];
-      lines.push([...base, "", "", "", "", "", "", "", p.kept, p.saved === null ? "" : p.saved.toFixed(4), p.cost.toFixed(6), p.grade, "", "", ...used(p.used), ...both(p.both), p.together, p.alone?.grade].map(cell).join(","));
-      p.parts.forEach((x, i) => lines.push([...base, x.ref ?? i + 1, x.id, x.kind, x.label, x.where, x.read, x.back, x.read, "", x.cost === null ? "" : x.cost.toFixed(6), x.grade, x.gradedBy, x.side, ...used(x.used), ...both(x.both), x.together, x.alone?.grade].map(cell).join(",")));
+      lines.push([...base, "", "", "", "", "", "", "", p.kept, p.saved === null ? "" : p.saved.toFixed(4), p.cost.toFixed(6), p.grade, "", "", ...used(p.used), ...both(p.both), p.together, p.alone?.grade, ...(words ? ["", "", ""] : [])].map(cell).join(","));
+      p.parts.forEach((x, i) => lines.push([...base, x.ref ?? i + 1, x.id, x.kind, x.label, x.where, x.read, x.back, x.read, "", x.cost === null ? "" : x.cost.toFixed(6), x.grade, x.gradedBy, x.side, ...used(x.used), ...both(x.both), x.together, x.alone?.grade, ...(words ? wordCols(words[x.id]) : [])].map(cell).join(",")));
     }
     return lines.join("\n") + "\n";
   }

@@ -3,7 +3,7 @@
 // only, answers only to its own host name (so a web page cannot reach it by
 // pointing a domain at 127.0.0.1), and refuses browser requests from other
 // sites unless you allowed them in Settings.
-import { deleteWords, KEEP_DAYS, KEEP_NAMES, KEEP_SAYS, wordsKept } from "./words";
+import { deleteWords, KEEP_DAYS, KEEP_NAMES, KEEP_SAYS, wordsKept, wordsOf } from "./words";
 import { probeState } from "./usageprobe";
 import { lastSnap } from "./statusline";
 import { APP_LEVELS, appKey, DEFAULT_LEVEL, isLevel, LEVEL_MEANS, LEVEL_NAME, LEVEL_SAYS, levelFor } from "./level";
@@ -494,7 +494,19 @@ async function api(req: Request, url: URL): Promise<Response> {
   if (p === "/api/local/pull" && m === "GET") return json({ pull: local.pullView() });
   if (p === "/api/local/suggest" && m === "GET") return json(local.suggestLocal());
   // The report (report.ts): a span of time and filters, everything Leanfare did for your apps in it.
-  if (p === "/api/report" && m === "GET") { const q = checkReport(url.searchParams); return typeof q === "string" ? fail(400, q) : json(await report(q)); }
+  if (p === "/api/report" && m === "GET") {
+    const q = checkReport(url.searchParams);
+    if (typeof q === "string") return fail(400, q);
+    const r = await report(q);
+    // One prompt (the report tool's prompt): each part with its kept words, so the app can read them (words.ts, 0.12).
+    if (url.searchParams.get("prompt")) for (const pr of r.prompts) for (const x of pr.parts as any[]) if (x.words) x.text = wordsOf(x.id);
+    return json(r);
+  }
+  // A hand off's kept words (words.ts, 0.12): Savings opens a part, or exports the CSV with the words.
+  if (p === "/api/words" && m === "GET") {
+    const ids = String(url.searchParams.get("handoffs") ?? "").split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, 1000);
+    return json({ words: Object.fromEntries(ids.map((id) => [id, wordsOf(id)])) });
+  }
   // The manager's grades (grades.ts): a part's answer graded, the standings, and another chance.
   if (p === "/api/grades" && m === "GET") return json({ standings: standings().map((x) => ({ ...x, text: standingText(x) })), side: sideStandings().map((x) => ({ ...x, text: sideText(x) })), sideMonth: sideMonth() });
   if (p === "/api/grades" && m === "POST") {

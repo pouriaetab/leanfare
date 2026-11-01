@@ -36,6 +36,7 @@ export interface ReportPart {
   together: Grade | null; togetherBy: "app" | "you" | null; // the prompt's whole result, kept with this part
   level: number | null; // 0.12: the level it was handed off at (null: before 0.12)
   fixed: "myself" | "leanfare" | null; fixOf: number | null; // 0.12: graded partly or wrong, then fixed; or itself a fix of that hand off
+  words: boolean; // 0.12: its words are kept (words.ts), to read in Savings and to export
   alone: AloneSample | null; // a sample of the app's own model doing the part, judged blind against this answer (side by side)
 }
 // A number Leanfare estimates: the middle, and how low or high it may be.
@@ -180,7 +181,7 @@ function partsIn(from: number, to: number): (ReportPart & { app: string | null; 
   const used = usedIn(from, to);
   const samples = sampleTokens(from, to);
   const rows = db.query(`SELECT d.id, d.ts, d.kind, d.model, d.rerun, d.cost, d.check_cost, d.rerun_cost, d.file_tokens, d.task_tokens, d.answer_tokens, d.verdict, d.checker, d.grade, d.plan, d.app, d.app_model, d.ms, d.job,
-      d.ask_tokens, d.reply_tokens, d.together, d.together_by, d.level, d.fixed, d.fix_of,
+      d.ask_tokens, d.reply_tokens, d.together, d.together_by, d.level, d.fixed, d.fix_of, (SELECT 1 FROM words w WHERE w.handoff = d.id) AS kept_words,
       c.verdict AS side, COALESCE(c.top_cost, 0) + COALESCE(c.judge_cost, 0) AS side_cost, c.app_alone, c.top_model
     FROM delegations d LEFT JOIN comparisons c ON c.handoff = d.id AND c.verdict IN ('same', 'better', 'worse')
     WHERE d.status = 'ok' AND d.ts >= ? AND d.ts < ? ORDER BY d.ts, d.id`).all(new Date(from).toISOString(), new Date(to).toISOString()) as any[];
@@ -204,6 +205,7 @@ function partsIn(from: number, to: number): (ReportPart & { app: string | null; 
       alone,
       level: Number.isInteger(r.level) && r.level >= 1 && r.level <= 5 ? r.level : null,
       fixed: r.fixed === "myself" || r.fixed === "leanfare" ? r.fixed : null, fixOf: Number.isInteger(r.fix_of) ? r.fix_of : null,
+      words: r.kept_words === 1,
     };
   });
 }
