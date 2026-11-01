@@ -36,6 +36,7 @@ import { TOOLS, clientLabel, resourceContents, runToolFor } from "./mcp";
 import { setSelf } from "./client";
 import { checkReport, report } from "./report";
 import { askModels, askReport, checkAsk } from "./askreport";
+import { liveVersion, liveView } from "./live";
 import { checkPlan, gradePart, makePlan, runView, startRun, stopAllRuns, stopRun } from "./planner";
 import { setAuto } from "./workers";
 import { setUp, setupView } from "./setup";
@@ -504,6 +505,30 @@ async function api(req: Request, url: URL): Promise<Response> {
     if (url.searchParams.get("prompt")) for (const pr of r.prompts) for (const x of pr.parts as any[]) if (x.words) x.text = wordsOf(x.id);
     return json(r);
   }
+  // Live tokens (live.ts, 0.12): the calls running now and lately, numbers only; once, or as a stream of server-sent
+  // events: a view whenever something changed (at most twice a second), and a note every 15 seconds to keep it open.
+  if (p === "/api/live" && m === "GET") return json(liveView());
+  if (p === "/api/live/stream" && m === "GET") {
+    const enc = new TextEncoder();
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        let sent = -1, quiet = 0;
+        const tick = () => {
+          try {
+            const v = liveVersion();
+            if (v !== sent || liveView().running.length) { sent = v; quiet = 0; c.enqueue(enc.encode(`data: ${JSON.stringify(liveView())}\n\n`)); }
+            else if (++quiet >= 30) { quiet = 0; c.enqueue(enc.encode(": still here\n\n")); }
+          } catch { if (timer) clearInterval(timer); }
+        };
+        tick();
+        timer = setInterval(tick, 500);
+        req.signal.addEventListener("abort", () => { if (timer) clearInterval(timer); try { c.close(); } catch {} }, { once: true });
+      },
+      cancel() { if (timer) clearInterval(timer); },
+    });
+    return new Response(body, { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" } });
+  }
   // Ask about these prompts (askreport.ts, 0.12): the models that may answer, and a question over Savings' span and filters.
   if (p === "/api/report/ask" && m === "GET") return json({ models: askModels() });
   if (p === "/api/report/ask" && m === "POST") {
@@ -965,7 +990,7 @@ export async function handle(req: Request, server: { timeout(r: Request, s: numb
     if (url.pathname !== "/api/control/stop" && req.headers.get("x-leanfare") !== "1") return fail(403, "Missing the x-leanfare header.");
     if (url.pathname !== "/api/unlock" && !url.pathname.startsWith("/api/control/") && !pageAllowed(req, controlToken)) return json({ error: "Leanfare is locked. Paste its access key to open it.", locked: true }, 401);
     // Requests that can wait a long time on providers or other programs: no idle cut-off.
-    if (["/api/mcp/call", "/api/chat", "/api/delegate", "/api/plan", "/api/keys", "/api/refresh", "/api/import", "/api/keys/import", "/api/keys/recognize", "/api/keys/found", "/api/providers/custom", "/api/providers/registry", "/api/apps", "/api/setup", "/api/switch", "/api/trial/stop"].includes(url.pathname)) server?.timeout(req, 0);
+    if (["/api/mcp/call", "/api/chat", "/api/delegate", "/api/plan", "/api/keys", "/api/refresh", "/api/import", "/api/keys/import", "/api/keys/recognize", "/api/keys/found", "/api/providers/custom", "/api/providers/registry", "/api/apps", "/api/setup", "/api/switch", "/api/trial/stop", "/api/report/ask", "/api/live/stream"].includes(url.pathname)) server?.timeout(req, 0);
     try { return await api(req, url); }
     catch (e: any) { return fail(e instanceof UserError ? e.status : 500, e instanceof UserError ? e.message : `Leanfare hit an unexpected problem: ${String(e?.message ?? e)}`); }
   }
