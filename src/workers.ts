@@ -166,6 +166,10 @@ const has = (j: any, h: (typeof HOOKS)[number], exact = false) => {
 function hookIn(j: any): boolean { return HOOKS.every((h) => has(j, h)); }
 const hookAny = (j: any) => HOOKS.some((h) => has(j, h));
 const hookUpToDate = (j: any) => HOOKS.every((h) => has(j, h, true));
+// Whether the app's own hooks are in Claude Code's settings: the Leanfare plugin's hooks then stay quiet (cli.ts), so
+// nothing runs twice. The plugin's hooks, as the plugin lists them (plugin/hooks/hooks.json), for its test.
+export const appHooksOn = () => hookAny(readClaudeSettings());
+export const CLAUDE_HOOKS = HOOKS.map((h) => ({ event: h.event, matcher: (h.entry() as { matcher?: string }).matcher ?? null, timeout: h.entry().hooks[0].timeout, what: h.command().split(" hook ").pop()! }));
 function setHook(on: boolean) {
   const j = readClaudeSettings();
   if (on ? hookIn(j) && hookUpToDate(j) : !hookAny(j)) return;
