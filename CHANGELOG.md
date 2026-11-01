@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.12.0
+
+- Review every answer: each answer Leanfare brings back ends with a line that asks your app to check it, grade it and fix it before it answers you, by itself or by asking Leanfare again one tier up with what was wrong (`grade` with `fix`). In Claude Code a Stop hook asks once for any hand off left without a grade.
+- The level, from 1 Off to 5 All it can (3 More at first): how much your app hands to Leanfare first. A knob in Settings with what each level does beside it, one level per app if you like, raised by itself when your Claude plan runs low, and set for one chat by asking ("Leanfare 4"). The report shows quality by level.
+- Your Claude plan's use is read by itself through Claude Code's own usage view while Leanfare runs, so a day spent in Cowork or Claude Desktop still raises the level when the plan runs low. Leanfare never touches Claude Code's sign in, and stops asking if it would cost anything.
+- What Leanfare keeps: a second knob, from numbers only (as before, the default) to a hand off's task, answer, file names and file text, kept on your computer for 7 to 90 days, with Delete all. Savings then shows each part's words (**Read the words**, with Copy), and **Export CSV with the words**.
+- Ask about these prompts: a box in Savings answers a question over the prompts it shows ("which cost the most?"), read by a model on your computer, so they never leave it; another of your models only if you pick it.
+- Where work may go: a small knob from only this computer, to also paid models that do not train, to also free tiers (not your files), to anywhere you ticked, with how many of your models each stop leaves and a warning when none. Your older choice for files carries over.
+- Live tokens: Savings shows each model call as it runs, its tokens by kind (new input, cached, thinking, written) as moving bars, lanes over the last minute, or numbers. The `live` tool shows the same in your app, as a live card in Claude Desktop and Cowork.
+- One-click install: each release has a `.mcpb` file for Claude Desktop on Macs and Windows (double-click it), and `server.json` to list Leanfare in the official MCP Registry.
+
+Fixed from 0.11.3:
+
+- In Cowork, the review line and the level's advice now reach the model (Cowork passes only a tool's structured result on).
+- A test that expected the month to be October.
+
 ## 0.11.3
 
 - Report a problem, in Settings, opens a bug report on GitHub with your Leanfare version and system filled in. You read it and send it yourself; Leanfare sends nothing.

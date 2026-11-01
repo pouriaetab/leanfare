@@ -61,6 +61,8 @@ Windows, in PowerShell (new: tell us what breaks):
 powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/pouriaetab/leanfare/main/install.ps1 | iex"
 ```
 
+Claude Desktop, one click: each release has a `.mcpb` file for Macs with Apple silicon (`leanfare-darwin-arm64.mcpb`), Intel Macs (`leanfare-darwin-x64.mcpb`) and Windows (`leanfare-windows-x64.mcpb`). Double-click it and Claude Desktop adds Leanfare's tools. Leanfare is also in the official MCP Registry as `io.github.pouriaetab/leanfare`.
+
 The installer downloads the one-file Leanfare for your computer from the latest release, checks it against the release's checksums, puts it in `~/.leanfare/bin` (`%LOCALAPPDATA%\Leanfare\bin` on Windows) and adds that folder to your PATH. Then:
 
 ```sh
@@ -148,6 +150,22 @@ To read large files or logs, use the leanfare delegate tool with effort medium, 
 ```
 
 Run it from the Savings page (**Run the trial**), in Terminal (`leanfare trial`), or ask Claude to use the trial tool. It costs what its answers and checks cost on your models ($0 on free plans) and shows the estimate first. The files are the same on every computer, so results compare across people: **Share on GitHub** opens an issue with the numbers filled in, for you to read and send yourself. Nothing is sent on its own.
+
+### The level: how much goes to Leanfare first
+
+Settings, **How much Leanfare takes first**, is a knob from 1 to 5, with what each level does beside it:
+
+1. **Off:** Leanfare only when you ask for it.
+2. **Light:** big reads and tasks with several parts.
+3. **More** (the default): also reads over about 10 KB your app will not change, project wide searches, summaries, reviews and first drafts.
+4. **Most:** your app plans every prompt that is more than a quick question with Leanfare first.
+5. **All it can:** every part a model can do; your app reviews, decides and answers.
+
+Each app can keep its own level (Claude Code; Claude Desktop and Cowork; Codex; Gemini CLI; Cursor), and one chat can have its own: say "Leanfare 4" in it. When your Claude plan runs low, the level goes up to 4 by itself, and to 5 when it is very low (a switch turns this off). The level changes the reminder before big reads, which parts of a plan go out, and how often a stronger model checks an answer (every answer at 4 and 5). The report shows quality by level.
+
+### Review every answer
+
+Each answer Leanfare brings back ends with a line that asks your app to check it against its task, grade it (good, partly or wrong) and fix it before it answers you: by itself, or with `grade` and `fix: leanfare`, which asks again one tier up (more effort, or at high effort another model), with what was wrong. The new answer is a new hand off, checked and graded the same way, at most two fixes deep. Leanfare holds the last 20 requests in memory for 2 hours to ask again; nothing is written down. In Claude Code, a Stop hook asks once, before Claude finishes, for a grade of each hand off that has none. Settings, **Review every answer**, turns each part off.
 
 ## Plan a task
 
@@ -248,7 +266,14 @@ At the top of Savings, the report shows what Leanfare did for your apps over a s
 - **Prompt ids.** Each prompt has an id, PRM and a number (PRM-1042), one count for all your apps, oldest first. An id is given once and kept, so a prompt has the same id in every span and filter, and two prompts alike in time, app and model are still told apart. Its parts are PRM-1042.1, PRM-1042.2 and so on. The app, the models, the providers and the kinds of work are its tags: the columns and the filters.
 - **Export CSV** saves the prompts and their parts as a file for a spreadsheet, with each prompt's id and each part's id and hand off number.
 
+- **A prompt's words.** When Settings keeps words (below, in Privacy), a part with kept words has **Read the words**: the task your app wrote, the files' names and the answer, each with Copy. **Export CSV with the words** adds them to the file.
+- **Ask about these prompts.** A box above the prompts answers a question about the ones the report shows, in its span and filters ("which hand offs were graded partly or wrong?"). A model on your computer answers (Ollama, or another model app there), so the prompts never leave it; pick another of your models to have it answer instead. It reads the sums first, then the newest prompts that fit, and keeps neither the question nor the answer.
+
 In Claude Desktop and Cowork, ask for Leanfare's report: the `report` tool shows it as a card in the chat, with **Open the full report in Leanfare**. Ask for one prompt by its id ("Leanfare's report on PRM-41") for that prompt and each of its parts. How a prompt is counted, and new tokens, are in [Definitions](#definitions).
+
+### Live
+
+At the top of Savings, **Live** shows each model call Leanfare is running, and those that ended in the last minute: the model, what it is for (a hand off, its check, a plan's part, an app through Leanfare's address), how long it has run and its tokens so far by kind: new input, cached, thinking and written. **Bars** grow as tokens come (press one for its four kinds), **Lanes** show the last 60 seconds with each call as a lane, and **Numbers** shows tokens a second and the last minute by kind. The chips pick the kinds to show. Input is Leanfare's estimate and thinking and writing are counted from the text as it comes, until the provider's own counts arrive. Ask your app for Leanfare's live tokens: the `live` tool answers, and Claude Desktop and Cowork show a live card that keeps moving. Numbers only: no words are kept for this.
 
 ## Speed
 
@@ -298,7 +323,11 @@ reply = client.chat.completions.create(model="auto", messages=[{"role": "user", 
 
 ## Privacy
 
-Leanfare reads usage numbers, never your words.
+Leanfare reads usage numbers, never your words, unless you choose to keep a hand off's words on your computer (below).
+
+- **What Leanfare keeps** (Settings): a knob from 1, numbers only (the default), to 2 also each hand off's task, 3 also its answer, 4 also its files' names, 5 also its files' text. Kept words stay in Leanfare's folder on your computer for 7 to 90 days, are never sent anywhere, and never change which models get the work; **Delete all kept words** takes them out at once. Asking about your prompts in Savings reads them with a model on your computer unless you pick another.
+- **Where work may go** (Settings, Where Leanfare may send work): 1, only this computer: every task goes to your models in Ollama and the other model apps here, and nothing is sent out; 2, also paid models that do not train on what is sent (your paid keys and plans); 3, also free tiers, but only work without your projects' files; 4, anywhere you ticked (the default). Plans, the delegate, its checks and side by side follow it, and each stop shows how many of your models it leaves. A choice from before 0.12 carries over: files to any platform is 4, not to a free tier 3, only this computer 1 (now all work, not only files).
+- **Your Claude plan's use** is read from Claude Code: its status line's two percentages, and, while Leanfare runs, Claude Code's own usage view (`claude -p "/usage"`) when the last reading is over 45 minutes old. Claude Code fetches the numbers with its own sign in; Leanfare reads only what it prints, never its sign in, passes no API key, and stops asking if an answer used tokens.
 
 - **Your plans** takes the model, the time and the token counts from each line of Claude Code's and Codex's log files, and drops the rest of the line. For the report, it also takes when each prompt you typed in Claude Code began and how many characters it had, never its words. **The status line** reads only the two percentages Claude Code hands it.
 - **Find my keys** reads only the files named above, only when you press it; a key goes only to its own provider, to test it. **Your login shell's settings** are asked for key variables only (names ending in `_KEY`), and only by a Leanfare that did not start from a terminal.
