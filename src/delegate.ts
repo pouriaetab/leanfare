@@ -25,7 +25,8 @@ import { parseSpeed, secondsText, type SpeedChoice } from "./speed";
 import { TASKS, fitsText, getModel, isRetired, type Model } from "./data";
 import { db } from "./db";
 import { passedLocal } from "./localpass";
-import { mayTake, modelOn, readRisk, whereWhy } from "./platforms";
+import { mayTake, modelOn, platformOn, readRisk, whereStop, whereWhy } from "./platforms";
+import { CODEX_ID, CODEX_LABEL, codexFor, runCodex } from "./codex";
 import { movedDown } from "./grades";
 import { fromAnotherCompany, masked } from "./judge";
 import { restOf, restText } from "./rest";
@@ -404,6 +405,28 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   // longer take it here, or cannot answer now (busy, rate limited, down), Auto picks another within the same
   // limits (a free part stays free), and the receipt says which and why.
   const asked = `auto-${TIER[input.effort]}`;
+  // Your ChatGPT plan, through Codex (0.13): when none of the models you ticked can take it now (none fits, each used its
+  // free allowance for today, or each would pass your cap for paid work), Codex takes it, read only, on your ChatGPT
+  // plan, before the work goes back to your app. Not for a named model, the trial, a private task or an ask about the
+  // prompts, and only where Settings lets work leave this computer (platforms.ts).
+  if (!input.model && !quiet && !input.private && input.kind && !usableModels(within(doFit.ok)).length && platformOn("chatgpt") && whereStop() >= 2) {
+    const ok = await codexFor(input.app ?? "");
+    if (ok.ok) {
+      const r = await runCodex({ n: 1, title: "A hand off", task: prompt, folder: null, files: [], effort: input.effort }, signal);
+      const model = { id: CODEX_ID, label: CODEX_LABEL };
+      const check: DelegateCheck = { chance: 0, picked: false, verdict: "skipped", why: "Codex answered on your ChatGPT plan, and no stronger model you ticked can check it", checker: null, cost: null };
+      const result: Omit<DelegateResult, "receipt"> = {
+        answer: r.answer, model, cost: 0, first: null, rerunError: null, swap: null,
+        passed: ["None of the models you ticked could take it now, so Codex took it on your ChatGPT plan."],
+        row: null, total: 0, task: guess.task, taskLabel: taskLabel(guess.task), kind: input.kind, effort: input.effort, mode: TIER[input.effort], check,
+        tokens: { files: fileTokens, answer: tokensOf(r.answer.length) }, cut: false, seconds: (performance.now() - started) / 1000,
+      };
+      const receipt = receiptOf(result, input.maxOut);
+      result.row = write({ ...row, model: CODEX_ID, cost: 0, answerTokens: tokensOf(r.answer.length), status: "ok", chance: 0, ...none, ms: Math.round(result.seconds * 1000), replyTokens: tokensOf(receipt.length) });
+      if (result.row !== null) keepRequest(result.row, input, model, job ?? null);
+      return { ...result, receipt };
+    }
+  }
   // Nothing may take it: a private task with no model here that can, files with nowhere Settings lets them go, or
   // platforms turned off. Said so, not as too much text.
   if (!usableModels(within(doFit.ok)).length) {

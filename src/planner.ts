@@ -348,6 +348,9 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
   const graded = (m: Model) => kindOk(m) && !movedDown(m.id, part.kind);
   const only = usableModels(graded).length ? graded : kindOk;
   if (part.kind === "search" && offWhy) return stay(`it searches the web, and ${offWhy}`);
+  // A web search with no Perplexity ticked goes to your ChatGPT plan through Codex, which searches the web itself (0.13).
+  if (part.kind === "search" && !usableModels((m) => m.provider === "perplexity").length && codex && !priv && whereStop() >= 2 && platformOn("chatgpt") && !movedDown(CODEX_ID, "search"))
+    return onCodex(part, r, "a web search on your ChatGPT plan through Codex, with its own web search");
   if (part.kind === "search" && !usableModels((m) => m.provider === "perplexity").length) return stay(`it searches the web, which ${manager === "you" ? "your app" : manager} can do; no model you ticked in Leanfare does (tick Perplexity Sonar to send searches out)`);
   const messages: Msg[] = [{ role: "user", content: part.task }];
   const kind = DELEGATE_KIND[part.kind] ?? null;
@@ -819,7 +822,7 @@ async function runPart(p: Part, plan: PlanResult, at: (n: number) => RunPart, si
     const known = wherePaths.get(plan.id) ?? new Map();
     const paths = p.files.map((n) => known.get(n)?.path).filter((x): x is string => !!x);
     const folder = commonFolder(paths);
-    const r = await runCodex({ n: p.n, title: p.title, task, folder, files: folder ? paths.map((x) => relative(folder, x)) : paths, effort: p.effort }, signal);
+    const r = await runCodex({ n: p.n, title: p.title, task, folder, files: folder ? paths.map((x) => relative(folder, x)) : paths, effort: p.effort, search: p.kind === "search" }, signal);
     const bytes = p.files.reduce((n, f) => n + (known.get(f)?.size ?? 0), 0);
     notePart({ kind: p.kind, effort: p.effort, model: CODEX_ID, cost: 0, files: paths.length, fileTokens: Math.ceil(bytes / 4), task, answer: r.answer, plan: `${plan.id}:${p.n}`, ...appOf(plan), ms: Math.round(r.seconds * 1000) });
     return { status: "done", answer: r.answer, receipt: `${CODEX_LABEL}, read only, ${secondsText(r.seconds)}. It counts in your ChatGPT plan's Codex use; nothing to pay here.`, model: CODEX_LABEL, modelId: CODEX_ID, cost: 0, seconds: r.seconds };
