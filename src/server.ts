@@ -37,7 +37,7 @@ import { setSelf } from "./client";
 import { checkReport, report } from "./report";
 import { askModels, askReport, checkAsk } from "./askreport";
 import { liveVersion, liveView } from "./live";
-import { checkPlan, gradePart, makePlan, runView, startRun, stopAllRuns, stopRun } from "./planner";
+import { checkPlan, gradePart, keptPlan, makePlan, nextStarted, runView, startRun, stopAllRuns, stopRun, tookAnswers } from "./planner";
 import { setAuto } from "./workers";
 import { setUp, setupView } from "./setup";
 import { OFF_TEST, OFF_TEXT, OFF_TRIAL, setSwitch, switchedOn } from "./switch";
@@ -779,12 +779,21 @@ async function api(req: Request, url: URL): Promise<Response> {
   if (p === "/api/plan" && m === "POST") {
     if (offForApps(req)) return fail(409, OFF_TEXT);
     // The MCP door holds the control token: it measured the files itself and says where each is.
-    const v = checkPlan(await readBody(req), controlOk(req, controlToken));
+    const body = await readBody(req);
+    const v = checkPlan(body, controlOk(req, controlToken));
     if (typeof v === "string") return fail(400, v);
-    return json(await makePlan({ ...v, signal: req.signal }));
+    const made = await makePlan({ ...v, signal: req.signal });
+    // run: the plan tool in an app (0.13) has Leanfare start its parts at once, so nobody presses Run or calls plan_run.
+    if (body?.run === true && made.totals.out - (made.totals.later ?? 0) > 0) {
+      const run = startRun(made.id, { paid: false });
+      return json({ ...made, next: nextStarted(made, run), run: { ...run, whoWrote: settings().whoWrote, review: settings().review } });
+    }
+    return json(made);
   }
   if (p === "/api/plan/run" && m === "POST") { if (offForApps(req)) return fail(409, OFF_TEXT); const b = await readBody(req); return json({ ...startRun(String(b?.id ?? ""), { paid: b?.paid === true || b?.paid === "yes" }), whoWrote: settings().whoWrote, review: settings().review }); }
-  if (p === "/api/plan/run" && m === "GET") { const v = runView(url.searchParams.get("id") ?? ""); return v ? json({ ...v, whoWrote: settings().whoWrote, review: settings().review }) : fail(404, "No run of that plan."); }
+  if (p === "/api/plan/run" && m === "GET") { const id = url.searchParams.get("id") ?? ""; const v = url.searchParams.get("took") === "1" ? tookAnswers(id) : runView(id); return v ? json({ ...v, whoWrote: settings().whoWrote, review: settings().review }) : fail(404, "No run of that plan."); }
+  // The next steps again, once a yes started a plan's paid parts too (the plan tool asks before it answers).
+  if (p === "/api/plan/next" && m === "GET") { const id = url.searchParams.get("id") ?? ""; const plan = keptPlan(id), v = runView(id); return plan && v ? json({ next: nextStarted(plan, v) }) : fail(404, "No run of that plan."); }
   if (p === "/api/plan/stop" && m === "POST") { const b = await readBody(req); const v = stopRun(String(b?.id ?? "")); return v ? json(v) : fail(404, "No run of that plan."); }
   // The delegate trial (trial.ts): its estimate and last report, start, stop.
   if (p === "/api/trial" && m === "GET") return json(await trialView(req.signal));

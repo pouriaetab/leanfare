@@ -116,7 +116,7 @@ describe("the tools", () => {
     writeFileSync(join(dir, ".env"), "OPENAI_API_KEY=sk-should-never-be-read");
     writeFileSync(join(dir, "node_modules", "x", "index.js"), "y".repeat(90_000));
     await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "claude-code", version: "2.1" } });
-    const r = await rpc("tools/call", { name: "plan", arguments: { task: "Reverse engineer the router in this project and build a smaller one", files: [dir], split: "rules" } });
+    const r = await rpc("tools/call", { name: "plan", arguments: { task: "Reverse engineer the router in this project and build a smaller one", files: [dir], split: "rules", run: false } });
     expect(r.result.isError).toBeUndefined();
     const t = r.result.content[0].text;
     expect(t).toContain("| # | Part | Kind | Runs on | Model | Time | Tokens | Cost | When |");
@@ -145,7 +145,7 @@ describe("the tools", () => {
       await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: { elicitation: {} }, clientInfo: { name: "claude-code", version: "2.1" } });
       const questions: any[] = [];
       onRequest = (msg) => { questions.push(msg); write({ jsonrpc: "2.0", id: msg.id, result: { action: "accept", content: { run: true } } }); };
-      const plan = await rpc("tools/call", { name: "plan", arguments: { task: "The nightly job fails: find out why and fix it", folder: dir } });
+      const plan = await rpc("tools/call", { name: "plan", arguments: { task: "The nightly job fails: find out why and fix it", folder: dir, run: false } });
       const id = plan.result.structuredContent.id;
       expect(plan.result.content[0].text).toContain(`plan_run with id ${id}`);
       expect(readFileSync(join(dir, ".leanfare", "plans", id, "plan.md"), "utf8")).toContain("| # | Part |");
@@ -155,7 +155,11 @@ describe("the tools", () => {
       expect(questions[0].method).toBe("elicitation/create");
       expect(questions[0].params.message).toContain("paid parts (part 1)");
       expect(run.result.structuredContent.asks).toBeNull(); // the yes came: nothing waits for one
+      // The plan card only looks (peek): the answer is not taken until the app asks for it.
+      const peek = await rpc("tools/call", { name: "plan_status", arguments: { id, wait: 10, peek: true } });
+      expect(peek.result.structuredContent.parts[0]).toMatchObject({ status: "done", took: false });
       const st = await rpc("tools/call", { name: "plan_status", arguments: { id, wait: 10, folder: dir } });
+      expect(st.result.structuredContent.parts[0]).toMatchObject({ status: "done", took: true });
       const t = st.result.content[0].text;
       expect(t).toContain("| 1 | Read the logs | done |");
       expect(t).toContain("| 2 | Fix the cause | yours to do |");
@@ -177,10 +181,49 @@ describe("the tools", () => {
       expect(none.result.content[0].text).toContain("grade needs the hand off's number (from its receipt), or the plan's id and the part's number.");
       // No yes: the paid part waits, and the tool says to ask the user.
       onRequest = (msg) => write({ jsonrpc: "2.0", id: msg.id, result: { action: "decline" } });
-      const again = await rpc("tools/call", { name: "plan", arguments: { task: "The nightly job fails again: find out why", folder: dir } });
+      const again = await rpc("tools/call", { name: "plan", arguments: { task: "The nightly job fails again: find out why", folder: dir, run: false } });
       const r2 = await rpc("tools/call", { name: "plan_run", arguments: { id: again.result.structuredContent.id } });
       expect(r2.result.content[0].text).toContain("wait for the user's yes");
       expect(r2.result.structuredContent.asks.parts).toEqual([1]);
+    } finally { onRequest = null; fake.hooks.answer = null; rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("plan starts Leanfare's parts by itself (0.13): the paid one asked about here, the quick answer in the same call, taken, and its grade on the card", async () => {
+    await keys("openai", "google", "deepseek");
+    const dir = mkdtempSync(join(tmpdir(), "plan-auto-"));
+    fake.hooks.answer = (prompt) => (prompt.includes("The person works in") ? JSON.stringify({ parts: [
+      { title: "Read the logs", kind: "read", effort: "low", needs: [], size: "small", task: "Find the errors in the logs." },
+      { title: "Fix the cause", kind: "code", effort: "high", needs: [1], size: "small", task: "Fix it." },
+    ] }) : prompt.includes("Find the errors") ? "Three timeouts at 10:02." : null);
+    try {
+      await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: { elicitation: {} }, clientInfo: { name: "claude-code", version: "2.1" } });
+      const questions: any[] = [];
+      onRequest = (msg) => { questions.push(msg); write({ jsonrpc: "2.0", id: msg.id, result: { action: "accept", content: { run: true } } }); };
+      const plan = await rpc("tools/call", { name: "plan", arguments: { task: "The nightly job fails: find out why and fix it", folder: dir } });
+      const id = plan.result.structuredContent.id;
+      const t = plan.result.content[0].text;
+      expect(questions.map((q) => q.method)).toEqual(["elicitation/create"]); // the paid part, asked about by plan itself
+      expect(t).toContain("Leanfare started part 1 by itself: do not run it again with delegate; its answer comes back with plan_status.");
+      expect(t).toContain(`The plan's id: ${id}.`);
+      expect(t).toContain("| 1 | Read the logs | done |");
+      expect(t).toContain("Three timeouts at 10:02.");
+      expect(t).toContain("Review this answer before you use it");
+      expect(t).not.toContain("plan_run with id");
+      expect(t).not.toContain("Run part 1 now with delegate");
+      expect(plan.result.structuredContent.run.parts[0]).toMatchObject({ n: 1, status: "done", took: true, verdict: null });
+      expect(plan.result.structuredContent.run.parts[1]).toMatchObject({ n: 2, status: "yours" });
+      expect(readFileSync(join(dir, ".leanfare", "plans", id, "part-1.md"), "utf8")).toContain("Three timeouts at 10:02.");
+      await rpc("tools/call", { name: "grade", arguments: { id, part: 1, verdict: "good" } });
+      const card = await rpc("tools/call", { name: "plan_status", arguments: { id, peek: true } });
+      expect(card.result.structuredContent.parts[0]).toMatchObject({ status: "done", took: true, verdict: "good" });
+      // No question in the app: the paid part waits, nothing says it started, and Claude is told to ask.
+      onRequest = null;
+      await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "claude-code", version: "2.1" } });
+      const asked = await rpc("tools/call", { name: "plan", arguments: { task: "The nightly job fails again: find out why and fix it", folder: dir } });
+      const t2 = asked.result.content[0].text;
+      expect(t2).not.toContain("Leanfare started");
+      expect(t2).toContain("wait for the user's yes: ask them, then call plan_run with paid yes.");
+      expect(asked.result.structuredContent.run.parts[0].status).toBe("asks");
     } finally { onRequest = null; fake.hooks.answer = null; rmSync(dir, { recursive: true, force: true }); }
   });
 

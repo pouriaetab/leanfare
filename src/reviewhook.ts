@@ -20,15 +20,18 @@ const PLAN = /^[\w-]{4,40}$/;
 const SHOWN = 6;
 
 // The hand offs a tool's result names: the handoff number delegate and a fix give in their structured result, else
-// "hand off N" in the text; and the plan's id, from what plan_run or plan_status was asked.
+// "hand off N" in the text; and the plan's id, from what plan_run or plan_status was asked, or from the plan tool's
+// result (it starts Leanfare's parts itself since 0.13).
 export function handoffsIn(input: any): { handoffs: number[]; plan: string | null } {
   const out = new Set<number>();
   let s = "";
   try { s = JSON.stringify(input?.tool_response ?? "") ?? ""; } catch {}
   for (const m of s.matchAll(/\\?"handoff\\?"\s*:\s*(\d{1,9})\b/g)) out.add(Number(m[1]));
   for (const m of s.matchAll(/\bhand off (\d{1,9})\b/gi)) out.add(Number(m[1]));
-  const id = input?.tool_input?.id;
-  const plan = /__plan_(run|status)$/.test(String(input?.tool_name ?? "")) && typeof id === "string" && PLAN.test(id) ? id : null;
+  const tool = String(input?.tool_name ?? "");
+  const made = /__plan$/.test(tool) ? (/\\?"id\\?"\s*:\s*\\?"([\w-]{4,40})\\?"/.exec(s)?.[1] ?? /\bplan's id: ([\w-]{4,40})\b/.exec(s)?.[1] ?? null) : null;
+  const id = made ?? input?.tool_input?.id;
+  const plan = (made || /__plan_(run|status)$/.test(tool)) && typeof id === "string" && PLAN.test(id) ? id : null;
   return { handoffs: [...out].filter((n) => n > 0), plan };
 }
 

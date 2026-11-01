@@ -53,7 +53,7 @@ export function planMode(at = clock()): ModeView {
 
 // What Claude is told as each prompt goes (statusline.ts hookLine), by mode.
 export function modeAdvice(v: ModeView): string {
-  if (v.mode === "very low") return `Leanfare: ${v.why}. Hand everything you can to Leanfare (delegate, or plan and plan_run): reading, searching, drafting and working things out. Keep only changes to files and your final answer, and tell the user before any big job.`;
+  if (v.mode === "very low") return `Leanfare: ${v.why}. Hand everything you can to Leanfare (delegate, or plan, which starts Leanfare's parts itself): reading, searching, drafting and working things out. Keep only changes to files and your final answer, and tell the user before any big job.`;
   if (v.mode === "low") return `Leanfare: ${v.why}. Hand all reading, searching and drafting you will not change yourself to Leanfare's delegate, and plan tasks with several parts with Leanfare's plan; keep changes to files and your final answers.`;
   return "";
 }

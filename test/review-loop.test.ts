@@ -147,12 +147,16 @@ describe("Claude Code's review hooks", () => {
     return Number(db.query(`INSERT INTO delegations(${Object.keys(f).join(", ")}) VALUES (${Object.keys(f).map(() => "?").join(", ")})`).run(...(Object.values(f) as any[])).lastInsertRowid);
   };
 
-  test("the hand off hook reads the numbers from a tool's result, structured or in its text, and a plan's id from what was asked", () => {
+  test("the hand off hook reads the numbers from a tool's result, structured or in its text, and a plan's id from what was asked or from the plan tool's result", () => {
     expect(handoffsIn({ tool_name: "mcp__leanfare__delegate", tool_response: { content: [{ type: "text", text: "Hello" }], structuredContent: { handoff: 75, fix_of: 74 } } })).toEqual({ handoffs: [75], plan: null });
     expect(handoffsIn({ tool_name: "mcp__leanfare__delegate", tool_response: [{ type: "text", text: "(Review it before you use it: ... Then grade hand off 76: good, partly or wrong.)" }] }).handoffs).toEqual([76]);
     expect(handoffsIn({ tool_name: "mcp__leanfare__delegate", tool_response: JSON.stringify({ structuredContent: { handoff: 77 } }) }).handoffs).toEqual([77]);
     expect(handoffsIn({ tool_name: "mcp__leanfare__plan_status", tool_input: { id: "6tS-2Dd2q72z" }, tool_response: "| 1 | Read | done |" })).toEqual({ handoffs: [], plan: "6tS-2Dd2q72z" });
     expect(handoffsIn({ tool_name: "mcp__leanfare__delegate", tool_input: { id: "6tS-2Dd2q72z" }, tool_response: "Still working" }).plan).toBeNull(); // a delegate's id is a job, not a plan
+    // The plan tool starts Leanfare's parts itself (0.13): its plan's id comes from its result, structured or in its text.
+    expect(handoffsIn({ tool_name: "mcp__leanfare__plan", tool_input: { task: "Fix the job" }, tool_response: { content: [{ type: "text", text: "| 1 | Read | done |" }], structuredContent: { id: "6tS-2Dd2q72z", parts: [] } } })).toEqual({ handoffs: [], plan: "6tS-2Dd2q72z" });
+    expect(handoffsIn({ tool_name: "mcp__leanfare__plan", tool_input: { task: "Fix the job" }, tool_response: [{ type: "text", text: "Leanfare started part 1 by itself. The plan's id: 6tS-2Dd2q72z." }] }).plan).toBe("6tS-2Dd2q72z");
+    expect(handoffsIn({ tool_name: "mcp__leanfare__plan", tool_input: { task: "Fix the job", id: "zzzz-not-it" }, tool_response: "Nothing goes to Leanfare." }).plan).toBeNull();
     expect(handoffsIn({}).handoffs).toEqual([]);
   });
 

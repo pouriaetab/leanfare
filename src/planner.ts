@@ -487,19 +487,22 @@ export function nothingOut(parts: Pick<Part, "kind" | "where" | "files">[]): str
   return `Nothing goes to Leanfare: ${hints.length ? hints.join("; ") : "every part changes the project or needs the hardest judgement"}.`;
 }
 
-function nextOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
+// started: the parts Leanfare started by itself (the plan tool in an app, 0.13), so the app does not run them again.
+function nextOf(r: Omit<PlanResult, "table" | "next" | "id">, started: Set<number> | null = null): string {
   const viaCodex = r.parts.filter((p) => p.where === "codex");
   const out = r.parts.filter((p) => p.where !== "you" && p.where !== "codex"); // what delegate can run
   const mine = r.parts.filter((p) => p.where === "you");
   const now = out.filter((p) => !p.needs.length).map((p) => p.n);
   const list = (ns: number[]) => (ns.length === 1 ? `part ${ns[0]}` : `parts ${ns.slice(0, -1).join(", ")} and ${ns.at(-1)}`);
   const s: string[] = [];
-  if (viaCodex.length) s.push(`${list(viaCodex.map((p) => p.n)).replace(/^p/, "P")} run${viaCodex.length === 1 ? "s" : ""} on Codex with your ChatGPT plan: start ${viaCodex.length === 1 ? "it" : "them"} with plan_run (delegate cannot run ${viaCodex.length === 1 ? "it" : "them"}).`);
-  if (now.length) s.push(`Run ${list(now)} now with delegate${now.length > 1 ? ", all in the same turn (they do not wait for each other)" : ""}: each part's task, kind and effort as in the table, with its files (at most ${DELEGATE_LIMITS.count} to one delegate call).`);
   const yoursFirst = afterYours(r.parts);
+  const byLeanfare = [...viaCodex, ...out].filter((p) => !yoursFirst.has(p.n) && !!started?.has(p.n)).map((p) => p.n).sort((a, b) => a - b);
+  if (byLeanfare.length) s.push(`Leanfare started ${list(byLeanfare)} by itself: do not run ${byLeanfare.length === 1 ? "it" : "them"} again with delegate; ${byLeanfare.length === 1 ? "its answer comes" : "their answers come"} back with plan_status.`);
+  if (!started && viaCodex.length) s.push(`${list(viaCodex.map((p) => p.n)).replace(/^p/, "P")} run${viaCodex.length === 1 ? "s" : ""} on Codex with your ChatGPT plan: start ${viaCodex.length === 1 ? "it" : "them"} with plan_run (delegate cannot run ${viaCodex.length === 1 ? "it" : "them"}).`);
+  if (!started && now.length) s.push(`Run ${list(now)} now with delegate${now.length > 1 ? ", all in the same turn (they do not wait for each other)" : ""}: each part's task, kind and effort as in the table, with its files (at most ${DELEGATE_LIMITS.count} to one delegate call).`);
   const later = out.filter((p) => p.needs.length && !yoursFirst.has(p.n));
-  if (later.length) s.push(`Then ${list(later.map((p) => p.n))}, each once the parts it needs are back, with their answers in its task.`);
-  if (out.some((p) => p.kind === "search")) s.push("A search part goes to ask with the model in the table.");
+  if (!started && later.length) s.push(`Then ${list(later.map((p) => p.n))}, each once the parts it needs are back, with their answers in its task.`);
+  if (!started && out.some((p) => p.kind === "search")) s.push("A search part goes to ask with the model in the table.");
   if (mine.length && mine.every((p) => p.keep)) s.push(mine.some((p) => p.keepWhy) ? `Answer ${out.length ? "the questions" : "it"} yourself${out.length ? " once the facts are back" : ""}: ${QUESTIONS_WHY}.` : "Answer it yourself: it is too small to hand off.");
   else if (mine.length) {
     const on = mine.map((p) => `part ${p.n}${picksPerPart(r.manager) || !r.you?.label ? ` on ${p.use?.label ?? "your strongest model"}` : ""}`);
@@ -668,7 +671,7 @@ const appOf = (plan: PlanResult) => ({ app: plan.manager === "you" ? null : plan
 
 // after_yours: it waits for one of the person's parts (directly or through others), so it is theirs to hand over once theirs is done.
 export type RunStatus = "waiting" | "running" | "done" | "failed" | "stopped" | "yours" | "after_yours" | "blocked" | "asks";
-export interface RunPart { n: number; title: string; status: RunStatus; answer: string | null; receipt: string | null; model: string | null; modelId?: string | null; cost: number | null; seconds: number | null; error: string | null; verdict?: Verdict | null; gradedBy?: "you" | "manager" | null }
+export interface RunPart { n: number; title: string; status: RunStatus; answer: string | null; receipt: string | null; model: string | null; modelId?: string | null; cost: number | null; seconds: number | null; error: string | null; verdict?: Verdict | null; gradedBy?: "you" | "manager" | null; took?: boolean } // took: the app has had its answer (plan or plan_status)
 export interface RunView { id: string; started: string; running: boolean; parts: RunPart[]; cost: number | null; asks: { parts: number[]; estimate: number | null; cap: number } | null }
 
 // What a plan's paid parts would cost.
@@ -700,6 +703,16 @@ function keep(plan: PlanResult, paths: Map<string, { path: string; size: number 
 }
 
 export function runView(id: string): RunView | null { return runs.get(id)?.view ?? null; }
+// The next steps once Leanfare started a plan's parts by itself (the plan tool, 0.13).
+// A paid part that waits for a yes has not started: the run's own word for it says so.
+export const nextStarted = (r: PlanResult, v: RunView): string => `${nextOf(r, new Set(v.parts.filter((p) => ["waiting", "running", "done", "failed"].includes(p.status)).map((p) => p.n)))} The plan's id: ${r.id}.`;
+// The app has had the answers of these parts (plan or plan_status gave them): the plan card says so.
+export function tookAnswers(id: string): RunView | null {
+  const v = runs.get(id)?.view;
+  if (!v) return null;
+  for (const r of v.parts) if (r.answer || r.error) r.took = true;
+  return v;
+}
 
 // The deepest folder that holds every one of these files; null for none, or when only the top folder does.
 export function commonFolder(paths: string[]): string | null {
