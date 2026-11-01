@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appFolders, foundApps, forgetFound, hooks, lookForApps, mdlsDate, spotlight, usedIn } from "../src/found";
+import { localMonth } from "../src/util";
 
 const HOME = () => process.env.HOME!;
 const at = (iso: string) => new Date(iso);
@@ -73,8 +74,10 @@ describe("apps found on this computer", () => {
     folder(join(HOME(), ".grok"), "2026-10-02T10:00:00Z");
     const apps = (await lookForApps(true));
     expect(apps.map((a) => [a.id, a.provider])).toEqual([["gemini-cli", "google"], ["copilot", "copilot"], ["grok-build", "grok"]]);
-    expect(apps[0].last).toBe("2026-10");
-    // A folder's birth time cannot be set here (it is now), and a last use is never before the first.
+    // Its settings changed in October, but a folder's birth time cannot be set here (it is now), and a last use is never
+    // before the first: so the later of October and this month (it said October alone, and failed once November came).
+    const thisMonth = localMonth(new Date());
+    expect(apps[0].last).toBe(thisMonth > "2026-10" ? thisMonth : "2026-10");
     for (const a of apps) expect(a.last! >= a.first!).toBe(true);
   });
 
