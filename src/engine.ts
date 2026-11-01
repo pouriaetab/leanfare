@@ -88,7 +88,7 @@ export function chargeOf(m: Model, listCost: number | null): { cost: number | nu
 // verdicts and the trial's one word answers would make every chat estimate too low, and the other
 // way round. "main" is everything else (the chat and your other apps).
 export type LengthGroup = "main" | "delegate" | "check" | "trial" | "sidebyside";
-export const lengthGroup = (source: string | undefined): LengthGroup => (source === "delegate" || source === "check" || source === "trial" || source === "sidebyside" ? source : "main");
+export const lengthGroup = (source: string | undefined): LengthGroup => (source === "ask" ? "delegate" : source === "delegate" || source === "check" || source === "trial" || source === "sidebyside" ? source : "main"); // an ask about the prompts answers like a hand off
 let hist = { at: 0, map: new Map<string, number | null>() };
 export function outputHistory(task: string, model: string | null, effort: string | null = null, group: LengthGroup = "main"): number | null {
   if (effort) { const v = lengthsSeen(task, model, effort, group); if (v !== null) return v; }
