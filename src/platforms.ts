@@ -8,7 +8,7 @@ import { codexState } from "./codex";
 import { PROVIDERS, provider } from "./config";
 import type { Model } from "./data";
 import { db } from "./db";
-import { providerReady } from "./engine";
+import { providerReady, usableModels } from "./engine";
 import { meterView, type WindowView } from "./meter";
 import { FREE_PLANS, onFreePlan } from "./freeplans";
 import { saveSettings, settings } from "./settings";
@@ -33,13 +33,39 @@ export const RISK_WHY: Record<string, string> = {
   "its company may train on it": "Mistral's free Experiment plan: what is sent through it may be used to train Mistral's models. A paid plan is not used that way.",
   "its provider may train on it": "A free model on OpenRouter: its provider may keep what is sent or train on it, as your OpenRouter privacy settings allow.",
 };
-// Whether a model may take a piece of work: a private one stays on this computer; one with files from your
-// projects goes where Settings says (any platform that is on, not to a free tier that may be read, or this computer).
+// Where work may go (0.12, the where knob in Settings): 1 only this computer; 2 also paid models that do not train on
+// what is sent (your paid keys and plans; no free tier whose terms let its company read it or train on it); 3 also
+// free tiers, for work without your projects' files; 4 anywhere you ticked. Before 0.12 only files had a setting
+// (filesTo): any is 4, not to a free tier 3, only this computer 1 (which now keeps all work here, not only files).
+export type WhereStop = 1 | 2 | 3 | 4;
+export const WHERE_STOPS: WhereStop[] = [1, 2, 3, 4];
+export const WHERE_NAME: Record<WhereStop, string> = { 1: "Only this computer", 2: "Also paid models that do not train", 3: "Also free tiers, not your files", 4: "Anywhere you ticked" };
+export const WHERE_SAYS: Record<WhereStop, string> = {
+  1: "Every task stays here, on your models in Ollama and the other model apps on this computer. Nothing is sent out.",
+  2: "Also your paid keys and plans, whose terms do not let the company train on what is sent. Free tiers get nothing.",
+  3: "Free tiers too, but only work without your projects' files. Files go to this computer or to paid models.",
+  4: "Any model you ticked, files too, free tiers included.",
+};
+export function whereStop(s: { where?: number | null; filesTo?: string } = settings()): WhereStop {
+  if (s.where === 1 || s.where === 2 || s.where === 3 || s.where === 4) return s.where;
+  return s.filesTo === "local" ? 1 : s.filesTo === "notFree" ? 3 : 4;
+}
+const allows = (m: Pick<Model, "provider" | "free" | "local">, w: WhereStop, files: boolean) => !!m.local || w === 4 || (w === 3 && !files) || (w >= 2 && !readRisk(m));
+// Whether a model may take a piece of work: a private one stays on this computer; else where the knob says.
 export function mayTake(m: Pick<Model, "provider" | "free" | "local">, work: { private?: boolean; files?: boolean }): boolean {
   if (work.private) return !!m.local;
-  if (!work.files) return true;
-  const to = settings().filesTo ?? "any";
-  return to === "local" ? !!m.local : to === "notFree" ? !readRisk(m) : true;
+  return allows(m, whereStop(), !!work.files);
+}
+// Why a piece of work found no model, when the knob is what kept it in ("work goes only to this computer"), or null.
+export function whereWhy(work: { files?: boolean }): string | null {
+  const w = whereStop();
+  return w === 1 ? "work goes only to this computer" : w === 2 ? "work goes only to this computer and to paid models that do not train"
+    : w === 3 && work.files ? "your projects' files go only to this computer and to paid models that do not train" : null;
+}
+// How many of your ready models each stop lets take work, without your files and with them (shown by each stop).
+export function whereCounts(): Record<WhereStop, { all: number; files: number }> {
+  const ms = usableModels(modelOn);
+  return Object.fromEntries(WHERE_STOPS.map((w) => [w, { all: ms.filter((m) => allows(m, w, false)).length, files: ms.filter((m) => allows(m, w, true)).length }])) as Record<WhereStop, { all: number; files: number }>;
 }
 
 export function setPlatform(id: string, on: boolean) {
