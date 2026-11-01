@@ -826,3 +826,12 @@ tr.wd td { background: var(--panel-2); }
 .rp-ask-out.busy { color: var(--muted); border-left-color: var(--line-strong); }
 .rp-ask-out.err { color: var(--bad); border-left-color: var(--bad); }
 .rp-ask-text { white-space: pre-wrap; line-height: 1.5; overflow-wrap: anywhere; }
+
+/* Where work may go (0.12): the small knob */
+.where-knob { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); margin-top: 6px; }
+.lv-row.small { grid-template-columns: 140px minmax(0, 1fr); }
+.lvknob.small svg { width: 140px; height: auto; }
+.lv-tag.count { color: var(--muted); border-color: var(--line-strong); }
+.lv-tag.warn { color: var(--warn); border-color: var(--warn); }
+.note.warn { color: var(--warn); }
+@media (max-width: 720px) { .lv-row.small { grid-template-columns: minmax(0, 1fr); justify-items: center; } }

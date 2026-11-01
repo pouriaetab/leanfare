@@ -2951,16 +2951,31 @@
           r.riskWhy ? h("details", { class: "why" }, h("summary", { text: "Why it says so" }), h("p", { class: "note", text: r.riskWhy })) : null),
         sw ?? h("span", {})));
     }
-    // Where your projects' files may go (platforms.ts: mayTake); the details stay folded until asked for.
-    const to = S.st?.settings.filesTo ?? "any";
-    card.append(h("div", { class: "files-to" },
-      h("div", { class: "pname", text: "Your projects' files go to" }),
-      h("div", { class: "seg wrap", role: "group", "aria-label": "Your projects' files go to" }, ...[["any", "Any platform that is on"], ["notFree", "Not to a free tier that may be read"], ["local", "Only this computer"]].map(([k, label]) =>
-        h("button", { type: "button", "aria-pressed": String(to === k), text: label, onclick: () => patchSettings({ filesTo: k }, k === "any" ? "Files may go to any platform that is on." : k === "notFree" ? "Files skip free tiers that may be read." : "Files stay on this computer.") }))),
-      h("details", { class: "why" }, h("summary", { text: "What this does" }),
-        h("p", { class: "note", text: "Files from your projects, in a plan's parts or the delegate, go only where this says; work with no files may still go to any platform that is on. A part no model there can take stays with you. Not to a free tier: they skip Gemini's free key and OpenRouter's free models. Only this computer: they go to your models in Ollama. An app can also ask for one task or plan to stay on this computer (private)." }))));
+    card.append(whereKnobEl());
     card.append(h("p", { class: "fine", text: "The nearest limit shows first: the 5 hours before the week. A plan's numbers come only from its own app (Claude Code's status line, Codex's log files). Off: plans and the delegate leave that one out; the chat uses the models you ticked." }));
     return card;
+  }
+  // Where work may go (platforms.ts: whereStop, mayTake; 0.12): a small knob with four stops, how many of your models
+  // each stop lets take work, and a warning when it leaves none.
+  function whereKnobEl() {
+    const W = S.st?.where;
+    if (!W) return null;
+    const value = W.now;
+    const short = { 1: "Here only", 2: "+ Paid", 3: "+ Free tiers", 4: "Anywhere" };
+    const pick = (n) => patchSettings({ where: n }, n === 1 ? "Every task stays on this computer now." : `Work may go: ${W.names[n].toLowerCase()}.`);
+    const count = (n) => { const c = W.counts[n]; return !c.all ? "no model" : c.files < c.all ? `${plural(c.all, "model")}, ${c.files} with files` : plural(c.all, "model"); };
+    const defs = h("ul", { class: "lv-defs" }, ...[1, 2, 3, 4].map((n) => h("li", { class: n === value ? "on" : null },
+      h("button", { type: "button", "aria-pressed": String(n === value), "aria-label": `Where work may go ${n}, ${W.names[n]}`, onclick: () => (n === value ? null : pick(n)) },
+        h("b", { class: "n", text: String(n) }), h("span", { class: "d" }, h("b", { text: `${W.names[n]}. ` }), W.says[n],
+          h("span", { class: W.counts[n].all ? "lv-tag count" : "lv-tag warn", text: count(n) }), n === 4 ? h("span", { class: "lv-tag", text: "default" }) : null)))));
+    const c = W.counts[value];
+    const warn = !c.all ? "No model you have can take work at this stop, so Leanfare hands nothing off and plans keep every part with your app. Open Ollama with a model in it, or turn the knob up."
+      : !c.files ? "No model here may take your projects' files, so work with files stays with your app." : null;
+    return h("div", { class: "where-knob" }, h("div", { class: "pname", text: "Where work may go" }),
+      h("div", { class: "lv-row small" }, h("div", { class: "lv-knobbox" }, knobEl(value, short, pick, "Where work may go", 4), h("div", { class: "lv-hint", text: "Turn it, or press 1 to 4" })), defs),
+      warn ? h("p", { class: "note warn", text: warn }) : null,
+      h("details", { class: "why" }, h("summary", { text: "What this does" }),
+        h("p", { class: "note", text: "Plans, the delegate, its checks and side by side send work only where this says; a part no model there can take stays with your app. Paid models that do not train: your paid keys and plans, not Gemini's free key, Mistral's free plan or OpenRouter's free models, whose terms let the company read what is sent or train on it. An app can also ask for one task or plan to stay on this computer (private), whatever this says." })));
   }
   async function setPlatform(id, on) {
     try { S.platforms = await api("/api/platforms", { body: { id, on } }); renderSettings(); toast(on ? "Plans and the delegate can use it again." : "Plans and the delegate leave it out now.", "done"); } catch (e) { failed(e); }
@@ -3034,25 +3049,25 @@
   // The level's knob (level.ts): turned from 1 to 5, by the pointer, the arrow keys or a number key; the number and its
   // name in the middle.
   function sv(tag, attrs, text) { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, String(attrs[k])); if (text !== undefined) e.textContent = text; return e; }
-  const knobAt = (n) => -120 + 60 * (n - 1); // degrees from straight up: 1 at the lower left, 3 at the top, 5 at the lower right
+  const knobAt = (n, stops = 5) => -120 + (240 / (stops - 1)) * (n - 1); // degrees from straight up: 1 at the lower left, the middle at the top, the last at the lower right
   const knobPt = (cx, cy, r, deg) => { const a = (deg * Math.PI) / 180; return [cx + r * Math.sin(a), cy - r * Math.cos(a)]; };
   const knobArc = (cx, cy, r, a1, a2) => { const [x1, y1] = knobPt(cx, cy, r, a1), [x2, y2] = knobPt(cx, cy, r, a2); return `M${x1.toFixed(2)} ${y1.toFixed(2)} A${r} ${r} 0 ${a2 - a1 > 180 ? 1 : 0} 1 ${x2.toFixed(2)} ${y2.toFixed(2)}`; };
-  function knobEl(value, names, onPick, label = "How much Leanfare takes first") {
+  function knobEl(value, names, onPick, label = "How much Leanfare takes first", stops = 5) {
     const W = 176, H = 164, cx = 88, cy = 90, r = 60, body = r - 16;
     const g = sv("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, "aria-hidden": "true" });
-    g.append(sv("path", { d: knobArc(cx, cy, r, -120, 120), class: "lk-track" }), sv("path", { d: knobArc(cx, cy, r, -120, Math.max(-119, knobAt(value))), class: "lk-fill" }));
-    for (let n = 1; n <= 5; n++) {
-      const [tx, ty] = knobPt(cx, cy, r, knobAt(n)), [lx, ly] = knobPt(cx, cy, r + 16, knobAt(n));
+    g.append(sv("path", { d: knobArc(cx, cy, r, -120, 120), class: "lk-track" }), sv("path", { d: knobArc(cx, cy, r, -120, Math.max(-119, knobAt(value, stops))), class: "lk-fill" }));
+    for (let n = 1; n <= stops; n++) {
+      const [tx, ty] = knobPt(cx, cy, r, knobAt(n, stops)), [lx, ly] = knobPt(cx, cy, r + 16, knobAt(n, stops));
       g.append(sv("circle", { cx: tx.toFixed(2), cy: ty.toFixed(2), r: 2.2, class: n <= value ? "lk-tick on" : "lk-tick" }));
       g.append(sv("text", { x: lx.toFixed(2), y: (ly + 4).toFixed(2), "text-anchor": "middle", class: n === value ? "lk-num on" : "lk-num" }, String(n)));
     }
-    const [px, py] = knobPt(cx, cy, body - 9, knobAt(value));
+    const [px, py] = knobPt(cx, cy, body - 9, knobAt(value, stops));
     g.append(sv("circle", { cx, cy: cy + 2, r: body, class: "lk-shadow" }), sv("circle", { cx, cy, r: body, class: "lk-body" }), sv("circle", { cx: px.toFixed(2), cy: py.toFixed(2), r: 4, class: "lk-dot" }),
       sv("text", { x: cx, y: cy + 6, "text-anchor": "middle", class: "lk-big" }, String(value)), sv("text", { x: cx, y: cy + 23, "text-anchor": "middle", class: "lk-name" }, names[value]));
-    const wrap = h("div", { class: "lvknob", role: "slider", tabindex: "0", "aria-label": label, "aria-valuemin": "1", "aria-valuemax": "5", "aria-valuenow": String(value), "aria-valuetext": `${value}, ${names[value]}` }, g);
+    const wrap = h("div", { class: stops < 5 ? "lvknob small" : "lvknob", role: "slider", tabindex: "0", "aria-label": label, "aria-valuemin": "1", "aria-valuemax": String(stops), "aria-valuenow": String(value), "aria-valuetext": `${value}, ${names[value]}` }, g);
     wrap.addEventListener("keydown", (e) => {
       const k = e.key;
-      const n = k === "ArrowRight" || k === "ArrowUp" ? Math.min(5, value + 1) : k === "ArrowLeft" || k === "ArrowDown" ? Math.max(1, value - 1) : k === "Home" ? 1 : k === "End" ? 5 : /^[1-5]$/.test(k) ? Number(k) : null;
+      const n = k === "ArrowRight" || k === "ArrowUp" ? Math.min(stops, value + 1) : k === "ArrowLeft" || k === "ArrowDown" ? Math.max(1, value - 1) : k === "Home" ? 1 : k === "End" ? stops : /^[1-9]$/.test(k) && Number(k) <= stops ? Number(k) : null;
       if (n === null) return;
       e.preventDefault();
       if (n !== value) onPick(n);
@@ -3064,7 +3079,7 @@
       const x = (e.clientX - b.left) * (W / b.width) - cx, y = (e.clientY - b.top) * (H / b.height) - cy;
       if (Math.hypot(x, y) < body * 0.45) return;
       const deg = Math.max(-120, Math.min(120, (Math.atan2(x, -y) * 180) / Math.PI));
-      const n = Math.round((deg + 120) / 60) + 1;
+      const n = Math.round((deg + 120) / (240 / (stops - 1))) + 1;
       if (n !== value) onPick(n);
     });
     return wrap;
