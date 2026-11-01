@@ -878,3 +878,14 @@ tr.wd td { background: var(--panel-2); }
 .lv-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 8px; vertical-align: -1px; background: var(--lk); }
 @media (prefers-reduced-motion: reduce) { .lv-dot.on { animation: none; } .lv-seg { transition: none; } }
 @media (max-width: 560px) { .lv-bar-row { grid-template-columns: minmax(0, 1fr) 4.5em; } .lv-bar-row .lv-bar { grid-column: 1 / -1; grid-row: 2; } }
+
+/* Settings in groups that open and close (0.13): one small type size, the groups' names as the only headings. */
+#tab-settings details.group { border-bottom: 1px solid var(--line); padding: 2px 0 8px; }
+#tab-settings details.group > summary { list-style: none; cursor: pointer; font-weight: 600; font-size: 13px; padding: 10px 2px 6px; display: flex; align-items: center; gap: 8px; }
+#tab-settings details.group > summary::-webkit-details-marker { display: none; }
+#tab-settings details.group > summary::before { content: "›"; display: inline-block; width: 10px; color: var(--muted); transition: transform 0.15s ease; }
+#tab-settings details.group[open] > summary::before { transform: rotate(90deg); }
+#tab-settings .setting h3 { font-size: 13px; }
+#tab-settings .setting p, #tab-settings .setting .note { font-size: 12.5px; }
+#tab-settings details.more > summary { cursor: pointer; color: var(--muted); font-size: 12px; margin: 2px 0; }
+@media (prefers-reduced-motion: reduce) { #tab-settings details.group > summary::before { transition: none; } }

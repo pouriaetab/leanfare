@@ -3412,6 +3412,50 @@
       runButton("Look again", (signal) => refreshList("local", signal))));
   }
 
+  // ---- Settings in groups that open and close (0.13) -----------------------------------------------
+  // Each column's cards go into a few groups by their heading: the everyday ones open, the rest closed, each remembered
+  // as you leave it. A card's longer explanations fold behind a Details line, so a closed page fits one screen.
+  const RIGHT_GROUPS = [
+    { key: "apps", title: "Your apps and AI plans", open: true, has: ["Use Leanfare in your apps", "Hand work to your other AI plans"] },
+    { key: "level", title: "How much Leanfare does", open: true, has: ["How much Leanfare takes first", "Plans in your apps", "Jobs", "Where Leanfare may send work"] },
+    { key: "money", title: "Budget and plans", open: false, has: ["Monthly budget", "Compare with a subscription", "Your subscriptions", "Your usual model"] },
+    { key: "picks", title: "How models are picked", open: false, has: ["How Auto picks", "Speed", "Thinking effort", "Answers in the chat"] },
+    { key: "quality", title: "Quality checks", open: false, has: ["Review every answer", "How the models did for you", "Side by side", "Show who wrote what (a test)"] },
+    { key: "data", title: "What is kept", open: false, has: ["What Leanfare keeps on this computer", "Chat history", "Instructions for new chats"] },
+    { key: "more", title: "More", open: false, has: [] }, // everything else: versions, problems, other apps, prices, look
+  ];
+  const LEFT_GROUPS = [
+    { key: "providers", title: "Models and keys", open: true, has: null }, // the providers, until Local models
+    { key: "local", title: "Models on this computer", open: false, has: ["Local models"] },
+  ];
+  const groupOpen = (key, open) => { try { const v = localStorage.getItem("leanfare.group." + key); return v === null ? open : v === "1"; } catch { return open; } };
+  // fallback: the group a card no group names goes to (null: the group of the section it follows).
+  function groupSettings(col, groups, fallback) {
+    const title = (card) => card.querySelector("h3")?.textContent?.trim() ?? card.textContent?.trim().slice(0, 60) ?? "";
+    const into = new Map(groups.map((g) => [g.key, []]));
+    let current = groups[0].key;
+    for (const k of [...col.children]) {
+      if (k.classList.contains("section-title")) { const g = groups.find((x) => x.has && x.has.includes(k.textContent.trim())); if (g) current = g.key; continue; }
+      const g = groups.find((x) => x.has && x.has.includes(title(k)));
+      into.get(g ? g.key : fallback ?? current).push(k);
+    }
+    col.replaceChildren(...groups.filter((g) => into.get(g.key).length).map((g) => {
+      const d = h("details", { class: "group", "data-group": g.key, open: groupOpen(g.key, g.open) ? "" : null }, h("summary", { text: g.title }), ...into.get(g.key));
+      d.addEventListener("toggle", () => { try { localStorage.setItem("leanfare.group." + g.key, d.open ? "1" : "0"); } catch {} });
+      for (const card of into.get(g.key)) foldDetails(card);
+      return d;
+    }));
+  }
+  // The longer explanations of a card (paragraphs over 140 characters) go behind one Details line.
+  function foldDetails(card) {
+    if (!card.classList?.contains("setting") || card.querySelector(":scope > details.more")) return;
+    const long = [...card.querySelectorAll(":scope > p")].filter((p) => !p.classList.contains("note") && (p.textContent ?? "").length > 140);
+    if (!long.length) return;
+    const d = h("details", { class: "more" }, h("summary", { text: "Details" }));
+    long[0].before(d);
+    for (const p of long) d.append(p);
+  }
+
   function renderSettings() {
     const el = $("#tab-settings");
     const st = S.st;
@@ -3509,6 +3553,8 @@
           h("button", { type: "button", "aria-pressed": String(theme === k), text: label, onclick: () => pickTheme(k) }))),
         h("p", { class: "fine", text: "Auto is day from 7 AM to 7 PM by this computer's clock." })),
       h("p", { class: "fine" }, `Leanfare ${st.version} · Bun ${st.bun}${st.bun.startsWith(st.bunTested + ".") ? "" : ` (tested on ${st.bunTested}.x)`} · keys in ${st.keyStore}. Prices: LiteLLM's price list (MIT) via llmledger (MIT)${st.settings.providers.openrouter?.on ? " and OpenRouter's model list" : ""}. Ratings: Arena leaderboard (CC BY 4.0), condensed to each model's best rating per task. Not affiliated with any AI provider.`));
+    groupSettings(left, LEFT_GROUPS, null);
+    groupSettings(right, RIGHT_GROUPS, "more");
     keepInputs(el, () => el.replaceChildren(left, right)); // what is typed in key boxes survives the redraw
     el.querySelector(".colL").scrollTop = scrollL;
     el.querySelector(".colR").scrollTop = scrollR;
