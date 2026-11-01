@@ -47,7 +47,8 @@ export interface Settings {
   codexPlan: boolean; // a plan's reading, drafting and working out parts may run on your ChatGPT plan through Codex (codex.ts); off until you turn it on
   setupDone: boolean; // the first run's Set up was done (setup.ts); until then the app opens on it
   appsOff: string[]; // platforms plans and the delegate leave out (platforms.ts): provider ids, "chatgpt" (OpenAI and Codex), "local"
-  filesTo: "any" | "notFree" | "local"; // where your projects' files may go in plans and the delegate (platforms.ts: mayTake)
+  filesTo: "any" | "notFree" | "local"; // before 0.12: where your projects' files may go; read only while where is not set
+  where?: 1 | 2 | 3 | 4 | null; // 0.12: where work may go (platforms.ts: whereOf, mayTake); null: from filesTo
   sideBySide: number; // one hand off in this many is also answered by the top model and judged blind against it (sidebyside.ts); 0: off
   sideBySideCap: number; // US dollars a month side by side may spend, from your budget
   whoWrote: boolean; // a test: answers handed back to apps mark which model wrote each paragraph (mcp.ts: markedBy)
@@ -220,7 +221,8 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
     if (!Number.isFinite(v) || v < 0 || v > 100) return { error: "paidCap must be a dollar amount from 0 to 100" };
     out.paidCap = Math.round(v * 100) / 100;
   }
-  if ("filesTo" in p) { if (!["any", "notFree", "local"].includes(p.filesTo)) return { error: "filesTo must be any, notFree or local" }; out.filesTo = p.filesTo; }
+  if ("filesTo" in p) { if (!["any", "notFree", "local"].includes(p.filesTo)) return { error: "filesTo must be any, notFree or local" }; out.filesTo = p.filesTo; if (!("where" in p)) out.where = null; } // the older choice, said again, counts
+  if ("where" in p) { if (![1, 2, 3, 4].includes(p.where)) return { error: "where must be 1 (only this computer), 2, 3 or 4 (anywhere you ticked)" }; out.where = p.where; }
   if ("planAuto" in p) {
     if (typeof p.planAuto === "boolean") return { error: "planAuto must be a dollar amount from 0 to 1,000" };
     const v = p.planAuto === null || p.planAuto === "" ? 0 : Number(p.planAuto);

@@ -24,7 +24,7 @@ import { parseSpeed, secondsText, type SpeedChoice } from "./speed";
 import { TASKS, fitsText, getModel, isRetired, type Model } from "./data";
 import { db } from "./db";
 import { passedLocal } from "./localpass";
-import { mayTake, modelOn, readRisk } from "./platforms";
+import { mayTake, modelOn, readRisk, whereWhy } from "./platforms";
 import { movedDown } from "./grades";
 import { fromAnotherCompany, masked } from "./judge";
 import { restOf, restText } from "./rest";
@@ -407,8 +407,9 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   // platforms turned off. Said so, not as too much text.
   if (!usableModels(within(doFit.ok)).length) {
     if (input.private && !usableModels((m) => !!m.local && doFit.ok(m)).length) throw Object.assign(new UserError(409, "This task is to stay on this computer, and none of your models here can take it. Do it yourself, or start Ollama with a model that fits (Settings, Local models).", "private_none"), { spent: 0 });
-    if (!input.private && work.files && usableModels((m) => doFit.ok(m) && on(m) && (!limit || limit(m))).length && !usableModels((m) => doFit.ok(m) && on(m) && allowed(m) && (!limit || limit(m))).length)
-      throw Object.assign(new UserError(409, `Your projects' files go ${settings().filesTo === "local" ? "only to this computer" : "to no free tier that may be read"} (Settings, Where Leanfare may send work), and no model there can take this. Do it yourself, or change that setting.`, "files_where"), { spent: 0 });
+    const why = whereWhy(work); // the where knob kept it in (platforms.ts)
+    if (!input.private && why && usableModels((m) => doFit.ok(m) && on(m) && (!limit || limit(m))).length && !usableModels((m) => doFit.ok(m) && on(m) && allowed(m) && (!limit || limit(m))).length)
+      throw Object.assign(new UserError(409, `${why[0].toUpperCase()}${why.slice(1)} (Settings, Where Leanfare may send work), and no model there can take this. Do it yourself, or turn that knob up.`, "files_where"), { spent: 0 });
     // Every model that could take it would cost more than your cap for paid work: say so, and spend nothing.
     if (!input.trial && usableModels((m) => doFit0.ok(m) && on(m) && allowed(m) && (!limit || limit(m))).length && !usableModels((m) => doFit.ok(m) && on(m) && allowed(m) && (!limit || limit(m))).length) {
       const cheapest = Math.min(...usableModels((m) => doFit0.ok(m) && on(m) && allowed(m) && (!limit || limit(m))).map((m) => costFor(m, prompt.length + system.length, input.maxOut) ?? Infinity));

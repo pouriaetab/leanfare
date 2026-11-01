@@ -33,7 +33,7 @@ import { addGrade, movedDown, standing, standingText, type GradedKind, type Verd
 import { MODE_AT, planMode } from "./modes";
 import { gb, suggestLocal } from "./local";
 import { passedLocal } from "./localpass";
-import { mayTake, modelOn, platformOn, readRisk } from "./platforms";
+import { mayTake, modelOn, platformOn, readRisk, whereStop, whereWhy } from "./platforms";
 import { planView, windowsNow } from "./plans";
 import { DELEGATE_LIMITS, readForDelegate, sizesForPlan, PLAN_FILES } from "./readfiles";
 import { guessTask, pickModel, type Msg } from "./router";
@@ -319,12 +319,11 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
   const r = reading(part, files);
   // A private plan stays on this computer; a part's files go where Settings says (platforms.ts: mayTake).
   const work = { private: priv, files: r.named > 0 };
-  const filesTo = settings().filesTo ?? "any";
   const stay = (why: string): Part => ({ ...part, where: "you", model: null, use: modelInYourApp(part, manager), seconds: null, tokens: r.tokens + OUT_YOU, cost: null, why });
   if (part.keep) return stay(part.keepWhy ?? KEEP_WHY);
   // Reading, drafting and working out can run on your ChatGPT plan through Codex, before anything paid.
   // Codex moved down by the manager's grades for this kind takes only a part no model can take.
-  const codexCan = codex && !priv && !(work.files && filesTo === "local") && platformOn("chatgpt") && !!DELEGATE_KIND[part.kind];
+  const codexCan = codex && !priv && whereStop() >= 2 && platformOn("chatgpt") && !!DELEGATE_KIND[part.kind]; // a plan, not this computer
   const viaCodex = codexCan && !movedDown(CODEX_ID, part.kind);
   if (part.kind === "code") return stay(`it changes the project, which only ${manager} can do`);
   if (part.kind === "act") return stay(`it needs ${manager}'s own tools`);
@@ -343,7 +342,7 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
   const anyFit = part.kind === "search" ? (m: Model) => m.provider === "perplexity" && fits(m) : fits;
   const offWhy = !usableModels(anyFit).length || usableModels(kindOk).length ? null
     : priv ? "the plan is to stay on this computer, and none of your models here can take it"
-    : usableModels((m) => anyFit(m) && modelOn(m)).length && work.files ? `its files go ${filesTo === "local" ? "only to this computer" : "to no free tier that may be read"} (Settings, Where Leanfare may send work), and no model there can take it`
+    : usableModels((m) => anyFit(m) && modelOn(m)).length && whereWhy(work) ? `${whereWhy(work)} (Settings, Where Leanfare may send work), and no model there can take it`
     : "the platforms that could take it are turned off for plans and the delegate (Settings, Where Leanfare may send work)";
   // A model the manager's grades moved down for this kind is skipped, while another can take the part.
   const graded = (m: Model) => kindOk(m) && !movedDown(m.id, part.kind);

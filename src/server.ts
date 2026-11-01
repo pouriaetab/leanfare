@@ -41,7 +41,7 @@ import { setAuto } from "./workers";
 import { setUp, setupView } from "./setup";
 import { OFF_TEST, OFF_TEXT, OFF_TRIAL, setSwitch, switchedOn } from "./switch";
 import { startTest, stopTest, testRunning, testView } from "./localtest";
-import { platformsView, setPlatform } from "./platforms";
+import { WHERE_NAME, WHERE_SAYS, platformsView, setPlatform, whereCounts, whereStop } from "./platforms";
 import { retirementNotices } from "./retire";
 import { savings } from "./savings";
 import { checkKey, effortLevels, UserError } from "./upstream";
@@ -158,6 +158,7 @@ export function state() {
     // a Claude app now (raised while the plan runs low, when that is on).
     level: { names: LEVEL_NAME, says: LEVEL_SAYS, apps: APP_LEVELS, now: levelFor(s, "Claude Code", null, planMode()), plan: planReading() },
     keep: { names: KEEP_NAMES, says: KEEP_SAYS, days: KEEP_DAYS, kept: wordsKept() }, // what Leanfare keeps of the words (words.ts)
+    where: { now: whereStop(s), names: WHERE_NAME, says: WHERE_SAYS, counts: whereCounts() }, // where work may go (platforms.ts, 0.12)
     budget: b,
     month: (() => { const v = savings(); return { spent: v.spent, today: v.today, answers: v.answers }; })(),
     notices,
