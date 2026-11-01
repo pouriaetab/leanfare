@@ -1,10 +1,9 @@
 // The plan's page inside apps that show MCP Apps (planapp.ts), run in happy-dom with a stand in for
-// the app it is shown in: the handshake, the table from the tool's result, Run (plan_run, then
-// plan_status until the parts end), handing the answers back to the chat, and nothing else.
+// the app it is shown in: the handshake, the table from the tool's result, and the run followed by
+// itself with plan_status (peek) until Claude has graded every answer; no buttons, nothing sent to the chat.
 import { afterEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { APP_PROTOCOL, PLAN_APP_HTML } from "../src/planapp";
-import { OFF_TEXT } from "../src/switch";
 
 let win: any = null;
 afterEach(async () => { try { await win?.happyDOM?.abort(); win?.close(); } catch {} win = null; });
@@ -51,38 +50,49 @@ describe("the plan inside the chat (an MCP App)", () => {
     expect(doc.body.textContent).toContain("Waiting for Leanfare's plan");
   });
 
-  test("the tool's result becomes the table; Run is the yes for the paid parts it names, then it follows the parts to their answers", async () => {
-    let calls = 0;
+  test("a plan that came with its run: the page follows it by itself, from running to done, with Claude and checked, and has no buttons", async () => {
+    let looks = 0;
+    const part1 = { n: 1, title: "Read the logs", model: "GPT-5 mini", error: null };
+    const part2 = { n: 2, title: "Fix the cause", status: "yours", model: null, answer: null, error: null };
     const { doc, sent, push } = open((m) => {
       if (m.method === "ui/initialize") return { hostContext: {} };
-      if (m.method === "tools/call" && m.params.name === "plan_run") return { structuredContent: { id: "p1", running: true, parts: [{ n: 1, status: "running" }, { n: 2, status: "yours" }], asks: null } };
       if (m.method === "tools/call" && m.params.name === "plan_status") {
-        calls++;
-        return { structuredContent: { id: "p1", running: false, asks: null, parts: [{ n: 1, title: "Read the logs", status: "done", model: "GPT-5 mini", answer: "Three timeouts at 10:02.", error: null }, { n: 2, title: "Fix the cause", status: "yours", model: null, answer: null, error: null }] } };
+        looks++;
+        if (looks === 1) return { structuredContent: { id: "p1", running: true, asks: null, parts: [{ ...part1, status: "running", answer: null }, part2] } };
+        if (looks === 2) return { structuredContent: { id: "p1", running: false, asks: null, parts: [{ ...part1, status: "done", answer: "Three timeouts at 10:02.", took: false }, part2] } };
+        if (looks === 3) return { structuredContent: { id: "p1", running: false, asks: null, parts: [{ ...part1, status: "done", answer: "Three timeouts at 10:02.", took: true }, part2] } };
+        return { structuredContent: { id: "p1", running: false, asks: null, parts: [{ ...part1, status: "done", answer: "Three timeouts at 10:02.", took: true, verdict: "good" }, part2] } };
       }
-      if (m.method === "ui/message") return {};
     });
     await until(() => sent.some((m) => m.method === "ui/notifications/initialized"));
-    push("ui/notifications/tool-result", { content: [{ type: "text", text: "| # | Part |" }], structuredContent: PLAN });
-    await until(() => !!doc.querySelector("#run"));
+    push("ui/notifications/tool-result", { content: [{ type: "text", text: "| # | Part |" }], structuredContent: { ...PLAN, run: { running: true, cost_usd: 0, asks: null, parts: [{ ...part1, status: "running", answer: null }, part2] } } });
+    await until(() => doc.body.textContent.includes("Leanfare is running 1 part by itself"));
+    expect(doc.querySelector("#state .dot")).not.toBeNull(); // it shows it is working
     const t = doc.body.textContent;
     expect(t).toContain("Read the logs");
     expect(t).toContain("GPT-5 mini");
     expect(t).toContain("your model");
     expect(t).toContain("in your plan");
-    expect(doc.querySelector("#run").textContent).toBe("Run Leanfare's parts (about $0.01 paid)");
-    doc.querySelector("#run").click();
-    await until(() => calls > 0 && doc.body.textContent.includes("Three timeouts"));
-    expect(sent.find((m) => m.params?.name === "plan_run").params.arguments).toEqual({ id: "p1", paid: "yes" });
-    expect(doc.body.textContent).toContain("done");
+    expect(t).toContain("running…");
+    await until(() => doc.body.textContent.includes("Claude picks up their answers next"), 6000);
     expect(doc.querySelector("details pre").textContent).toBe("Three timeouts at 10:02.");
-    doc.querySelector("#back").click();
-    await until(() => sent.some((m) => m.method === "ui/message"));
-    expect(sent.find((m) => m.method === "ui/message").params.content.text).toContain("plan_status");
+    await until(() => doc.body.textContent.includes("Claude has every answer and is checking them"), 9000);
+    expect(doc.body.textContent).toContain("with Claude");
+    await until(() => doc.body.textContent.includes("Done: Claude checked every answer (1 good)."), 9000);
+    expect(doc.body.textContent).toContain("checked: good");
+    expect(doc.querySelector("#state .dot")).toBeNull();
+    // It only looked: every call was plan_status with peek, nothing was run, and nothing was sent to the chat.
+    const calls = sent.filter((m) => m.method === "tools/call");
+    expect(calls.every((m) => m.params.name === "plan_status" && m.params.arguments.peek === true)).toBe(true);
+    expect(sent.some((m) => m.method === "ui/message")).toBe(false);
+    expect(doc.querySelectorAll("button").length).toBe(0);
+    const n = looks;
+    await Bun.sleep(4500);
+    expect(looks).toBe(n); // every answer graded: it stops looking
     expect(sent.some((m) => m.method === "ui/notifications/size-changed")).toBe(true); // it tells the app its height
-  });
+  }, 30000);
 
-  test("a run Claude started itself: the page follows it, with no second Run and no hand back", async () => {
+  test("a plan that came without a run (run false): the page looks for one Claude starts later, and follows it", async () => {
     let looks = 0;
     const { doc, sent, push } = open((m) => {
       if (m.method === "ui/initialize") return { hostContext: {} };
@@ -90,33 +100,34 @@ describe("the plan inside the chat (an MCP App)", () => {
         looks++;
         if (looks === 1) return { isError: true, content: [{ type: "text", text: "No run of that plan." }] }; // Claude has not started it yet
         if (looks <= 3) return { structuredContent: { id: "p1", running: true, asks: null, parts: [{ n: 1, title: "Read the logs", status: "running", model: null, answer: null, error: null }, { n: 2, title: "Fix the cause", status: "yours", model: null, answer: null, error: null }] } };
-        return { structuredContent: { id: "p1", running: false, asks: null, parts: [{ n: 1, title: "Read the logs", status: "done", model: "GPT-5 mini", answer: "Three timeouts at 10:02.", error: null }, { n: 2, title: "Fix the cause", status: "yours", model: null, answer: null, error: null }] } };
+        return { structuredContent: { id: "p1", running: false, asks: null, parts: [{ n: 1, title: "Read the logs", status: "done", model: "GPT-5 mini", answer: "Three timeouts at 10:02.", took: true, error: null }, { n: 2, title: "Fix the cause", status: "yours", model: null, answer: null, error: null }] } };
       }
     });
     await until(() => sent.some((m) => m.method === "ui/notifications/initialized"));
     push("ui/notifications/tool-result", { structuredContent: PLAN });
-    await until(() => !!doc.querySelector("#run"));
-    expect(doc.querySelector("#run").textContent).toBe("Run Leanfare's parts (about $0.01 paid)");
-    await until(() => doc.body.textContent.includes("Claude started this run."), 9000);
-    expect(doc.querySelector("#run").textContent).toBe("Running…");
-    expect(doc.querySelector("#run").disabled).toBe(true);
-    await until(() => doc.body.textContent.includes("Three timeouts"), 6000);
-    expect(doc.body.textContent).toContain("Claude started this run and reads the answers itself.");
-    expect(doc.querySelector("#back")).toBeNull();
+    await until(() => doc.body.textContent.includes("Leanfare has not started its parts."));
+    await until(() => doc.body.textContent.includes("Leanfare is running 1 part by itself"), 9000);
+    await until(() => doc.body.textContent.includes("Three timeouts"), 9000);
+    expect(doc.body.textContent).toContain("Claude has every answer and is checking them.");
     expect(sent.some((m) => m.params?.name === "plan_run")).toBe(false);
-  }, 20000);
+    expect(doc.querySelectorAll("button").length).toBe(0);
+  }, 30000);
 
-  test("a part after one of yours: the page says it waits for yours, and offers no Run when nothing else can start", async () => {
-    const { doc, sent, push } = open((m) => (m.method === "ui/initialize" ? { hostContext: {} } : undefined));
+  test("a paid part waiting for a yes, and a part after one of yours: the page says who does what next, with no button", async () => {
+    const { doc, sent, push } = open((m) => (m.method === "ui/initialize" ? { hostContext: {} } : m.method === "tools/call" ? { structuredContent: { id: "p2", running: false, asks: { parts: [3], estimate: 0.04, cap: 0 }, parts: [{ n: 1, title: "Decide", status: "yours" }, { n: 2, title: "Read after", status: "after_yours" }, { n: 3, title: "Search", status: "asks" }] } } : undefined));
     await until(() => sent.some((m) => m.method === "ui/notifications/initialized"));
     const parts = [
       { ...PLAN.parts[1], n: 1, needs: [] }, // yours
       { ...PLAN.parts[0], n: 2, needs: [1], runs_on: "free", cost_usd: 0 }, // Leanfare's, after yours
+      { ...PLAN.parts[0], n: 3, title: "Search", needs: [], runs_on: "paid", cost_usd: 0.04 }, // paid, over the cap
     ];
-    push("ui/notifications/tool-result", { structuredContent: { id: "p2", parts, totals: { parts: 2, out: 1, later: 1, kept: 31000, used: 5000, seconds: null, after: 12, cost: 0 } } });
+    push("ui/notifications/tool-result", { structuredContent: { id: "p2", parts, totals: { parts: 3, out: 2, later: 1, kept: 31000, used: 5000, seconds: null, after: 12, cost: 0.04 },
+      run: { running: false, cost_usd: 0, asks: { parts: [3], estimate: 0.04, cap: 0 }, parts: [{ n: 1, title: "Decide", status: "yours" }, { n: 2, title: "Read after", status: "after_yours" }, { n: 3, title: "Search", status: "asks" }] } } });
     await until(() => doc.body.textContent.includes("waits for yours"));
     expect(doc.body.textContent).toContain("Part 2 waits for yours: once yours are done, Claude hands it to Leanfare.");
-    expect(doc.querySelector("#run")).toBeNull();
+    expect(doc.body.textContent).toContain("Part 3 is paid (about $0.04) and waits for your yes: Claude asks you in the chat.");
+    expect(doc.body.textContent).toContain("waits for a yes");
+    expect(doc.querySelectorAll("button").length).toBe(0);
   });
 
   test("messages from anywhere but the app it is shown in are ignored, and a result with no plan shows its text", async () => {
@@ -129,27 +140,11 @@ describe("the plan inside the chat (an MCP App)", () => {
     expect(doc.body.textContent).toContain("plan needs a task.");
   });
 
-  test("Run while Leanfare is switched off: the page says so, keeps the plan, and asks for nothing more", async () => {
-    const { doc, sent, push } = open((m) => {
-      if (m.method === "ui/initialize") return { hostContext: {} };
-      // What the door answers to plan_run while Leanfare is off (mcp.ts runTool).
-      if (m.method === "tools/call" && m.params.name === "plan_run") return { content: [{ type: "text", text: OFF_TEXT }], structuredContent: { off: true } };
-    });
-    await until(() => sent.some((m) => m.method === "ui/notifications/initialized"));
-    push("ui/notifications/tool-result", { structuredContent: PLAN });
-    await until(() => !!doc.querySelector("#run"));
-    expect(doc.body.textContent).not.toContain("null"); // no local model suggestion: nothing in its place
-    doc.querySelector("#run").click();
-    await until(() => doc.body.textContent.includes("switched off"));
-    expect(doc.body.textContent).toContain(OFF_TEXT);
-    expect(doc.body.textContent).not.toContain("Cannot read");
-    expect(doc.querySelector("#run")).not.toBeNull(); // Run is still there for when it is on again
-    expect(sent.some((m) => m.params?.name === "plan_status")).toBe(false);
-  });
-
   test("the page loads nothing from outside: no script, style or font addresses", () => {
     expect(PLAN_APP_HTML).not.toMatch(/(src|href)\s*=\s*["']https?:/i);
     expect(PLAN_APP_HTML).not.toMatch(/@import|url\(\s*["']?https?:/i);
     expect(PLAN_APP_HTML).not.toMatch(/\bfetch\(|XMLHttpRequest|WebSocket/);
+    expect(PLAN_APP_HTML).not.toContain("ui/message"); // it never writes in the chat for you
+    expect(PLAN_APP_HTML).not.toContain("<button");
   });
 });

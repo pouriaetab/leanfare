@@ -1,5 +1,5 @@
-// The MCP door and a response it no longer waits for, and the plan's page in the chat: Run names the
-// paid parts, and Stop is there while they run.
+// The MCP door and a response it no longer waits for, and the plan's page in the chat: it follows a run
+// Leanfare started by itself, says what waits for a yes, and leaves stopping to Claude's plan_stop.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { PLAN_APP_HTML } from "../src/planapp";
@@ -61,9 +61,10 @@ function open(answer: (msg: any) => any) {
 }
 const until = async (ok: () => boolean, ms = 3000) => { for (let i = 0; i < ms / 20 && !ok(); i++) await Bun.sleep(20); };
 
-describe("the page's Run is the yes for the paid parts", () => {
-  test("a paid part whose cost is not known: Run says so", async () => {
-    const { doc, sent, push } = open((m) => (m.method === "ui/initialize" ? { hostContext: {} } : m.method === "tools/call" ? { structuredContent: { id: "p1", running: false, parts: [], asks: null } } : undefined));
+describe("the page follows a plan Leanfare started by itself (0.13)", () => {
+  test("a paid part whose cost is not known: the page says it waits for a yes and that Claude asks, with no button", async () => {
+    const run = { running: false, cost_usd: 0, asks: { parts: [2], estimate: null, cap: 0 }, parts: [{ n: 1, title: "Read the logs", status: "done", model: "Free model", answer: "Fine.", took: true, error: null }, { n: 2, title: "Search the web", status: "asks", model: null, answer: null, error: null }] };
+    const { doc, sent, push } = open((m) => (m.method === "ui/initialize" ? { hostContext: {} } : m.method === "tools/call" ? { structuredContent: { id: "p1", ...run } } : undefined));
     await until(() => sent.some((m) => m.method === "ui/notifications/initialized"));
     push("ui/notifications/tool-result", { content: [{ type: "text", text: "| # |" }], structuredContent: {
       id: "p1",
@@ -72,32 +73,31 @@ describe("the page's Run is the yes for the paid parts", () => {
         { n: 2, title: "Search the web", kind: "search", effort: "medium", needs: [], runs_on: "paid", model: "perplexity/sonar", model_label: "Sonar", seconds: 9, tokens: 2000, cost_usd: null, files: [], task: "t" },
       ],
       totals: { parts: 2, out: 2, kept: 5000, used: 0, seconds: 9, cost: null },
+      run,
     } });
-    await until(() => !!doc.querySelector("#run"));
-    const label = doc.querySelector("#run").textContent;
-    doc.querySelector("#run").click();
-    await until(() => sent.some((m) => m.params?.name === "plan_run"));
-    expect(label).toContain("paid");
+    await until(() => doc.body.textContent.includes("waits for your yes"));
+    expect(doc.body.textContent).toContain("Part 2 is paid (cost not known) and waits for your yes: Claude asks you in the chat.");
+    expect(doc.querySelectorAll("button").length).toBe(0);
+    expect(sent.some((m) => m.params?.name === "plan_run")).toBe(false); // the page never says yes for you
   });
 
-  test("while parts run there is a Stop: on the page, and plan_stop at the door", async () => {
+  test("while parts run the page only follows them; stopping stays a tool for Claude (plan_stop at the door)", async () => {
     const { doc, sent, push } = open((m) => {
       if (m.method === "ui/initialize") return { hostContext: {} };
-      if (m.method === "tools/call" && m.params.name === "plan_run") return { structuredContent: { id: "p1", running: true, parts: [{ n: 1, status: "running" }], asks: null } };
       if (m.method === "tools/call" && m.params.name === "plan_status") return { structuredContent: { id: "p1", running: true, asks: null, parts: [{ n: 1, title: "Read the logs", status: "running", model: null, answer: null, error: null }] } };
     });
     await until(() => sent.some((m) => m.method === "ui/notifications/initialized"));
     push("ui/notifications/tool-result", { content: [{ type: "text", text: "| # |" }], structuredContent: {
       id: "p1", parts: [{ n: 1, title: "Read the logs", kind: "read", effort: "low", needs: [], runs_on: "paid", model: "openai/gpt-5-mini", model_label: "GPT-5 mini", seconds: 5, tokens: 3000, cost_usd: 0.4, files: [], task: "t" }],
       totals: { parts: 1, out: 1, kept: 3000, used: 0, seconds: 5, cost: 0.4 },
+      run: { running: true, cost_usd: 0, asks: null, parts: [{ n: 1, title: "Read the logs", status: "running", model: null, answer: null, error: null }] },
     } });
-    await until(() => !!doc.querySelector("#run"));
-    doc.querySelector("#run").click();
     await until(() => sent.some((m) => m.params?.name === "plan_status"));
-    const buttons = [...doc.querySelectorAll("button")].map((b: any) => `${b.textContent}${b.disabled ? " (disabled)" : ""}`);
+    expect(sent.find((m) => m.params?.name === "plan_status").params.arguments).toEqual({ id: "p1", peek: true });
+    expect(doc.querySelectorAll("button").length).toBe(0);
     write({ jsonrpc: "2.0", id: 900, method: "tools/list", params: {} });
     await Bun.sleep(400);
     const tools = lines.find((m) => m.id === 900)?.result?.tools?.map((t: any) => t.name);
-    expect(buttons.some((b) => /stop/i.test(b)) || (tools ?? []).some((t: string) => /stop/i.test(t))).toBe(true);
+    expect(tools).toContain("plan_stop");
   });
 });
