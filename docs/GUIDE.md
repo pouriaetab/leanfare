@@ -151,6 +151,10 @@ To read large files or logs, use the leanfare delegate tool with effort medium, 
 
 Run it from the Savings page (**Run the trial**), in Terminal (`leanfare trial`), or ask Claude to use the trial tool. It costs what its answers and checks cost on your models ($0 on free plans) and shows the estimate first. The files are the same on every computer, so results compare across people: **Share on GitHub** opens an issue with the numbers filled in, for you to read and send yourself. Nothing is sent on its own.
 
+### The Leanfare plugin for Claude
+
+The repository's `plugin/` folder is a plugin for Claude: Leanfare's tools (its MCP server), the four Claude Code hooks Turn on Leanfare adds (the prompt line, the big read reminder, the hand off note and the review before Claude finishes) and a short skill on when to hand work over and how to review it. It carries no program: each part runs the Leanfare installed on your computer (`plugin/scripts/leanfare.sh` looks in the installer's folder, on the PATH, and in the Mac app), and with none installed the hooks do nothing and the MCP server says how to install it. In Claude Code: `/plugin marketplace add pouriaetab/leanfare`, then `/plugin install leanfare@leanfare`. If you already pressed Turn on Leanfare, Claude Code has the same tools and hooks, so you don't need the plugin there; its hooks stay quiet when the app's own are in place.
+
 ### The level: how much goes to Leanfare first
 
 Settings, **How much Leanfare takes first**, is a knob from 1 to 5, with what each level does beside it:

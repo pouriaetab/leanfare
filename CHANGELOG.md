@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.12.1
+
+- A Leanfare plugin for Claude (`plugin/`): Leanfare's tools, its four Claude Code hooks and a short skill on when to hand work over and how to review it, in one folder that Claude Code, Cowork and Claude's plugin directory can install. It runs the Leanfare installed on your computer. Claude Code can add it now: `/plugin marketplace add pouriaetab/leanfare`, then `/plugin install leanfare@leanfare`. When the app's own hooks are already in Claude Code, the plugin's hooks stay quiet.
+
+Fixed from 0.12.0:
+
+- Ask about these prompts no longer fails when the newest prompt alone is longer than the model can read: it reads the part that fits, and says so under the answer.
+- A model whose provider refuses a thinking effort (Google answered "Thinking level is not supported for this model" for a model the price list said takes one) is asked again without it, and sent none from then on, instead of the hand off failing.
+
 ## 0.12.0
 
 - Review every answer: each answer Leanfare brings back ends with a line that asks your app to check it, grade it and fix it before it answers you, by itself or by asking Leanfare again one tier up with what was wrong (`grade` with `fix`). In Claude Code a Stop hook asks once for any hand off left without a grade.

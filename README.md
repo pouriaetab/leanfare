@@ -24,6 +24,8 @@ It works with Claude Desktop, Cowork, Claude Code, Cursor, Codex, Gemini CLI, Wi
    powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/pouriaetab/leanfare/main/install.ps1 | iex"
    ```
 
+   **Claude Code, as a plugin:** with Leanfare installed, type `/plugin marketplace add pouriaetab/leanfare`, then `/plugin install leanfare@leanfare`.
+
    **Claude Desktop, one click:** download `leanfare-darwin-arm64.mcpb` (Apple silicon), `leanfare-darwin-x64.mcpb` (Intel) or `leanfare-windows-x64.mcpb` from the [latest release](https://github.com/pouriaetab/leanfare/releases/latest) and double-click it.
 
 2. **Open it.** Type `leanfare`. The app opens in your browser.
