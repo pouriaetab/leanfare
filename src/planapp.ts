@@ -1,11 +1,13 @@
 // The plan inside Claude Desktop, Cowork and other apps that show MCP Apps (an MCP extension, 26
 // Jan 2026: a tool's result drawn as a small page inside the chat). The plan tool names this page
-// (ui://leanfare/plan); the app draws the table from the tool's result, runs Leanfare's parts with
-// plan_run when you press Run, follows them with plan_status, and can hand the answers back to the
-// chat. Apps that do not show pages (Claude Code) get the same table as text.
+// (ui://leanfare/plan). Since 0.13 Leanfare starts its parts by itself and Claude collects and grades
+// the answers, so the page has no buttons: it draws the table from the tool's result and follows the
+// run with plan_status (peek: it only looks), each part from waiting to running, done, with Claude and
+// checked, and says in one line where the whole plan is. Apps that do not show pages (Claude Code) get
+// the same table as text.
 //
 // One file, no outside scripts or fonts: the page talks to the app it is shown in with postMessage
-// (JSON-RPC: ui/initialize, ui/notifications/tool-result, tools/call, ui/message), and only with it.
+// (JSON-RPC: ui/initialize, ui/notifications/tool-result, tools/call), and only with it.
 export const PLAN_APP_URI = "ui://leanfare/plan";
 export const APP_MIME = "text/html;profile=mcp-app";
 export const APP_PROTOCOL = "2026-01-26";
@@ -29,10 +31,10 @@ export const PLAN_APP_HTML = `<!doctype html>
   .why { color: var(--muted); font-size: 11.5px; }
   .sum { margin: 8px 0; }
   .muted { color: var(--muted); }
-  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 6px 0; }
-  button { font: inherit; border: 1px solid var(--line); background: var(--bg); color: var(--fg); border-radius: 8px; padding: 5px 11px; cursor: pointer; }
-  button.go { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-  button[disabled] { opacity: .55; cursor: default; }
+  .state { margin: 0 0 8px; display: flex; gap: 7px; align-items: center; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
   .done { color: var(--good); } .bad { color: var(--warn); }
   details { border-top: 1px solid var(--line); padding: 5px 0; }
   summary { cursor: pointer; font-weight: 600; }
@@ -62,15 +64,37 @@ export const PLAN_APP_HTML = `<!doctype html>
   const secs = (s) => (s === null || s === undefined ? "" : s < 90 ? "~" + Math.max(1, Math.round(s)) + " s" : "~" + Math.round(s / 60) + " min");
   const RUNS = { you: "you", local: "Leanfare, this computer", free: "Leanfare, free", paid: "Leanfare, pay per use", codex: "Leanfare, through Codex" };
   const NOW = { waiting: "waiting", running: "running…", done: "done", failed: "failed", stopped: "stopped", yours: "yours", after_yours: "after yours", blocked: "waits", asks: "waits for a yes" };
-  let plan = null, run = null, timer = null, off = null; // off: what Leanfare said when it was switched off
-  let pressed = false; // the run was started here, by pressing Run, not by the app with plan_run
-  let watch = null;
+  // A part in words: what the run says, then whether Claude has its answer and how Claude graded it.
+  const nowOf = (r) => (!r ? "" : r.verdict ? "checked: " + r.verdict : r.took && r.status === "done" ? "with Claude" : NOW[r.status] || r.status || "");
+  const nowClass = (r) => (!r ? "" : r.verdict === "good" || (!r.verdict && r.status === "done") ? "done" : r.verdict === "wrong" || ["failed", "blocked", "asks"].includes(r.status) ? "bad" : "");
+  const count = (n) => (n === 1 ? "1 part" : n + " parts");
+  let plan = null, run = null, timer = null, watch = null, until = 0;
   // When every part stays with you: what would send some out (as the planner says it).
   const nothingOut = (parts) => {
     const hints = [parts.some((p) => p.kind === "search" && p.runs_on === "you") ? "tick Perplexity Sonar in Leanfare and the searches go out" : "",
       parts.every((p) => !(p.files || []).length) ? "name the files or folder it is about and the reading goes out" : ""].filter(Boolean);
     return "Nothing goes to Leanfare: " + (hints.length ? hints.join("; ") : "every part changes the project or needs the hardest judgement") + ".";
   };
+  // Where the whole plan is, in one line: nothing here waits for a press.
+  function stateOf() {
+    const mine = plan.parts.filter((p) => p.runs_on !== "you");
+    if (!mine.length) return { text: nothingOut(plan.parts), cls: "muted" };
+    if (!run) return { text: "Leanfare has not started its parts.", cls: "muted" };
+    const of = (n) => run.parts.find((r) => r.n === n) || {};
+    const ours = mine.map((p) => of(p.n));
+    const going = ours.filter((r) => r.status === "running" || r.status === "waiting");
+    const answered = ours.filter((r) => r.answer);
+    if (going.length) return { text: "Leanfare is running " + count(going.length) + " by itself. Claude collects the answers.", cls: "", live: true };
+    if (answered.length && answered.every((r) => r.verdict)) {
+      const by = {};
+      for (const r of answered) by[r.verdict] = (by[r.verdict] || 0) + 1;
+      return { text: "Done: Claude checked every answer (" + ["good", "partly", "wrong"].filter((k) => by[k]).map((k) => by[k] + " " + k).join(", ") + ").", cls: "done" };
+    }
+    if (answered.length && answered.every((r) => r.took)) return { text: "Claude has every answer and is checking them.", cls: "" };
+    if (answered.length) return { text: "Leanfare's parts are done. Claude picks up their answers next.", cls: "" };
+    if (ours.some((r) => r.status === "failed")) return { text: "Leanfare's parts ended without an answer: Claude does them itself.", cls: "bad" };
+    return { text: "Leanfare's parts have ended.", cls: "muted" };
+  }
 
   function draw() {
     const app = $("#app");
@@ -88,77 +112,49 @@ export const PLAN_APP_HTML = `<!doctype html>
       el("td", { class: "t", "data-l": "Time", text: secs(p.seconds) }),
       el("td", { "data-l": "Tokens", text: "~" + tok(p.tokens) + (p.runs_on === "you" ? " of your plan" : " kept") }),
       el("td", { class: "c", "data-l": "Cost", text: p.runs_on === "you" ? "in your plan" : p.runs_on === "codex" ? "in your ChatGPT plan" : usd(p.cost_usd) }),
-      run ? el("td", { class: "s " + ((st(p.n) || {}).status === "done" ? "done" : ["failed", "blocked", "asks"].includes((st(p.n) || {}).status) ? "bad" : ""), "data-l": "Now", text: NOW[(st(p.n) || {}).status] || "" }) : null));
+      run ? el("td", { class: "s " + nowClass(st(p.n)), "data-l": "Now", text: nowOf(st(p.n)) }) : null));
     const t = plan.totals;
-    const paidParts = plan.parts.filter((p) => p.runs_on === "paid");
-    const paid = paidParts.reduce((n, p) => n + (p.cost_usd || 0), 0);
-    const unknown = paidParts.some((p) => p.cost_usd === null || p.cost_usd === undefined);
     const mine = plan.parts.filter((p) => p.runs_on !== "you").length;
-    const now = mine - (t.later || 0); // the parts of Leanfare's that do not wait for yours
     const later = plan.parts.filter((p) => p.runs_on !== "you" && laterOf(p)).map((p) => p.n);
-    const going = run && run.running;
-    // Something of Leanfare's left to run: never run, or ended without an answer.
-    const left = !run || plan.parts.some((p) => p.runs_on !== "you" && ["waiting", "asks", "failed", "stopped", "blocked"].includes((st(p.n) || {}).status));
+    const state = stateOf();
     const kids = [
       el("h1", {}, "Leanfare's plan", el("small", { text: mine + " of " + plan.parts.length + " parts to Leanfare" })),
+      el("p", { class: "state " + state.cls, id: "state" }, state.live ? el("span", { class: "dot" }) : null, state.text),
       el("table", {}, el("thead", {}, el("tr", {}, ...["#", "Part", "Runs on", "Model", "Time", "Tokens", "Cost", ...(run ? ["Now"] : [])].map((x) => el("th", { text: x })))), el("tbody", {}, ...rows)),
-      el("p", { class: "sum", text: (mine ? "If Leanfare's parts run, about " + tok(t.kept) + " tokens stay out of your plan" + share(t) + (t.used ? " and about " + tok(t.used) + " stay in it" : "") + ": " + (t.guessed ? "a guess, as no files were named for the reading" : "an estimate until they run") + "." : "Nothing goes to Leanfare.") + " Pay per use: " + usd(t.cost) + "." + (mine ? "" : " " + nothingOut(plan.parts)) }),
+      mine ? el("p", { class: "sum", text: "About " + tok(t.kept) + " tokens stay out of your plan" + share(t) + (t.used ? " and about " + tok(t.used) + " stay in it" : "") + ": " + (t.guessed ? "a guess, as no files were named for the reading" : "an estimate until the parts end") + ". Pay per use: " + usd(t.cost) + "." }) : null,
       plan.local ? el("p", { class: "muted", text: "A local model fits this computer: " + plan.local.name + " (" + (plan.local.size / 1e9).toFixed(plan.local.size < 10e9 ? 1 : 0) + " GB), rated like " + plan.local.like + ", free to run. Ask for it to be downloaded (Leanfare's local_model asks you first)." }) : null,
-      el("div", { class: "row" },
-        now && (left || going) ? el("button", { class: "go", id: "run", disabled: going ? "" : null, onclick: start, text: going ? "Running…" : (run ? "Run the rest" : "Run Leanfare's parts") + (paidParts.length ? (unknown ? " (paid parts, cost not known)" : " (about " + usd(paid) + " paid)") : "") }) : null,
-        going ? el("button", { id: "stop", onclick: stop, text: "Stop" }) : null,
-        pressed && run && !going && run.parts.some((p) => p.answer) ? el("button", { id: "back", onclick: handBack, text: "Hand the answers to Claude" }) : null,
-        el("span", { class: "muted", text: going ? (pressed ? "" : "Claude started this run. ") + "Leanfare runs its parts on your computer; this updates as they finish." : run && !pressed ? "Claude started this run and reads the answers itself." : "" })),
-      off ? el("p", { class: "bad", text: off }) : null,
     ].filter(Boolean); // replaceChildren would print a left out part as the word null
-    if (run) for (const p of run.parts.filter((x) => x.answer || x.error)) kids.push(el("details", {}, el("summary", { text: "Part " + p.n + " · " + p.title + " · " + (NOW[p.status] || p.status) + (p.model ? " · " + p.model : "") }), p.answer ? el("pre", { text: p.answer }) : null, p.error ? el("p", { class: "bad", text: p.error }) : null));
+    if (run && run.asks) kids.push(el("p", { class: "bad", text: (run.asks.parts.length === 1 ? "Part " + run.asks.parts[0] + " is" : "Parts " + run.asks.parts.join(", ") + " are") + " paid (" + (run.asks.estimate === null || run.asks.estimate === undefined ? "cost not known" : "about " + usd(run.asks.estimate)) + ") and wait" + (run.asks.parts.length === 1 ? "s" : "") + " for your yes: Claude asks you in the chat." }));
     if (later.length) kids.push(el("p", { class: "muted", text: (later.length === 1 ? "Part " + later[0] + " waits" : "Parts " + later.join(", ") + " wait") + " for yours: once yours are done, Claude hands " + (later.length === 1 ? "it" : "them") + " to Leanfare." }));
-    if (run && run.asks) kids.push(el("p", { class: "bad", text: "Parts " + run.asks.parts.join(", ") + " are paid and wait for a yes: press Run to say yes." }));
+    if (run) for (const p of run.parts.filter((x) => x.answer || x.error)) kids.push(el("details", {}, el("summary", { text: "Part " + p.n + " · " + p.title + " · " + nowOf(p) + (p.model ? " · " + p.model : "") }), p.answer ? el("pre", { text: p.answer }) : null, p.error ? el("p", { class: "bad", text: p.error }) : null));
     app.replaceChildren(...kids);
     size();
   }
-  // The app may run the plan's parts itself (plan_run), as Claude does when told to: then this page follows
-  // that run, so the chat offers one next step, not two. It looks a few seconds after the plan arrives, then
-  // every 3 seconds for a minute, until a run shows or Run is pressed here.
-  async function look(tries) {
-    clearTimeout(watch);
-    if (run || pressed || !plan) return;
-    try {
-      const r = await request("tools/call", { name: "plan_status", arguments: { id: plan.id } });
-      const sc = r && !r.isError && r.structuredContent;
-      if (sc && Array.isArray(sc.parts) && !run && !pressed) { run = sc; draw(); if (run.running) follow(); return; }
-    } catch (e) {} // no run of it yet
-    if (tries > 0 && !run && !pressed) watch = setTimeout(() => look(tries - 1), 3000);
-  }
-  async function start() {
-    pressed = true; clearTimeout(watch);
-    try {
-      const r = await request("tools/call", { name: "plan_run", arguments: { id: plan.id, paid: "yes" } }); // pressing Run is the yes for the paid parts shown on it
-      const sc = r && r.structuredContent;
-      // Switched off in the Leanfare app: nothing ran. Say so, and keep the plan as it was.
-      if (sc && sc.off) { off = (r.content && r.content[0] && r.content[0].text) || "Leanfare is switched off, so nothing ran."; draw(); return; }
-      off = null;
-      run = sc && Array.isArray(sc.parts) ? { ...sc, parts: sc.parts } : run;
-      draw(); follow();
-    } catch (e) { shout(e); }
-  }
+  // Follows the run with plan_status, which only looks (peek): every 2 seconds while parts run, then every 4 for up to
+  // 5 minutes while Claude takes and grades the answers, until every answer is graded.
   async function follow() {
     clearTimeout(timer);
     try {
-      const r = await request("tools/call", { name: "plan_status", arguments: { id: plan.id } });
-      if (r && r.structuredContent) { run = r.structuredContent; draw(); }
-    } catch (e) { shout(e); return; }
-    if (run && run.running) timer = setTimeout(follow, 2000);
+      const r = await request("tools/call", { name: "plan_status", arguments: { id: plan.id, peek: true } });
+      const sc = r && !r.isError && r.structuredContent;
+      if (sc && Array.isArray(sc.parts)) { run = sc; draw(); }
+    } catch (e) {} // the next look tries again
+    if (!run) return;
+    if (run.running) { timer = setTimeout(follow, 2000); return; }
+    if (run.parts.some((p) => p.answer && !p.verdict) && Date.now() < until) timer = setTimeout(follow, 4000);
   }
-  async function stop() {
-    try { const r = await request("tools/call", { name: "plan_stop", arguments: { id: plan.id } }); if (r && r.structuredContent) run = { ...run, ...r.structuredContent, parts: run.parts.map((p) => ({ ...p, ...((r.structuredContent.parts || []).find((x) => x.n === p.n) || {}) })) }; draw(); follow(); }
-    catch (e) { shout(e); }
+  // A plan that came without a run (made with run false, or by an older Leanfare): it looks for one Claude starts
+  // later, a few seconds after the plan arrives, then every 3 seconds for a minute.
+  async function look(tries) {
+    clearTimeout(watch);
+    if (run || !plan) return;
+    try {
+      const r = await request("tools/call", { name: "plan_status", arguments: { id: plan.id, peek: true } });
+      const sc = r && !r.isError && r.structuredContent;
+      if (sc && Array.isArray(sc.parts)) { run = sc; until = Date.now() + 300000; draw(); follow(); return; }
+    } catch (e) {} // no run of it yet
+    if (tries > 0 && !run) watch = setTimeout(() => look(tries - 1), 3000);
   }
-  async function handBack() {
-    try { await request("ui/message", { role: "user", content: { type: "text", text: "Leanfare finished its parts of plan " + plan.id + ". Read their answers with plan_status, then do the parts left to you." } }); $("#back").disabled = true; }
-    catch (e) { shout(e); }
-  }
-  function shout(e) { const p = el("p", { class: "bad", text: "Leanfare: " + (e && e.message ? e.message : String(e)) }); $("#app").append(p); size(); }
   function size() { notify("ui/notifications/size-changed", { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }); }
   function theme(ctx) {
     if (!ctx) return;
@@ -169,8 +165,10 @@ export const PLAN_APP_HTML = `<!doctype html>
   function show(result) {
     const sc = result && result.structuredContent;
     if (!sc || !Array.isArray(sc.parts)) { $("#app").replaceChildren(el("p", { class: "muted", text: (result && result.content && result.content[0] && result.content[0].text) || "No plan to show." })); size(); return; }
-    plan = sc; run = null; pressed = false; draw();
-    clearTimeout(watch); watch = setTimeout(() => look(20), 2500);
+    plan = sc; run = sc.run && Array.isArray(sc.run.parts) ? { ...sc.run, cost: sc.run.cost_usd } : null; until = Date.now() + 300000;
+    draw();
+    clearTimeout(timer); clearTimeout(watch);
+    if (run) timer = setTimeout(follow, 1500); else watch = setTimeout(() => look(20), 2500);
   }
   window.addEventListener("message", (e) => {
     if (e.source !== host) return; // only the app this page is shown in
@@ -179,7 +177,7 @@ export const PLAN_APP_HTML = `<!doctype html>
     if (m.id !== undefined && m.method === undefined && pending.has(m.id)) { const p = pending.get(m.id); pending.delete(m.id); if (m.error) p.reject(m.error); else p.resolve(m.result); return; }
     if (m.method === "ui/notifications/tool-result") show(m.params);
     else if (m.method === "ui/notifications/host-context-changed") theme(m.params);
-    else if (m.method === "ui/resource-teardown" && m.id !== undefined) { clearTimeout(timer); send({ jsonrpc: "2.0", id: m.id, result: {} }); }
+    else if (m.method === "ui/resource-teardown" && m.id !== undefined) { clearTimeout(timer); clearTimeout(watch); send({ jsonrpc: "2.0", id: m.id, result: {} }); }
   });
   request("ui/initialize", { protocolVersion: "${APP_PROTOCOL}", appInfo: { name: "Leanfare plan", version: "1" }, appCapabilities: { availableDisplayModes: ["inline"] } })
     .then((r) => { theme(r && r.hostContext); notify("ui/notifications/initialized", {}); })
