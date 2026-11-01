@@ -50,13 +50,13 @@ describe("where your projects' files go", () => {
     expect(none.status).toBe(200);
   });
 
-  test("only this computer: with no model here, the hand off says so and sends nothing", async () => {
+  test("only this computer (since 0.12 all work, not only files): with no model here, the hand off says so and sends nothing", async () => {
     await freeGemini();
     await ui(url, "/api/settings", { filesTo: "local" });
     const before = fake.seen.length;
     const r = await ui(url, "/api/delegate", { task: "Summarize.", files: [LOG], kind: "read", effort: "low", check: "never" });
     expect(r.status).toBe(409);
-    expect(r.json.error).toContain("Your projects' files go only to this computer (Settings, Where Leanfare may send work), and no model there can take this.");
+    expect(r.json.error).toContain("Work goes only to this computer (Settings, Where Leanfare may send work), and no model there can take this.");
     expect(fake.seen.length).toBe(before);
     expect((await ui(url, "/api/settings", { filesTo: "nowhere" })).status).toBe(400);
   });
@@ -95,17 +95,17 @@ describe("on the screen", () => {
     await freeGemini();
     const doc = await openApp(url);
     doc.querySelector('.tabs button[data-tab="settings"]').click();
-    for (let i = 0; i < 160 && !doc.querySelector("#platformsSetting .files-to"); i++) await Bun.sleep(50);
+    for (let i = 0; i < 160 && !doc.querySelector("#platformsSetting .where-knob"); i++) await Bun.sleep(50);
     const g = [...doc.querySelectorAll("#platformsSetting .prow")].find((r: any) => r.querySelector(".pname").textContent.startsWith("Gemini")) as any;
     expect(g.querySelector(".chip.warn").textContent).toBe("people may read it");
     const why = g.querySelector("details.why");
     expect(why.open).toBe(false); // folded until asked for
     expect(why.querySelector("summary").textContent).toBe("Why it says so");
-    const seg = doc.querySelector("#platformsSetting .files-to .seg");
-    expect([...seg.querySelectorAll("button")].map((b: any) => [b.textContent, b.getAttribute("aria-pressed")])).toEqual([["Any platform that is on", "true"], ["Not to a free tier that may be read", "false"], ["Only this computer", "false"]]);
-    (seg.querySelectorAll("button")[2] as any).click();
-    for (let i = 0; i < 100 && (await ui(url, "/api/state")).json.settings.filesTo !== "local"; i++) await Bun.sleep(50);
-    expect((await ui(url, "/api/state")).json.settings.filesTo).toBe("local");
+    const stops = [...doc.querySelectorAll("#platformsSetting .where-knob .lv-defs button")];
+    expect(stops.map((b: any) => [b.querySelector(".d b").textContent.trim(), b.getAttribute("aria-pressed")])).toEqual([["Only this computer.", "false"], ["Also paid models that do not train.", "false"], ["Also free tiers, not your files.", "false"], ["Anywhere you ticked.", "true"]]);
+    (stops[0] as any).click();
+    for (let i = 0; i < 100 && (await ui(url, "/api/state")).json.settings.where !== 1; i++) await Bun.sleep(50);
+    expect((await ui(url, "/api/state")).json.settings.where).toBe(1);
     closeApp();
   }, 20000);
 });
