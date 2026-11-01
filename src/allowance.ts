@@ -136,3 +136,10 @@ export function notNowWhy(m: M & { label?: string }, t = now().getTime()): strin
   if (d && d.left <= 0) return `its free allowance for today is used (${d.used} of about ${d.perDay}), until ${new Date(d.resets).toISOString().slice(11, 16)} UTC`;
   return null;
 }
+
+// The middle first word time of a model's last 10 answers this week, in ms (the share planner's fastest first), or null.
+export function firstMedian(id: string, t = now().getTime()): number | null {
+  const f = rowsOf(id, "model", t).filter((r) => answered(r) && typeof r.first === "number").slice(-10).map((r) => r.first as number).sort((a, b) => a - b);
+  if (f.length < 3) return null;
+  return f.length % 2 ? f[f.length >> 1] : (f[(f.length >> 1) - 1] + f[f.length >> 1]) / 2;
+}
