@@ -54,6 +54,7 @@ export interface DelegateInput {
   fixOf?: number; // 0.12: a fix of that hand off, asked one tier up after the app graded it partly or wrong (fixHandOff)
   fixDepth?: number; // how many fixes deep: a fix of a fix is 2, and Leanfare asks again no further
   level?: Level; // 0.12: the level a chat or session set (the app passes it); else the app's, else the default (level.ts)
+  as?: "ask"; // 0.12: Savings' Ask about these prompts (askreport.ts): the ledger says "ask", and it keeps no row, like the trial
 }
 
 export const KINDS: Kind[] = ["read", "write", "reason"];
@@ -369,14 +370,15 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   const gone = () => signal.aborted; // the caller went away: there is nobody to answer
   // The hand off's own mark: every call made for it carries it in the ledger (its answer, a second try, its check, side
   // by side), so the report can sum what the outside models used for it. The trial's questions keep no row.
-  const job = input.trial ? undefined : randomId();
+  const quiet = input.trial || input.as === "ask"; // no row of its own (the trial's questions, an ask about the prompts)
+  const job = quiet ? undefined : randomId();
   // The level in effect (level.ts): the chat's or session's, else the app's, else the default, raised as a Claude plan runs low.
-  const level = input.trial ? null : levelFor(settings(), input.app ?? null, input.level ?? null, planMode()).level;
+  const level = quiet ? null : levelFor(settings(), input.app ?? null, input.level ?? null, planMode()).level;
   const row = { task: guess.task, kind: input.kind, effort: input.effort, files: input.files.length, fileTokens, plan: input.plan ?? null, taskTokens: input.plan ? tokensOf(input.task.length) : 0, app: input.app ?? null, appModel: input.appModel ?? null, job: job ?? null,
     askTokens: input.plan || input.fixOf ? 0 : tokensOf(input.task.length), // what the app wrote to hand it off (a plan part's text, or a fix's, is Leanfare's)
     fixOf: input.fixOf ?? null, level };
-  const source = input.trial ? "trial" : "delegate";
-  const write = (r: Parameters<typeof writeRow>[0]) => (input.trial ? null : writeRow(r));
+  const source = input.trial ? "trial" : input.as ?? "delegate";
+  const write = (r: Parameters<typeof writeRow>[0]) => (quiet ? null : writeRow(r));
   const none = { checker: null, verdict: null, checkCost: null, rerun: null, rerunCost: null };
 
   const doFit0 = fit(prompt.length + system.length, input.maxOut);

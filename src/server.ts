@@ -35,6 +35,7 @@ import { clearNoQuota, noQuotaNow, noQuotaWhy } from "./quota";
 import { TOOLS, clientLabel, resourceContents, runToolFor } from "./mcp";
 import { setSelf } from "./client";
 import { checkReport, report } from "./report";
+import { askModels, askReport, checkAsk } from "./askreport";
 import { checkPlan, gradePart, makePlan, runView, startRun, stopAllRuns, stopRun } from "./planner";
 import { setAuto } from "./workers";
 import { setUp, setupView } from "./setup";
@@ -501,6 +502,13 @@ async function api(req: Request, url: URL): Promise<Response> {
     // One prompt (the report tool's prompt): each part with its kept words, so the app can read them (words.ts, 0.12).
     if (url.searchParams.get("prompt")) for (const pr of r.prompts) for (const x of pr.parts as any[]) if (x.words) x.text = wordsOf(x.id);
     return json(r);
+  }
+  // Ask about these prompts (askreport.ts, 0.12): the models that may answer, and a question over Savings' span and filters.
+  if (p === "/api/report/ask" && m === "GET") return json({ models: askModels() });
+  if (p === "/api/report/ask" && m === "POST") {
+    const v = checkAsk(await readBody(req));
+    if (typeof v === "string") return fail(400, v);
+    return json(await askReport(v, req.signal));
   }
   // A hand off's kept words (words.ts, 0.12): Savings opens a part, or exports the CSV with the words.
   if (p === "/api/words" && m === "GET") {
