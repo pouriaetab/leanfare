@@ -892,3 +892,7 @@ tr.wd td { background: var(--panel-2); }
 .workers .free-list { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
 .workers .free-form .row { gap: 6px; flex-wrap: wrap; }
 .workers .free-form input { min-width: 12em; flex: 1; }
+/* The running pill opens the Live view (0.13). */
+#runningPill .live-link { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 0; text-decoration: underline; text-underline-offset: 2px; }
+.lv-card.flash { outline: 2px solid var(--accent, #0f766e); outline-offset: 2px; transition: outline-color 1.2s ease; }
+#freeToday h3 { font-size: 13px; margin: 0 0 6px; }
