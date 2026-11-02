@@ -1,9 +1,17 @@
 # Changelog
 
+## 0.13.7
+
+- Live, with nothing running, shows your last hand off (when, the model, the tokens kept out, the cost) and this month's work, so the top of Savings is never empty after a hand off ends.
+- Fixed: a small OpenRouter balance counted as no credit ("You requested up to 12288 tokens, but can only afford 8805"), so hand offs and checks failed and its paid models were set aside. Leanfare now asks again within what the balance covers; only a balance too small for a real answer counts as no credit.
+- Fixed: a receipt could say a provider's paid models were left out when one of them had just answered.
+- Fixed: in Free models today, long names ran over the next tile; and models your key cannot use (gone, no quota, or a provider turning requests away) no longer show there.
+- Fixed: Live could keep saying "Connecting to the live numbers…" after it had connected.
+
 ## 0.13.6
 
 - Retiring models, said once: a free model that retires needs nothing from you, so it gets no notice (its row in Settings says when). Other retirements share one line at the top, with the date in words, and a **×** hides it until another model retires.
-- Fixed: a free model retiring was set to switch to its paid copy (OpenRouter ends a model's free copy while the paid one goes on). A successor is now always of the same kind: free stays free, paid stays paid. With no free successor, a free model is simply dropped on its day.
+- Fixed: a free model retiring was set to switch to its paid copy (OpenRouter ends a model's free copy while the paid one goes on). A successor is now always of the same kind: free stays free, paid stays paid. With no free replacement, a free model is no longer used from its retirement date.
 - Fixed: OpenRouter's free models said "(free)" twice.
 
 ## 0.13.5
