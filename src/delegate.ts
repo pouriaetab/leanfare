@@ -25,7 +25,7 @@ import { parseSpeed, secondsText, type SpeedChoice } from "./speed";
 import { TASKS, fitsText, getModel, isRetired, type Model } from "./data";
 import { db } from "./db";
 import { passedLocal } from "./localpass";
-import { creditLeftOut, keepKeysFresh, keysLeftOut } from "./keystate";
+import { awayLeftOut, creditLeftOut, keepKeysFresh, keysLeftOut } from "./keystate";
 import { freeToYou } from "./share";
 import { mayTake, modelOn, platformOn, readRisk, whereStop, whereWhy } from "./platforms";
 import { CODEX_ID, CODEX_LABEL, codexFor, runCodex } from "./codex";
@@ -549,6 +549,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   const tickedModels = settings().ticked.map((id) => getModel(id)).filter((m): m is Model => !!m);
   const keysOut = keysLeftOut(tickedModels.map((m) => m.provider)); // keys refused or expired: their models left out
   const creditOut = creditLeftOut(tickedModels.filter((m) => !freeToYou(m)).map((m) => m.provider)); // no credit: their paid models left out
+  const awayOut = awayLeftOut(tickedModels.map((m) => m.provider)); // turning requests away: their models left out
   const result: Omit<DelegateResult, "receipt"> = {
     answer: final.text,
     model,
@@ -557,7 +558,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     rerunError,
     swap,
     // What Auto said on the way to the answer: a model resting (rest.ts), busy, or slow to start (engine.ts).
-    passed: [...((final.meta?.notes ?? []) as string[]).filter((n) => /is resting|passed the request to its next pick|is resting after failing|is unsteady today|^Saving |^Fastest first|^Spreading the work/.test(n)).slice(0, 3), ...(keysOut ? [keysOut] : []), ...(creditOut ? [creditOut] : [])],
+    passed: [...((final.meta?.notes ?? []) as string[]).filter((n) => /is resting|passed the request to its next pick|is resting after failing|is unsteady today|^Saving |^Fastest first|^Spreading the work/.test(n)).slice(0, 3), ...(keysOut ? [keysOut] : []), ...(creditOut ? [creditOut] : []), ...(awayOut ? [awayOut] : [])],
     row: null,
     total: add(...spent),
     task: guess.task,

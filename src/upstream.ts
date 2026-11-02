@@ -4,6 +4,7 @@
 import { baseOf, provider, type ProviderDef, type ProviderId } from "./config";
 import { LOCAL_CONTEXT, localNeed, type Model } from "./data";
 import { fromAnthropicUsage, promptChars, textOfContent, type Usage } from "./cost";
+import { SAYS_PLACE, creditRefusal, keyRefusal, turnedAway } from "./fails";
 import { providerMessage, redact } from "./util";
 
 export class UserError extends Error {
@@ -352,10 +353,16 @@ export function ollamaChunks(o: any, model: string): any[] {
 
 export interface KeyCheck { ok: boolean; status: number; message: string; models: string[] | null; expires?: string | null } // expires: when the provider says the key ends (OpenRouter), null for never
 
+// A 403 is the key's fault only when its words say so: one that points at the network, a model or the request is
+// "turned the request away" (0.13.4; fails.ts: turnedAway), and one about credit says so.
 function plainError(def: ProviderDef, status: number, body: string, key: string | null): string {
   const said = redact(providerMessage(body), key ? [key] : []);
-  if (status === 401 || status === 403 || (status === 400 && /key/i.test(said))) return `${def.name} rejected the key: ${said}`;
-  if (status === 402) return `${def.name} says the account has no credit left: ${said}`;
+  if (status === 401 || (status === 403 && keyRefusal(403, said)) || (status === 400 && /key/i.test(said) && !SAYS_PLACE.test(said))) return `${def.name} rejected the key: ${said}`;
+  if (status === 402 || ((status === 400 || status === 403) && creditRefusal(status, said))) return `${def.name} says the account has no credit left: ${said}`;
+  if (turnedAway(status, said)) {
+    const place = status === 451 || SAYS_PLACE.test(said);
+    return `${def.name} turned the request away (${status}): ${said}${place ? `${/[.!?]$/.test(said) ? "" : "."} It points at your network or location, not your key: a VPN or a proxy can cause it.` : ""}`;
+  }
   if (status === 429) return `${def.name} says too many requests or the plan's limit is reached: ${said}. Wait a minute, or check your plan.`;
   if (status === 404) return `${def.name} does not know this: ${said}`;
   if (status >= 500) return `${def.name} had a problem on its side (${status}): ${said}. Try again, or pick another model.`;

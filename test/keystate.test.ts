@@ -109,7 +109,7 @@ describe("a key that expires", () => {
     expect(keyState("openrouter").expires).toBe(in5);
     const n = r.json.state.notices.find((x: any) => x.provider === "openrouter");
     expect(n).toMatchObject({ kind: "expires", level: "warn", text: "Your OpenRouter key expires on Oct 26, 2026, in 5 days. Make a new one before then." });
-    expect(r.json.state.providers.find((p: any) => p.id === "openrouter").keyTrouble).toEqual({ refused: null, expires: in5, noCredit: null });
+    expect(r.json.state.providers.find((p: any) => p.id === "openrouter").keyTrouble).toEqual({ refused: null, expires: in5, noCredit: null, away: null });
     expect(keyNotices(t - 3 * DAY).some((x) => x.provider === "openrouter")).toBe(false); // 8 days before: nothing yet
     expect(keyUnusable("openrouter", t + 6 * DAY)).toBe(true);
     expect(keyNotices(t + 6 * DAY).find((x) => x.provider === "openrouter")).toEqual({ kind: "key", level: "error", provider: "openrouter", text: "Your OpenRouter key expired on Oct 26, 2026, so Leanfare leaves its models out. Make a new one to use OpenRouter again." });

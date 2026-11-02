@@ -438,7 +438,7 @@
         x.kind === "update" && x.url ? h("a", { class: "btn small", href: x.url, target: "_blank", rel: "noopener noreferrer", text: "What changed" }) : null,
         x.kind === "key" || x.kind === "expires" ? newKeyButton(x.provider) : null,
         x.kind === "credit" && x.url ? h("a", { class: "btn small", href: x.url, target: "_blank", rel: "noopener noreferrer", text: "Add credit" }) : null,
-        x.kind === "key" || x.kind === "credit" ? runButton("Check again", (signal) => recheckKey(x.provider, signal), "btn small quiet") : null));
+        x.kind === "key" || x.kind === "credit" || x.kind === "away" ? runButton("Check again", (signal) => recheckKey(x.provider, signal), "btn small quiet") : null));
     }
     // Drawn again only when what they say changes, so a button is never rebuilt under your finger.
     const key = list.map((x) => x.textContent).join("|");
@@ -2937,6 +2937,7 @@
     const kt = p.keyTrouble, expired = !!kt?.expires && Date.parse(kt.expires) <= Date.now();
     if (!p.on) status = h("span", { class: "chip", text: "Off" });
     else if (kt?.refused || expired) status = h("span", { class: "chip bad", text: kt?.refused ? "Key refused" : "Key expired" });
+    else if (kt?.away) status = h("span", { class: "chip warn", text: "Turned away" });
     else if (kt?.noCredit) status = h("span", { class: "chip warn", text: "No credit" });
     else if (p.ready) status = h("span", { class: "chip good", text: `Ready · ${tickedCount} of ${ms.length} ticked` });
     else if (p.id === "ollama" || p.local) status = h("span", { class: "chip", text: "Not running" });
@@ -2954,6 +2955,7 @@
           p.key.where === "environment" || p.key.where === "shell" ? null : h("button", { class: "btn small", text: "Remove key", onclick: () => removeKey(p) })));
         if (kt?.refused) body.append(h("div", { class: "note warn-text", text: `${p.name} refused this key on ${keyDate(kt.refused.at)} (${kt.refused.status}), so its models are left out. Keys can expire: make a new one (Get a key) and paste it below.` }));
         else if (kt?.expires) body.append(h("div", { class: expired ? "note warn-text" : "note", text: `This key ${expired ? "expired" : "expires"} on ${keyDate(kt.expires)}, as ${p.name} says.` }));
+        if (!kt?.refused && kt?.away) body.append(h("div", { class: "note warn-text", text: `${p.name} turned requests away on ${keyDate(kt.away.at)} (${kt.away.status}), so its models are left out. Leanfare checks again every 30 minutes${kt.away.place ? "; a VPN or a proxy can cause this, not your key" : ""}. Check again is at the top.` }));
         if (!kt?.refused && kt?.noCredit) body.append(h("div", { class: "note warn-text", text: `${p.name} said it has no credit left (${keyDate(kt.noCredit.at)}), so its paid models are left out${p.id === "openrouter" ? "; its free models keep working" : ""}. Add credit there, then press Check again at the top.` }));
       }
       if (p.id === "openrouter") body.append(h("div", { class: "row" },
