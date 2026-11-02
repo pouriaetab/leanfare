@@ -1,6 +1,7 @@
 // The Leanfare plugin for Claude (plugin/): what the plugin directory checks (a manifest, a README of 40 words or more,
-// a licence, small text files only, no bin/ folder, commands inside the plugin), the hooks matching the app's own, and
-// the launcher finding the installed Leanfare, staying quiet in a hook when there is none.
+// a licence, small text files only, no bin/ folder, commands inside the plugin, a square icon, a description of the
+// marketplace, no download-and-run command), the hooks matching the app's own, and the launcher finding the installed
+// Leanfare, staying quiet in a hook when there is none.
 import { expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,6 +11,7 @@ import { CLAUDE_HOOKS, appHooksOn } from "../src/workers";
 const ROOT = new URL("..", import.meta.url).pathname;
 const P = join(ROOT, "plugin");
 const json = (f: string) => JSON.parse(readFileSync(join(P, f), "utf8"));
+const ICON = ".claude-plugin/icon.png"; // the listing icon: the one file that is not text
 const walk = (d: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(d, e.name)) : [join(d, e.name)]));
 
 test("the manifest: a name of our own, the app's version, a licence, and nothing pointing outside the plugin", () => {
@@ -20,6 +22,7 @@ test("the manifest: a name of our own, the app's version, a licence, and nothing
   expect(m.description.length).toBeGreaterThan(40);
   const market = JSON.parse(readFileSync(join(ROOT, ".claude-plugin/marketplace.json"), "utf8"));
   expect(market.plugins).toEqual([expect.objectContaining({ name: "leanfare", source: "./plugin" })]);
+  expect(market.metadata.description.length).toBeGreaterThan(40); // the directory asks for one
 });
 
 test("the MCP server and the hooks run the launcher inside the plugin; the hooks are the app's own four", () => {
@@ -43,12 +46,29 @@ test("what the directory checks: a README of 40 words or more, a licence, small 
   expect(files.length).toBeLessThanOrEqual(512);
   for (const f of files) {
     expect(statSync(join(P, f)).size).toBeLessThan(256 * 1024);
-    expect(readFileSync(join(P, f)).includes(0)).toBe(false); // text only
+    if (f !== ICON) expect(readFileSync(join(P, f)).includes(0)).toBe(false); // text only, but for the icon
     expect(f).not.toMatch(/(^|\/)(\.DS_Store|Thumbs\.db|desktop\.ini|__MACOSX)$/);
     for (const part of f.split("/").slice(0, -1)) expect(part).toMatch(/^[A-Za-z0-9._-]+$/);
   }
   expect(files.some((f) => f.startsWith("bin/"))).toBe(false); // a top-level bin/ makes chat and Cowork refuse the plugin
   expect(readFileSync(join(P, "skills/leanfare/SKILL.md"), "utf8")).toMatch(/^---\nname: leanfare\ndescription: [^\n]+\n---\n/);
+});
+
+test("the listing icon: a square PNG of 512 to 2048 pixels and under 2 MB, where the directory looks for it", () => {
+  const png = readFileSync(join(P, ICON));
+  expect([...png.subarray(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const w = png.readUInt32BE(16), h = png.readUInt32BE(20); // the size, from the PNG's first chunk
+  expect(w).toBe(h);
+  expect(w).toBeGreaterThanOrEqual(512);
+  expect(w).toBeLessThanOrEqual(2048);
+  expect(png.length).toBeLessThan(2 * 1024 * 1024);
+});
+
+test("no download-and-run command anywhere in the plugin: its README links to the install steps instead", () => {
+  const RUN = /\b(curl|wget)\b[^\n]*\|\s*(sudo\s+)?(ba|z)?sh\b|\birm\b[^\n]*\|\s*iex\b/i;
+  expect(RUN.test("curl -fsSL https://example.com/install.sh | sh")).toBe(true);
+  for (const f of walk(P).filter((f) => !f.endsWith(".png"))) expect([relative(P, f), RUN.test(readFileSync(f, "utf8"))]).toEqual([relative(P, f), false]);
+  expect(readFileSync(join(P, "README.md"), "utf8")).toContain("](https://github.com/pouriaetab/leanfare#get-started)");
 });
 
 test("the launcher runs the installed Leanfare with its arguments, and with none installed a hook stays quiet while the MCP server says how to install", () => {
