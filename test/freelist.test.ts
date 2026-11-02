@@ -64,7 +64,9 @@ describe("on the screen", () => {
     await waitFor(() => !!doc.querySelector("#free-groq"));
     const card = doc.querySelector("#workersSetting");
     expect(card.querySelector("#codexCard").compareDocumentPosition(card.querySelector("#free-groq")) & 4).toBe(4);
-    expect(card.textContent).toContain("Free models: you make the free account, Leanfare does the rest.");
+    expect(card.querySelector(".fr-head").textContent).toContain("Free models0 of 5 connected"); // none connected: Connect more is open
+    expect(card.querySelector(".fr-more").open).toBe(true);
+    expect(card.textContent).toContain("You make the free account; Leanfare does the rest.");
     expect(card.textContent).toContain("1 more with free models, not reviewed by Leanfare");
     ([...doc.querySelector("#free-groq").querySelectorAll("button")].find((b: any) => b.textContent === "Connect") as any).click();
     await waitFor(() => !!doc.querySelector("#free-groq .free-form"));
@@ -72,7 +74,9 @@ describe("on the screen", () => {
     const box = doc.querySelector('#free-groq input[aria-label="Groq key"]');
     box.value = KEYS.groq;
     ([...doc.querySelector("#free-groq").querySelectorAll("button")].find((b: any) => b.textContent === "Save") as any).click();
-    await waitFor(() => !!doc.querySelector("#free-groq")?.textContent.includes("· connected"));
+    await waitFor(() => doc.querySelector("#free-groq")?.textContent === "Groq ✓");
+    expect(doc.querySelector("#free-groq").classList.contains("fr-chip")).toBe(true); // a chip on the head line now
+    expect(doc.querySelector("#workersSetting .fr-head").textContent).toContain("1 of 5 connected");
     expect(settings().providers.groq).toMatchObject({ free: true });
   }, 20000);
 });
