@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.13.0
+
+- The plan runs by itself: in Claude and other apps, the plan tool starts Leanfare's parts at once (local and free ones, paid ones within your cap) and answers with those that finish within about 25 seconds; your app does its own parts meanwhile, collects the rest, reviews and grades them. The plan's page in the chat has no buttons any more: it follows each part from waiting to running, done, with Claude and checked, and says in one line where the whole plan is.
+- Free and paid apart: on a key you marked as a free plan, Leanfare never picks a model that plan does not include (Google's free tier has no Gemini 4 or Pro model: they say "needs credit"). Each free model's daily allowance is known (Gemini 3.x Flash about 20 and Flash-Lite about 500 on a free key, Groq 1,000 a model, OpenRouter's free models 50 in all), counted, and learned smaller from a rate limit; a used allowance leaves the model out until its reset (midnight Pacific for Google). A model failing most of its tries today, or starting its answers only after minutes, is left out while another can take the work, and is not used as the judge.
+- ChatGPT in one press: a ChatGPT row next to your apps installs Codex when it is not here, opens the ChatGPT sign in, and turns it on once you are signed in. A free ChatGPT account works. A hand off that none of your ticked models can take now runs on Codex, read only, and a plan's web search goes to Codex with its own web search when Perplexity is not ticked.
+- The share planner: Leanfare learns how many parts of each kind you hand over on a day (numbers only) and shares out the free allowances by kind of work: it keeps a scarce strong model for what it is clearly best at when it could run out before its reset, spreads work away from a model near its allowance, and takes the fastest good enough model when you are waiting. It moves work only between models that are free to you, and says which and why in the receipt.
+- Free models ready to connect: Gemini, Groq, OpenRouter, Mistral and Cloudflare Workers AI sit under the ChatGPT row, one line each. Connect opens the page where the free key is made and takes the key (OpenRouter signs in instead); the key is marked as a free plan and its free models are ticked. Providers models.dev lists with free models that Leanfare has not reviewed are shown apart, to add by name only if you trust them.
+- Settings in groups that open and close, the everyday ones open, with each card's long explanation behind a Details line.
+- The pill at the top that says something is running opens the Live view in one press, and Savings shows Free models today: each one's day so far and when it comes back.
+- Each release now also publishes its server.json to the official MCP Registry by itself.
+
 ## 0.12.1
 
 - A Leanfare plugin for Claude (`plugin/`): Leanfare's tools, its four Claude Code hooks and a short skill on when to hand work over and how to review it, in one folder that Claude Code, Cowork and Claude's plugin directory can install. It runs the Leanfare installed on your computer. Claude Code can add it now: `/plugin marketplace add pouriaetab/leanfare`, then `/plugin install leanfare@leanfare`. When the app's own hooks are already in Claude Code, the plugin's hooks stay quiet.
