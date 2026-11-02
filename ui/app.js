@@ -2201,7 +2201,8 @@
   const liveNow = () => (S.tokens.data ? S.tokens.data.at + (Date.now() - S.tokens.got) : Date.now());
   const liveCalls = () => { const v = S.tokens.data; if (!v) return []; const now = liveNow(); return [...v.running, ...v.ended.filter((c) => now - c.ended < 60_000)]; };
   const liveTotal = (c) => LIVE_KINDS.reduce((n, [k]) => n + (S.tokens.kinds[k] ? c[k] : 0), 0);
-  const liveSig = () => `${S.tokens.view}|${Object.entries(S.tokens.kinds).filter(([, on]) => on).map(([k]) => k).join(",")}|${liveCalls().map((c) => `${c.id}${c.ended ? "e" : ""}${S.tokens.open[c.id] ? "o" : ""}`).join(",")}`;
+  // Drawn again in full when it connects, or when the last hand off changes (0.13.7: the body stayed "Connecting…").
+  const liveSig = () => `${S.tokens.data ? 1 : 0}|${S.savings?.work?.recent?.[0]?.ts ?? ""}|${S.tokens.view}|${Object.entries(S.tokens.kinds).filter(([, on]) => on).map(([k]) => k).join(",")}|${liveCalls().map((c) => `${c.id}${c.ended ? "e" : ""}${S.tokens.open[c.id] ? "o" : ""}`).join(",")}`;
   function redrawLive() {
     const old = $("#liveCard");
     if (!old) return;
@@ -2253,6 +2254,15 @@
   }
   function redrawFree() { const old = document.querySelector("#freeToday"); if (old) old.replaceWith(freeTodayEl()); }
 
+  // Nothing running (0.13.7): the last hand off and this month's work, so the top of Savings is never empty after one ends.
+  function liveIdleEl() {
+    const w = S.savings?.work, r = w?.recent?.[0];
+    if (!r) return h("div", { class: "empty", text: "No model calls in the last minute. Hand offs, checks and plan parts show here as they run, with their tokens as they come." });
+    const models = r.models.map((m) => m.label).join(", ");
+    return h("div", { class: "lv-idle" },
+      h("div", {}, h("b", { text: "Last hand off " }), h("span", { text: `${whenText(r.ts)} · ${models} · ${tokShort(r.kept)} tokens kept out · ${money(r.cost)}` })),
+      h("div", { class: "muted", text: `This month: ${plural(w.tasks, "task")}, ${tokShort(w.kept)} tokens kept out of your apps, ${money(w.cost)}. Hand offs show here as they run.` }));
+  }
   function liveCardEl() {
     liveStartStream();
     const v = S.tokens.data, L = S.tokens;
@@ -2265,7 +2275,7 @@
       h("span", { class: "grow" }), h("div", { class: "seg", role: "group", "aria-label": "How to show it" }, pick("bars", "Bars"), pick("lanes", "Lanes"), pick("numbers", "Numbers")));
     const body = !v ? h("div", { class: "empty", text: "Connecting to the live numbers…" })
       : L.view === "numbers" ? liveNumbersEl(v)
-      : !calls.length ? h("div", { class: "empty", text: "No model calls in the last minute. Hand offs, checks and plan parts show here as they run, with their tokens as they come." })
+      : !calls.length ? liveIdleEl()
       : L.view === "lanes" ? liveLanesEl(calls) : liveBarsEl(calls);
     const card = h("section", { class: "lv-card", id: "liveCard" }, head, kinds, body,
       h("p", { class: "fine", text: "Numbers only: Leanfare counts the tokens as they come and keeps no words for this. Input is its estimate until the provider gives its own counts." }));
