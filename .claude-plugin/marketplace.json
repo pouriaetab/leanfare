@@ -1,6 +1,7 @@
 {
   "name": "leanfare",
   "owner": { "name": "pouriaetab" },
+  "metadata": { "description": "Leanfare for Claude Code and Cowork: Claude hands reading, drafting and checks to cheaper or free models you pick, so your plan lasts longer." },
   "plugins": [
     {
       "name": "leanfare",
