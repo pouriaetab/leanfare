@@ -466,7 +466,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(item("Start Leanfare Again", #selector(startAgainServer)))
             menu.addItem(.separator())
         } else if let s = last {
-            menu.addItem(info("Today \(s.todayText) · This month \(s.monthText)"))
+            menu.addItem(item("Today \(s.todayText) · This month \(s.monthText)", #selector(openSpending)))
             if let b = s.budget {
                 let left = b.left.map { String(format: "$%.2f", max(0, $0)) } ?? "?"
                 menu.addItem(info("Budget: \(left) left of \(String(format: "$%.2f", b.amount)) (\(Int(b.pct ?? 0))% used)"))
@@ -519,6 +519,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func openWindowAction() { showWindow() }
+
+    // The menu's spending line: the window, on the list of each paid call (the page opens it when the server says so).
+    @objc func openSpending() {
+        server.post("/api/open", ["what": "spend"]) { _ in }
+        showWindow()
+    }
 
     func showWindow() {
         if webWindow == nil {

@@ -8,6 +8,7 @@
 // More for your money: what all your answers would have cost on your usual
 //    model, divided by what they cost.
 import { CODEX_ID } from "./codex";
+import { provider, type ProviderId } from "./config";
 import { TASKS, getModel } from "./data";
 import { db } from "./db";
 import { weightedPass, wilson } from "./delegate";
@@ -151,5 +152,22 @@ export function savings(month = localMonth()) {
     delegate,
     work: work(month),
     definitions: DEFINITIONS,
+  };
+}
+
+// What was paid, call by call (0.13.2): this month's (or today's) calls that cost something, newest first: when, what for
+// (a hand off, a check, a plan's part, the chat, an app), the model and its provider, the tokens and the cost. Numbers
+// only, from the ledger. Free and local answers cost $0 and are not listed. total adds up every one, as the pill does.
+export const SPEND_WHAT: Record<string, string> = { delegate: "Hand off", check: "Check", plan: "Plan part", chat: "Chat", trial: "Trial", sidebyside: "Side by side", ask: "Asked about prompts", openai: "An app (OpenAI address)", anthropic: "An app (Anthropic address)" };
+export function spendItems(span: "month" | "today" = "month", limit = 200) {
+  const [where, key] = span === "today" ? ["day = ?", localDay()] : ["month = ?", localMonth()];
+  const total = (db.query(`SELECT COALESCE(SUM(cost), 0) AS v, COUNT(*) AS n FROM ledger WHERE ${where} AND cost > 0`).get(key) as any);
+  const rows = db.query(`SELECT id, ts, source, provider, model, in_tokens AS input, cached, out_tokens AS output, cost, status FROM ledger WHERE ${where} AND cost > 0 ORDER BY id DESC LIMIT ?`).all(key, limit) as any[];
+  return {
+    span, total: total.v as number, count: total.n as number,
+    items: rows.map((r) => ({
+      id: r.id, ts: r.ts, what: SPEND_WHAT[r.source] ?? r.source, model: labelOf(r.model), provider: provider(r.provider as ProviderId)?.name ?? r.provider,
+      input: r.input, cached: r.cached, output: r.output, cost: r.cost, failed: r.status === "error",
+    })),
   };
 }
