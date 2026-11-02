@@ -411,6 +411,8 @@
     sp.className = "pill" + (b.reached ? " bad" : b.warn ? " warn" : "");
     sp.replaceChildren(h("strong", { text: money(st.month.spent) }), " this month",
       b.budget !== null ? h("span", { class: "bar", title: `${Math.floor(b.pct)}% of your $${b.budget.toFixed(2)} budget` }, h("i", { style: { width: Math.min(100, b.pct) + "%" } })) : null);
+    // The Mac app's menu asked to open the spending list (state.open, once per press).
+    if (st.open?.what === "spend" && st.open.at !== S.openedAt) { S.openedAt = st.open.at; setTimeout(() => toggleSpend(true), 0); }
     const rp = $("#runningPill");
     rp.hidden = !st.running.length;
     if (st.running.length) {
@@ -2509,6 +2511,51 @@
     }
   }
 
+  // ---- What was paid, call by call (0.13.2) ---------------------------------------------------------------
+  // The pill at the top says the month's spend; a press opens this list under it: each call that cost something, newest
+  // first, with when, the model, what it was for, its tokens and its cost. Free and local answers cost $0 and are not
+  // listed. Esc, the close button or a press anywhere else closes it.
+  async function toggleSpend(open) {
+    const old = $("#spendPop");
+    if (old) { if (open !== true) closeSpend(); return; }
+    const pop = h("div", { id: "spendPop", class: "spend-pop", role: "dialog", "aria-label": "What you spent" }, h("div", { class: "sp-note", text: "Reading what you spent…" }));
+    document.body.append(pop);
+    const r = $("#spendPill").getBoundingClientRect();
+    pop.style.top = `${Math.round(r.bottom + 6)}px`;
+    pop.style.right = `${Math.max(8, Math.round(window.innerWidth - r.right))}px`;
+    setTimeout(() => document.addEventListener("click", spendOutside), 0);
+    document.addEventListener("keydown", spendEsc);
+    try { S.spend = await api("/api/spend"); } catch { S.spend = null; }
+    if ($("#spendPop") === pop) drawSpend(pop);
+  }
+  function closeSpend() { $("#spendPop")?.remove(); S.spendAll = false; document.removeEventListener("click", spendOutside); document.removeEventListener("keydown", spendEsc); }
+  function spendOutside(e) { const pop = $("#spendPop"); if (pop && e.target?.isConnected !== false && !pop.contains(e.target) && !$("#spendPill").contains(e.target)) closeSpend(); } // a button the list just redrew is not outside
+  function spendEsc(e) { if (e.key === "Escape") closeSpend(); }
+  function drawSpend(pop) {
+    const v = S.spend, m = S.st?.month;
+    const when = (iso) => {
+      const d = new Date(iso), time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
+    };
+    const head = h("div", { class: "sp-head" }, h("b", { text: "What you spent" }), h("span", { class: "grow" }),
+      h("button", { class: "sp-close", type: "button", "aria-label": "Close", text: "×", onclick: closeSpend }));
+    const sums = h("div", { class: "sp-sums" }, h("strong", { text: money(m?.spent ?? v?.total ?? 0) }), " this month · ", h("strong", { text: money(m?.today ?? 0) }), " today");
+    if (!v) { pop.replaceChildren(head, sums, h("div", { class: "sp-note", text: "The list did not load. Press the pill again." })); return; }
+    if (!v.items.length) { pop.replaceChildren(head, sums, h("div", { class: "sp-note", text: "Nothing paid this month. Free and local answers cost $0." })); return; }
+    const shown = S.spendAll ? v.items : v.items.slice(0, 6);
+    const row = (x) => h("div", { class: "sp-row" + (x.failed ? " failed" : "") },
+      h("div", { class: "sp-main" }, h("span", { class: "sp-model", text: x.model }), h("span", { class: "sp-cost", text: money(x.cost) })),
+      h("div", { class: "sp-sub", text: `${when(x.ts)} · ${x.what}${x.failed ? ", failed after it began" : ""} · ${x.provider} · ${tokShort(x.input)} in, ${tokShort(x.output)} out` }));
+    pop.replaceChildren(head, sums,
+      h("div", { class: "sp-list" + (S.spendAll ? " all" : "") }, ...shown.map(row)),
+      h("div", { class: "sp-foot" },
+        v.count > shown.length && !S.spendAll ? h("button", { class: "sp-link", type: "button", text: `Show all ${v.count}`, onclick: (ev) => { ev.stopPropagation(); S.spendAll = true; drawSpend(pop); } })
+          : h("span", { text: `${plural(v.count, "paid call")} this month${v.count > v.items.length ? `, the newest ${v.items.length} here` : ""}` }),
+        h("span", { class: "grow" }),
+        h("button", { class: "sp-link", type: "button", text: "Savings ›", onclick: () => { closeSpend(); setTab("savings"); } })),
+      h("div", { class: "sp-note", text: "Free and local answers cost $0, so they are not listed." }));
+  }
+
   // A key refused, expired or about to expire (keystate.ts): one press to make a new one. OpenRouter signs you in again,
   // which makes a new key by itself; the others open the page where their keys are made, and the box for the new one here.
   function newKeyButton(id) {
@@ -3811,7 +3858,11 @@
   setInterval(applyTheme, 5 * 60_000);
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") applyTheme(); });
   document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => setTab(b.dataset.tab)));
-  $("#spendPill").addEventListener("click", () => setTab("savings"));
+  $("#spendPill").addEventListener("click", (e) => { e.stopPropagation(); toggleSpend(); });
+  // The Mac app's menu, or a link, opens the spending list: #spend in the address (0.13.2).
+  const spendFromHash = () => { if (location.hash === "#spend") { toggleSpend(true); try { history.replaceState(null, "", location.pathname + location.search); } catch {} } };
+  window.addEventListener("hashchange", spendFromHash);
+  setTimeout(spendFromHash, 0);
   $("#pauseBtn").addEventListener("click", togglePause);
   // Esc stops the answer being written, unless it was meant for something else: a box being
   // typed in (search, a name, an edit, instructions), the picture viewer or the lock screen.

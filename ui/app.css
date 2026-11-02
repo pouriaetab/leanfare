@@ -896,3 +896,23 @@ tr.wd td { background: var(--panel-2); }
 #runningPill .live-link { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 0; text-decoration: underline; text-underline-offset: 2px; }
 .lv-card.flash { outline: 2px solid var(--accent, #0f766e); outline-offset: 2px; transition: outline-color 1.2s ease; }
 #freeToday h3 { font-size: 13px; margin: 0 0 6px; }
+
+/* What you spent: the list under the spending pill (0.13.2) */
+.spend-pop { position: fixed; z-index: 60; width: min(380px, calc(100vw - 16px)); background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius-sm); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16); padding: 12px 14px 10px; font-size: 13px; }
+.spend-pop .sp-head { display: flex; align-items: center; gap: 8px; }
+.spend-pop .sp-close { border: 0; background: none; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 2px; }
+.spend-pop .sp-close:hover { color: var(--text); }
+.spend-pop .sp-sums { color: var(--muted); margin: 2px 0 8px; }
+.spend-pop .sp-sums strong { color: var(--text); font-weight: 600; }
+.spend-pop .sp-list { border-top: 1px solid var(--line); }
+.spend-pop .sp-list.all { max-height: 340px; overflow-y: auto; }
+.spend-pop .sp-row { padding: 7px 0; border-bottom: 1px solid var(--line); }
+.spend-pop .sp-main { display: flex; gap: 10px; align-items: baseline; }
+.spend-pop .sp-model { flex: 1; min-width: 0; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spend-pop .sp-cost { font-variant-numeric: tabular-nums; font-weight: 550; }
+.spend-pop .sp-sub { color: var(--muted); font-size: 12px; margin-top: 1px; }
+.spend-pop .sp-row.failed .sp-cost { color: var(--warn); }
+.spend-pop .sp-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: 12px; }
+.spend-pop .sp-link { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit; }
+.spend-pop .sp-note { color: var(--faint); font-size: 12px; margin-top: 6px; }
+#spendPill { cursor: pointer; }
