@@ -16,7 +16,7 @@ import { failOfStatus, failOfText, type FailKind } from "./fails";
 import { noteFailure, restOf, restText } from "./rest";
 import { SAYS_GONE, noQuota, noQuotaNow, noQuotaText, noteRefusal } from "./quota";
 import { firstMedian, needsCredit, notNowWhy, unsteady, usedUp } from "./allowance";
-import { clearNoCredit, clearRefused, creditRefusal, keyRefusal, keyUnusable, noCredit, noteNoCredit, noteRefused } from "./keystate";
+import { SAYS_PLACE, clearAway, clearNoCredit, clearRefused, confirmAway, creditRefusal, keyRefusal, keyUnusable, noCredit, noteAway, noteNoCredit, noteRefused, providerAway, turnedAway } from "./keystate";
 import { TASK_OF, freeToYou, shareFor } from "./share";
 import type { GradedKind } from "./grades";
 import { fitsFree, onFreePlan } from "./freeplans";
@@ -49,9 +49,10 @@ export function notReadyMessage(id: ProviderId): string {
 
 // The models Auto, plans, checks and side by side may use: ticked, their provider ready, still served, not one your key
 // has no quota for (quota.ts), not a paid only one on a free key, and not one whose free allowance for today is used up
-// (allowance.ts). A model you name yourself is asked anyway.
+// (allowance.ts), nor one whose provider refused the key, has no credit for it, or is turning requests away (keystate.ts).
+// A model you name yourself is asked anyway.
 export function usableModels(only?: (m: Model) => boolean): Model[] {
-  return settings().ticked.map((id) => getModel(id)).filter((m): m is Model => !!m && providerReady(m.provider) && served(m) && !noQuota(m.id) && !needsCredit(m) && !usedUp(m) && !keyUnusable(m.provider) && !(noCredit(m.provider) && !freeToYou(m)) && (!only || only(m)));
+  return settings().ticked.map((id) => getModel(id)).filter((m): m is Model => !!m && providerReady(m.provider) && served(m) && !noQuota(m.id) && !needsCredit(m) && !usedUp(m) && !keyUnusable(m.provider) && !(noCredit(m.provider) && !freeToYou(m)) && !providerAway(m.provider) && (!only || only(m)));
 }
 
 // A provider you have but ticked none of the models of (a key just added, Ollama just found, or Set up's
@@ -469,7 +470,7 @@ export function thinkingOf(m: Model, u: Usage | null, chars: number): { tokens: 
 }
 
 export function record(p: Plan, m: Model, source: string, usage: Usage | null, o: { status: "ok" | "stopped" | "error"; error?: string; ms: number; firstMs?: number | null; reportedCost?: number | null; estimated?: boolean; thinkingChars?: number; fail?: FailKind }): LedgerResult {
-  if (o.status === "ok") { clearRefused(m.provider); if (!freeToYou(m)) clearNoCredit(m.provider); } // its provider took the key, and a paid answer means credit (keystate.ts)
+  if (o.status === "ok") { clearRefused(m.provider); clearAway(m.provider); if (!freeToYou(m)) clearNoCredit(m.provider); } // its provider took the key and answered, and a paid answer means credit (keystate.ts)
   const u = usage ?? ZERO;
   const think = usage || o.thinkingChars ? thinkingOf(m, usage, o.thinkingChars ?? 0) : { tokens: null, source: null }; // a call that failed before any answer: nothing to split
   // A failed request costs nothing unless the provider had already written part of an answer.
@@ -537,19 +538,24 @@ function send(m: Model, body: any, stream: boolean, signal: AbortSignal, native:
   return url.endsWith("/api/chat") ? sent.then((res) => { OLLAMA_NATIVE.add(res); return res; }) : sent;
 }
 
-// Sends to the planned model. For Auto, a busy or unreachable provider (before
-// any answer arrives) passes the request to the next pick, at most twice.
+// Sends to the planned model. For Auto, a busy or unreachable provider, or one that turns the request away (before any
+// answer arrives), passes the request to the next pick: at most 3 models are asked, and the other models of a provider
+// that failed as a whole (its key, its credit, the network) are skipped, not counted.
 async function sendWithFallback(p: Plan, source: string, body: any, stream: boolean, signal: AbortSignal, native = false, extraHeaders: Record<string, string> = {}): Promise<{ res: Response; model: Model; t0: number }> {
-  const tries = p.auto ? p.candidates.slice(0, 3) : [p.model];
+  const tries = p.auto ? [...p.candidates] : [p.model];
   if (tries[0]?.id !== p.model.id) tries.unshift(p.model);
-  let last: UserError | null = null;
-  for (let i = 0; i < Math.min(tries.length, 3); i++) {
+  const out = new Set<string>(); // providers this request found unusable as a whole: their other models are skipped
+  const worth = (m: Model) => !out.has(m.provider) && !keyUnusable(m.provider) && !providerAway(m.provider) && !(noCredit(m.provider) && !freeToYou(m)); // keystate.ts
+  let last: UserError | null = null, asked = 0;
+  for (let i = 0; i < tries.length && asked < 3; i++) {
     const m = tries[i];
     if (i > 0) {
-      if (keyUnusable(m.provider) || (noCredit(m.provider) && !freeToYou(m))) continue; // its provider refused the key, or has no credit, a moment ago (keystate.ts)
+      if (!worth(m)) continue; // its provider refused the key, has no credit, or turned the request away a moment ago
       if (!reserveAgain(p, m, p.maxOut)) break;
       p.model = m;
     }
+    asked++;
+    const more = () => p.auto && asked < 3 && tries.slice(i + 1).some(worth); // one of Auto's picks is left to pass it to
     const t0 = performance.now();
     try {
       let res = await send(m, body, stream, signal, native, extraHeaders, p.capOverride ?? (p.capped ? outCap(m) : null), p.effortAsked);
@@ -576,15 +582,27 @@ async function sendWithFallback(p: Plan, source: string, body: any, stream: bool
       // No credit left (0.13.3): noted, so its paid models are left out until there is credit again, and Auto goes on.
       const broke = !page && !refused && creditRefusal(res.status, msg);
       if (broke) { noteNoCredit(m.provider, res.status); last = new UserError(502, `${/[.!?]$/.test(msg.trim()) ? msg.trim() : `${msg.trim()}.`} Leanfare leaves ${def.name}'s paid models out until it has credit again: add credit there, or pick another model.`, "no_credit"); }
-      if ((!page && !RETRYABLE.has(res.status) && !gone && !((refused || broke) && p.auto)) || i === tries.length - 1) throw last;
-      p.notes.push(`${m.label} ${page ? "sent a web page instead of an answer" : gone ? `is no longer served to your ${def.name} key` : refused ? `could not be used: ${def.name} refused your key, which may have expired` : broke ? `could not be used: ${def.name} has no credit left` : `answered ${res.status}`}, so Auto passed the request to its next pick.`);
+      // Turned away (0.13.4): neither the key nor credit (fails.ts: turnedAway). The provider as a whole: this request
+      // skips its other models, and its models are left out from then on, at once when its words point at the network or
+      // location, else once its free model list is turned away too (keystate.ts). One model: that model is left out
+      // (quota.ts, from the words recorded above). The request (a moderation flag): passed on, not remembered.
+      const away = !page && !refused && !broke ? turnedAway(res.status, msg) : null;
+      if (away === "provider") {
+        out.add(m.provider);
+        if (res.status === 451 || SAYS_PLACE.test(msg)) noteAway(m.provider, res.status, true);
+        else await confirmAway(m.provider, signal);
+        if (providerAway(m.provider)) last = new UserError(502, `${/[.!?]$/.test(msg.trim()) ? msg.trim() : `${msg.trim()}.`} Leanfare leaves ${def.name}'s models out of Auto for now and checks again every 30 minutes.`, "turned_away");
+      }
+      if (!(page || RETRYABLE.has(res.status) || gone || refused || broke || away) || !more()) throw last;
+      p.notes.push(`${m.label} ${page ? "sent a web page instead of an answer" : gone ? `is no longer served to your ${def.name} key` : refused ? `could not be used: ${def.name} refused your key, which may have expired` : broke ? `could not be used: ${def.name} has no credit left` : away ? `could not be used: ${def.name} turned the request away (${res.status})` : `answered ${res.status}`}, so Auto passed the request to its next pick.`);
     } catch (e: any) {
       if (e instanceof UserError) throw e;
       if (signal.aborted) throw new UserError(499, "Stopped.", "stopped");
       const msg = networkError(provider(m.provider)!, e);
       record(p, m, source, null, { status: "error", error: msg, ms: performance.now() - t0, fail: e?.name === "TimeoutError" ? "timeout" : "unreachable" });
       last = new UserError(502, msg, "provider_unreachable");
-      if (!p.auto || i === tries.length - 1) throw last;
+      if (e?.name !== "TimeoutError") out.add(m.provider); // out of reach: so are its other models, for this request
+      if (!more()) throw last;
       p.notes.push(`${m.label} could not be reached, so Auto passed the request to its next pick.`);
     }
   }

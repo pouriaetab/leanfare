@@ -154,7 +154,7 @@ export function state() {
       local: !!p.local, custom: !!p.custom, more: !!p.more,
       ready: providerReady(p.id), on: s.providers[p.id]?.on !== false, free: !!s.providers[p.id]?.free,
       key: p.needsKey ? { saved: !!getKey(p.id), where: keyWhere(p.id), hint: keyHint(p.id), canUndo: (removedKeys.get(p.id)?.until ?? 0) > Date.now() } : null,
-      keyTrouble: p.needsKey && getKey(p.id) ? { refused: keyState(p.id).refused ?? null, expires: keyState(p.id).expires ?? null, noCredit: noCredit(p.id) } : null,
+      keyTrouble: p.needsKey && getKey(p.id) ? { refused: keyState(p.id).refused ?? null, expires: keyState(p.id).expires ?? null, noCredit: noCredit(p.id), away: keyState(p.id).away ?? null } : null,
       list: p.id === "openrouter" ? store.status.openrouter : p.id === "ollama" ? store.status.ollama : null,
       credit: p.id === "openrouter" && getKey("openrouter") ? connect.credit : null,
       base: baseOf(p.id),
@@ -500,7 +500,7 @@ async function api(req: Request, url: URL): Promise<Response> {
     const ticked = afterFreeKey(e.id);
     return json({ ok: true, message: `${e.name} is connected${ticked.length ? `: ${ticked.length} free model${ticked.length === 1 ? "" : "s"} ticked` : ""}.`, ticked, state: state() });
   }
-  // A refused key checked again (keystate.ts): working, the refusal goes; still refused, it says so.
+  // A refused key, or a provider turning requests away, checked again (keystate.ts): working, it goes; still not, it says so.
   if (p === "/api/keys/recheck" && m === "POST") {
     const b = await readBody(req);
     const def = provider(b.provider);
