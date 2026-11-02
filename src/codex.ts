@@ -8,7 +8,7 @@
 // while the ChatGPT plan is under 85% of its 5 hours and its week (when Leanfare can read them). Leanfare
 // keeps no words: the answer goes to the plan, as any part's does.
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { VERSION } from "./config";
@@ -121,7 +121,7 @@ export interface CodexState { installed: boolean; signedIn: boolean; login: "cha
 let state: CodexState | null = null;
 let at = 0;
 let pending: Promise<CodexState> | null = null;
-export function forgetCodex() { state = null; at = 0; pending = null; picked = null; offered = null; }
+export function forgetCodex() { state = null; at = 0; pending = null; picked = null; catalog = null; }
 export async function codexState(fresh = false): Promise<CodexState> {
   if (!fresh && state && Date.now() - at < 60_000) return state;
   pending ??= (async () => {
@@ -227,27 +227,40 @@ export function notOffered(said: string): string | null {
   return /'([^'\s]{1,80})' model is not supported/i.exec(said)?.[1] ?? "";
 }
 let picked: { model: string; instead: string } | null = null;
-let offered: { at: number; list: string[] } | null = null;
+let catalog: { at: number; offered: string[]; all: Set<string> } | null = null;
 export const codexPicked = () => picked;
 
-// The models Codex offers the account it is signed in with, its own pick first, without those it offers an upgrade
-// from; [] when it cannot say. Asked at most every 6 hours.
-export async function codexModels(bin: string, signal?: AbortSignal): Promise<string[]> {
-  if (offered && Date.now() - offered.at < 6 * 3_600_000) return offered.list;
-  let list = await modelList(bin, signal);
-  if (!list?.length && !signal?.aborted) {
+// What Codex has for the account it is signed in with: offered, the models its pickers show (no hidden one, none it
+// offers an upgrade from), its own pick first; all, every model it knows. Asked at most every 6 hours.
+async function codexCatalog(bin: string, signal?: AbortSignal): Promise<{ offered: string[]; all: Set<string> }> {
+  if (catalog && Date.now() - catalog.at < 6 * 3_600_000) return catalog;
+  const data = await modelList(bin, signal);
+  let offered: string[] = [];
+  const all = new Set<string>();
+  if (data?.length) {
+    const named = data.filter((m: any) => typeof m?.model === "string");
+    for (const m of named) all.add(m.model);
+    const shown = named.filter((m: any) => !m.hidden && !m.upgrade);
+    offered = [...shown.filter((m: any) => m.isDefault), ...shown.filter((m: any) => !m.isDefault)].map((m: any) => m.model as string);
+  } else if (!signal?.aborted) {
     const r = await run(bin, ["debug", "models"], { signal, ms: 20_000 });
     try {
-      const all = JSON.parse(r.out)?.models;
-      list = Array.isArray(all) ? all.filter((m: any) => typeof m?.slug === "string" && m.visibility === "list" && !m.upgrade).sort((a: any, b: any) => (a.priority ?? 99) - (b.priority ?? 99)).map((m: any) => m.slug as string) : [];
-    } catch { list = []; }
+      const list = JSON.parse(r.out)?.models;
+      if (Array.isArray(list)) {
+        for (const m of list) if (typeof m?.slug === "string") all.add(m.slug);
+        offered = list.filter((m: any) => typeof m?.slug === "string" && m.visibility === "list" && !m.upgrade).sort((a: any, b: any) => (a.priority ?? 99) - (b.priority ?? 99)).map((m: any) => m.slug as string);
+      }
+    } catch {}
   }
-  if (list?.length) offered = { at: Date.now(), list };
-  return list ?? [];
+  const v = { at: Date.now(), offered, all };
+  if (offered.length || all.size) catalog = v;
+  return v;
 }
-// Codex's app server (codex app-server, JSON lines on its input and output): initialize, then model/list. null when
-// it does not answer within 20 seconds.
-async function modelList(bin: string, signal?: AbortSignal): Promise<string[] | null> {
+// The models Codex offers, its own pick first; [] when it cannot say.
+export const codexModels = async (bin: string, signal?: AbortSignal): Promise<string[]> => (await codexCatalog(bin, signal)).offered;
+// Codex's app server (codex app-server, JSON lines on its input and output): initialize, then model/list with the
+// hidden ones too. Its list, or null when it does not answer within 20 seconds.
+async function modelList(bin: string, signal?: AbortSignal): Promise<any[] | null> {
   const env = await childEnv(bin);
   return new Promise((done) => {
     let p: ChildProcess;
@@ -255,7 +268,7 @@ async function modelList(bin: string, signal?: AbortSignal): Promise<string[] | 
     catch { done(null); return; }
     live.add(p);
     let buf = "", over = false;
-    const end = (v: string[] | null) => {
+    const end = (v: any[] | null) => {
       if (over) return;
       over = true; clearTimeout(timer); signal?.removeEventListener("abort", stop); live.delete(p); endAll(p); done(v);
     };
@@ -271,9 +284,7 @@ async function modelList(bin: string, signal?: AbortSignal): Promise<string[] | 
         let o: any = null;
         try { o = JSON.parse(line); } catch { continue; }
         if (o?.id !== 2) continue;
-        const data = Array.isArray(o.result?.data) ? o.result.data : [];
-        const ok = data.filter((m: any) => typeof m?.model === "string" && !m.hidden && !m.upgrade);
-        end([...ok.filter((m: any) => m.isDefault), ...ok.filter((m: any) => !m.isDefault)].map((m: any) => m.model as string));
+        end(Array.isArray(o.result?.data) ? o.result.data : null);
         return;
       }
     });
@@ -281,7 +292,7 @@ async function modelList(bin: string, signal?: AbortSignal): Promise<string[] | 
     const send = (o: object) => p.stdin?.write(JSON.stringify(o) + "\n");
     send({ method: "initialize", id: 1, params: { clientInfo: { name: "leanfare", title: "Leanfare", version: VERSION }, capabilities: null } });
     send({ method: "initialized" });
-    send({ method: "model/list", id: 2, params: {} });
+    send({ method: "model/list", id: 2, params: { includeHidden: true } });
   });
 }
 
@@ -313,19 +324,69 @@ export async function runCodex(p: CodexPart, signal: AbortSignal, ms = CODEX_WAI
       }
       if (r.code === 0 && model) picked = { model, instead: bad };
       else if (!signal.aborted && !r.timedOut && notOffered(`${r.err}\n${r.out}`) !== null)
-        throw new UserError(502, `Codex's settings name ${bad || "a model"}, which ChatGPT sign in does not offer${tries.length ? `, and Codex did not run ${tries.join(", ")} either` : ", and Codex did not say which models it offers"}. Remove the model line from ~/.codex/config.toml (or set a model your plan has), or run codex and pick one with /model.`, "codex_model");
+        throw new UserError(502, `Codex's settings name ${bad || "a model"}, which ChatGPT sign in does not offer${tries.length ? `, and Codex did not run ${tries.join(", ")} either` : ", and Codex did not say which models it offers"}. Press Fix it on the ChatGPT row in Leanfare's Settings (it turns that setting off), or run codex and pick a model with /model.`, "codex_model");
     }
     if (signal.aborted) throw new UserError(499, "Stopped.", "stopped");
     if (r.timedOut) throw new UserError(504, `Codex did not finish this part within ${Math.round(ms / 60_000)} minutes.`, "codex_timeout");
     if (r.code !== 0) throw new UserError(502, `Codex stopped with an error: ${tail(r.err || r.out)}`, "codex_failed");
     const answer = existsSync(answerFile) ? readFileSync(answerFile, "utf8").trim() : "";
     if (!answer) throw new UserError(502, "Codex finished without an answer.", "codex_empty");
-    const note = picked && model === picked.model ? `Codex's settings name ${picked.instead || "a model"}, which your ChatGPT plan does not offer, so it ran on ${picked.model}, a model Codex offers you. To make that stick, remove the model line from ~/.codex/config.toml.` : null;
+    const note = picked && model === picked.model ? `Codex's settings name ${picked.instead || "a model"}, which your ChatGPT plan does not offer, so it ran on ${picked.model}, a model Codex offers you. Fix it in one press on the ChatGPT row in Leanfare's Settings.` : null;
     return { answer, seconds: (performance.now() - t0) / 1000, model, note };
   } finally {
     free();
     if (dir) rmSync(dir, { recursive: true, force: true });
   }
+}
+
+// ---- Codex's own setting, fixed in one press (0.13.2) ---------------------------------------------
+// The model line of Codex's settings ($CODEX_HOME/config.toml, ~/.codex/config.toml by default) is read to say when it
+// names a model ChatGPT sign in no longer offers: Codex refused it for a part, or Codex's list does not have it at all
+// (only for Codex's own OpenAI models: a setting for another model provider is left alone). Fix it on the ChatGPT row
+// turns that one line into a comment that says why, so Codex goes back to its own pick. Nothing else in the file changes.
+export const codexConfigFile = () => join(process.env.CODEX_HOME || join(home(), ".codex"), "config.toml");
+export function codexConfigModel(file = codexConfigFile()): { model: string; line: number; provider: string | null } | null {
+  let text: string;
+  try { text = readFileSync(file, "utf8"); } catch { return null; }
+  let found: { model: string; line: number } | null = null, provider: string | null = null;
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i].trim();
+    if (l.startsWith("[")) break; // a table begins: what follows is not the top level
+    const m = /^model\s*=\s*"([^"]+)"|^model\s*=\s*'([^']+)'/.exec(l);
+    if (m) found = { model: m[1] ?? m[2], line: i };
+    const p = /^model_provider\s*=\s*["']([^"']+)["']/.exec(l);
+    if (p) provider = p[1];
+  }
+  return found ? { ...found, provider } : null;
+}
+export interface CodexSetting { file: string; model: string | null; stale: boolean; using: string | null }
+export async function codexSetting(signal?: AbortSignal): Promise<CodexSetting | null> {
+  const bin = await codexBin();
+  if (!bin) return null;
+  const c = codexConfigModel();
+  const using = picked?.model ?? null;
+  if (!c) return { file: codexConfigFile(), model: null, stale: false, using };
+  let stale = !!picked && picked.instead === c.model;
+  if (!stale && (!c.provider || c.provider === "openai")) {
+    const { all } = await codexCatalog(bin, signal);
+    stale = all.size > 0 && !all.has(c.model);
+  }
+  return { file: codexConfigFile(), model: c.model, stale, using };
+}
+export function fixCodexSetting(): { ok: boolean; message: string } {
+  const file = codexConfigFile();
+  const c = codexConfigModel(file);
+  picked = null; // Codex's own pick from now on
+  if (!c) return { ok: true, message: "Codex's settings name no model: Codex uses its own pick." };
+  try {
+    const lines = readFileSync(file, "utf8").split("\n");
+    lines[c.line] = `# ${lines[c.line].trim()}  # turned off by Leanfare: ChatGPT sign in no longer offers this model, so Codex uses its own pick`;
+    writeFileSync(file, lines.join("\n"));
+  } catch (e: any) {
+    return { ok: false, message: `Leanfare could not change ${file}: ${String(e?.message ?? e).slice(0, 160)}` };
+  }
+  return { ok: true, message: `Done: Codex's settings no longer name ${c.model}, so Codex uses its own pick.` };
 }
 
 // ---- one press: Connect ChatGPT (0.13) -------------------------------------------------------------
