@@ -69,6 +69,8 @@ export async function reset(patch: Partial<Settings> = {}) {
   fake.hooks.answer = null;
   fake.hooks.refuse = null;
   fake.hooks.revoked.clear();
+  fake.hooks.blocked.clear();
+  fake.hooks.blockedSays = "Access denied. Please check your network settings.";
   clearKeyState(); // a key refused or expiring in one test (keystate.ts)
   fake.hooks.fail = null;
   fake.hooks.slow = null;

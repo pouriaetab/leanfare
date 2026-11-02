@@ -111,6 +111,8 @@ export function startFake() {
     slow: null as null | ((prompt: string, provider: string) => number), // milliseconds to wait before answering
     refuse: null as null | ((body: any, provider: string) => { status: number; message: string } | null), // an error with the provider's own words
     revoked: new Set<string>(), // providers that refuse their key everywhere, as for a key that expired
+    blocked: new Set<string>(), // providers that turn away every request from this network, their model list too (Groq's 403)
+    blockedSays: "Access denied. Please check your network settings.", // in these words
   };
   const onceSeen = new Set<string>();
   // OpenRouter's sign in: /openrouter/auth shows the "Authorize" step and sends the browser back with a
@@ -251,6 +253,7 @@ export function startFake() {
         }), { headers: { "content-type": "application/x-ndjson" } });
       }
 
+      if (hooks.blocked.has(provider)) return Response.json({ error: { message: hooks.blockedSays } }, { status: 403 });
       const keyOk = !hooks.revoked.has(provider) && (provider === "ollama" || auth === KEYS[provider] || auth === SHAPED[provider] || (provider === "openrouter" && auth === OAUTH_KEY));
       // Perplexity has no model list: a request naming a model that does not exist answers 400 to a good key.
       if (provider === "perplexity" && body?.model === "leanfare-key-check") return keyOk ? Response.json({ error: { message: "Invalid model" } }, { status: 400 }) : Response.json({ error: { message: "Invalid API key" } }, { status: 401 });
