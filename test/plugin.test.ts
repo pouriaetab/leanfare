@@ -23,6 +23,10 @@ test("the manifest: a name of our own, the app's version, a licence, and nothing
   const market = JSON.parse(readFileSync(join(ROOT, ".claude-plugin/marketplace.json"), "utf8"));
   expect(market.plugins).toEqual([expect.objectContaining({ name: "leanfare", source: "./plugin" })]);
   expect(market.metadata.description.length).toBeGreaterThan(40); // the directory asks for one
+  // A privacy policy the directory finds (0.13.2): PRIVACY.md in the repository, from plugin.json and from the README.
+  expect(m.privacyPolicyUrl).toBe("https://github.com/pouriaetab/leanfare/blob/main/PRIVACY.md");
+  expect(readFileSync(join(ROOT, "PRIVACY.md"), "utf8")).toContain("There is no telemetry");
+  expect(readFileSync(join(P, "README.md"), "utf8")).toContain("[Privacy policy](https://github.com/pouriaetab/leanfare/blob/main/PRIVACY.md)");
 });
 
 test("the MCP server and the hooks run the launcher inside the plugin; the hooks are the app's own four", () => {

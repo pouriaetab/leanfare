@@ -18,7 +18,7 @@ This plugin connects Claude to the Leanfare app on your computer. It does not co
 
 ## What it sends, and what it keeps
 
-The plugin itself sends nothing anywhere. Leanfare, when Claude hands it work, sends that task and the files Claude names to the model providers you added keys for (OpenAI, Anthropic, Google, Groq, OpenRouter and others, under their own terms), to your ChatGPT plan through Codex if you connected it, or to models on your computer (Ollama), and nowhere else. A task marked private stays on your computer. Leanfare keeps numbers about each hand off (models, tokens, costs, grades) in its own folder on your computer, and keeps the words only if you choose that in its settings. No telemetry.
+The plugin itself sends nothing anywhere. Leanfare, when Claude hands it work, sends that task and the files Claude names to the model providers you added keys for (OpenAI, Anthropic, Google, Groq, OpenRouter and others, under their own terms), to your ChatGPT plan through Codex if you connected it, or to models on your computer (Ollama), and nowhere else. A task marked private stays on your computer. Leanfare keeps numbers about each hand off (models, tokens, costs, grades) in its own folder on your computer, and keeps the words only if you choose that in its settings. No telemetry. The whole [Privacy policy](https://github.com/pouriaetab/leanfare/blob/main/PRIVACY.md) says what it reads, sends and keeps.
 
 ## How it runs
 
