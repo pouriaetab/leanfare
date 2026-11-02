@@ -926,9 +926,11 @@ tr.wd td { background: var(--panel-2); }
 .ft-sum { font-size: 12px; color: var(--muted); }
 .ft-link { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit; font-size: 12px; justify-self: start; }
 .ft-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
-.ft-tile { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; display: grid; gap: 5px; min-width: 0; }
+/* minmax(0, 1fr): a long name is cut with … inside its tile, never drawn over the next one (0.13.7) */
+.ft-tile { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px; min-width: 0; overflow: hidden; }
+.lv-idle { display: grid; gap: 4px; padding: 6px 2px; font-size: 13px; }
 .ft-tile.idle { opacity: 0.55; }
-.ft-top { display: flex; gap: 8px; align-items: baseline; }
+.ft-top { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
 .ft-name { flex: 1; min-width: 0; font-weight: 550; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ft-count { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); }
 .ft-bar { height: 4px; border-radius: 99px; background: var(--line); overflow: hidden; }

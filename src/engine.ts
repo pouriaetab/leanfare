@@ -505,6 +505,8 @@ export function record(p: Plan, m: Model, source: string, usage: Usage | null, o
 // ---- sending -------------------------------------------------------------------
 
 const RETRYABLE = new Set([408, 409, 425, 429, 500, 502, 503, 504, 529]);
+// The least answer limit worth asking again within, when a balance covers less than the limit asked (0.13.7).
+export const AFFORD_MIN = 1024;
 // Answers from Ollama's own /api/chat (upstream.ts says why): read as JSON lines and turned into OpenAI's shape.
 const OLLAMA_NATIVE = new WeakSet<Response>();
 
@@ -565,6 +567,18 @@ async function sendWithFallback(p: Plan, source: string, body: any, stream: bool
         NO_EFFORT.add(m.id);
         p.notes.push(`${m.label} does not take a thinking effort, so Leanfare asked it again without one.`);
         res = await send(m, body, stream, signal, native, extraHeaders, p.capOverride ?? (p.capped ? outCap(m) : null), p.effortAsked);
+      }
+      // A balance too small for the answer limit asked, not empty (0.13.7; OpenRouter: "You requested up to 12288 tokens,
+      // but can only afford 8805"): the same model is asked again within what the balance covers, when that still
+      // leaves room for a real answer. Only a balance that covers less than that counts as no credit.
+      if (res.status === 402 && !native) {
+        const afford = Number(/can only afford (\d+)/i.exec(await res.clone().text().catch(() => ""))?.[1] ?? 0);
+        if (afford >= AFFORD_MIN) {
+          const within = Math.floor(afford * 0.97);
+          const { max_completion_tokens: _drop, ...rest } = body ?? {};
+          p.notes.push(`${m.label}: ${provider(m.provider)!.name}'s balance covers an answer of up to ${within.toLocaleString("en-US")} tokens, so Leanfare asked within that.`);
+          res = await send(m, { ...rest, max_tokens: within }, stream, signal, native, extraHeaders, null, p.effortAsked);
+        }
       }
       const type = res.headers.get("content-type") ?? "";
       if (res.ok && !/text\/html/i.test(type)) return { res, model: m, t0 };
