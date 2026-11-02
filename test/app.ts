@@ -57,7 +57,7 @@ export async function reset(patch: Partial<Settings> = {}) {
   forgetSpeeds();
   for (const f of [paths.catalog, paths.openrouter]) { try { unlinkSync(f); } catch {} }
   loadCatalog(FIXTURE);
-  store.ollama = []; store.ollamaFound = false; store.openrouter = [];
+  store.ollama = []; store.ollamaFound = false; store.openrouter = []; store.live.clear(); // a key saved in one test (keySaved) left its provider's live model list
   connect.cancel(); connect.forgetCredit();
   local.stopPull(); local.dismissPull(); fake.ollama.reset();
   Object.assign(local.probe, { free: () => 200e9, memory: () => 16e9, roots: () => [] }); // fixed numbers: tests never depend on this computer's disk, memory or drives
