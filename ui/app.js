@@ -1429,6 +1429,7 @@
       renderSavings();
       if (!S.plans) loadPlans(false).catch(() => {}); // the log files can take a moment: the rest of the page does not wait
       loadTrial();
+      if (S.share !== undefined) loadShare(); // Free models today, read again each time Savings opens (it was read only once)
     } catch (e) { failed(e); }
   }
 
@@ -2216,23 +2217,38 @@
   // each kind today's pace expects. Numbers only.
   const SHARE_WORD = { read: "reading", write: "drafting", reason: "working out", search: "searching" };
   async function loadShare() { try { S.share = await api("/api/share"); } catch { S.share = { demand: {}, pools: [] }; } const old = document.querySelector("#freeToday"); if (old) old.replaceWith(freeTodayEl()); }
+  // Free models today (0.13.2): compact. Each free model in use today is a small tile (its name, what it used of its daily
+  // limit with a thin bar, and when the limit resets), the most used first, up to three to a row; the three most used show
+  // at first, "+N more in use" adds the other used ones, and Show all adds the ones not used yet. Nothing used: one line.
   function freeTodayEl() {
     if (S.share === undefined) { S.share = null; loadShare(); }
-    const v = S.share;
-    const head = h("h3", { text: "Free models today" });
-    if (!v) return h("section", { class: "lv-card", id: "freeToday" }, head, h("p", { class: "note", text: "Reading today's numbers…" }));
-    if (!v.pools.length) return h("section", { class: "lv-card", id: "freeToday" }, head, h("p", { class: "note", text: "No model you ticked has a daily free allowance. Connect a free one in Settings, Your apps and AI plans." }));
-    const when = (iso) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    const rows = v.pools.map((p) => h("tr", {},
-      h("td", { text: p.label }),
-      h("td", { class: "num", text: `${p.used} of about ${p.perDay}${p.learned ? " (learned)" : ""}` }),
-      h("td", { class: "num", text: p.left > 0 ? `${p.left} left` : `back at ${when(p.resets)}` }),
-      h("td", { class: "note", text: p.best.length ? `kept for ${p.best.map((k) => SHARE_WORD[k] ?? k).join(", ")}` : "" })));
-    const expect = Object.entries(v.demand).filter(([, n]) => n > 0).map(([k, n]) => `${SHARE_WORD[k] ?? k} ${n}`).join(", ");
-    return h("section", { class: "lv-card", id: "freeToday" }, head,
-      h("table", { class: "lv-table" }, h("thead", {}, h("tr", {}, ...["Model", "Used today", "Left", ""].map((x) => h("th", { text: x })))), h("tbody", {}, ...rows)),
-      h("p", { class: "note", text: expect ? `Expected today, at your usual pace: ${expect} parts. The share planner keeps a scarce model for what it is best at when it could run out.` : "Leanfare learns your usual pace from the parts you hand over." }));
+    const v = S.share, all = !!store.get("freeAll", false);
+    const card = (...kids) => h("section", { class: "lv-card ft", id: "freeToday" }, ...kids);
+    const head = (...extra) => h("div", { class: "ft-head" }, h("h3", { text: "Free models today" }), ...extra);
+    if (!v) return card(head(), h("p", { class: "note", text: "Reading today's numbers…" }));
+    if (!v.pools.length) return card(head(), h("p", { class: "note", text: "No model you ticked has a free daily limit. Connect one in Settings, Your apps and AI plans." }));
+    const pools = [...v.pools].sort((a, b) => b.used - a.used || b.used / b.perDay - a.used / a.perDay || a.label.localeCompare(b.label));
+    const used = pools.filter((p) => p.used > 0);
+    const shown = all ? pools : used.slice(0, S.freeMore ? used.length : 3);
+    const at = (iso) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const tile = (p) => {
+      const out = p.left <= 0, pct = Math.min(100, Math.round((p.used / Math.max(1, p.perDay)) * 100));
+      const why = `${p.label}: ${num(p.used)} used of its free limit of ${p.learned ? "" : "about "}${num(p.perDay)} a day${p.learned ? " (learned from a rate limit)" : ""}. It resets at midnight ${p.zone === "pacific" ? "Pacific" : "UTC"}, ${at(p.resets)} your time.${p.best.length ? ` Kept for ${p.best.map((k) => SHARE_WORD[k] ?? k).join(" and ")}.` : ""}`;
+      return h("div", { class: "ft-tile" + (p.used ? "" : " idle") + (out ? " out" : ""), title: why },
+        h("div", { class: "ft-top" }, h("span", { class: "ft-name", text: p.label }), h("span", { class: "ft-count", text: `${num(p.used)}/${num(p.perDay)}` })),
+        h("div", { class: "ft-bar" }, h("i", { style: { width: `${pct}%` } })),
+        h("div", { class: "ft-sub", text: out ? `used up · back at ${at(p.resets)}` : `a day · resets ${at(p.resets)}` }));
+    };
+    // Show all or Show less only when it changes what is shown.
+    const hidden = pools.length - (S.freeMore ? used.length : Math.min(3, used.length));
+    const toggle = hidden > 0 ? h("button", { class: "ft-link", type: "button", text: all ? "Show less" : `Show all ${pools.length}`, onclick: () => { store.set("freeAll", !all); redrawFree(); } }) : null;
+    const more = !all && !S.freeMore && used.length > 3 ? h("button", { class: "ft-link", type: "button", text: `+${used.length - 3} more in use`, onclick: () => { S.freeMore = true; redrawFree(); } }) : null;
+    const expect = all ? Object.entries(v.demand).filter(([, n]) => n > 0).map(([k, n]) => `${SHARE_WORD[k] ?? k} ${n}`).join(", ") : "";
+    return card(head(h("span", { class: "ft-sum", text: used.length ? `${used.length} in use` : "none used yet" }), h("span", { class: "grow" }), toggle),
+      shown.length ? h("div", { class: "ft-grid" }, ...shown.map(tile)) : h("p", { class: "note", text: "None used yet today. Each limit is a day's, and resets by itself." }),
+      more, expect ? h("p", { class: "note", text: `Expected today at your usual pace: ${expect} parts. The share planner keeps a scarce model for what it is best at.` }) : null);
   }
+  function redrawFree() { const old = document.querySelector("#freeToday"); if (old) old.replaceWith(freeTodayEl()); }
 
   function liveCardEl() {
     liveStartStream();
@@ -3278,19 +3294,27 @@
   // The providers whose free plans Leanfare has read: one line each, Connect opens the page where the free key is made and
   // takes the key (OpenRouter signs in instead); the free plan box and the free models are then set by themselves.
   async function loadFree() { try { S.free = await api("/api/free"); } catch { S.free = { list: [], found: [] }; } renderSettings(); }
+  // Compact (0.13.2): the connected ones are small chips on one line; the others wait behind "Connect more", one line each
+  // with what is free and Connect (what each does with what you send is in its tooltip). Open by itself while none is
+  // connected, or while a key box is open.
   function freeRowsEl() {
     if (S.free === undefined) { S.free = null; loadFree(); }
     const f = S.free;
     if (!f) return h("div", { class: "note", text: "Looking for free models…" });
-    const row = (e) => h("div", { class: "app-row", id: `free-${e.id}` },
-      h("div", { class: "row" }, h("span", { class: "grow" }, h("b", { text: e.name }), h("span", { class: "note", text: e.connected ? " · connected" : " · free" })),
-        e.connected ? null : h("button", { class: "btn small primary", type: "button", text: "Connect", onclick: () => startFree(e) })),
-      h("div", { class: "note", text: e.free }),
-      S.freeOpen === e.id && e.how !== "signin" ? freeForm(e) : null,
-      h("details", { class: "more" }, h("summary", { text: "Details" }), h("p", { class: "note", text: `${e.data}. Its free key is made at ${e.keyUrl}.` })));
-    return h("div", { class: "free-list" }, h("div", { class: "note free-head", text: "Free models: you make the free account, Leanfare does the rest." }), ...f.list.map(row),
-      f.found.length ? h("details", { class: "more" }, h("summary", { text: `${f.found.length} more with free models, not reviewed by Leanfare` }),
-        ...f.found.map((x) => h("div", { class: "note", text: `${x.name}: ${x.free} free model${x.free === 1 ? "" : "s"}. If you trust it, add it by name under Models and keys, Add a provider.` }))) : null);
+    const on = f.list.filter((e) => e.connected), off = f.list.filter((e) => !e.connected);
+    const row = (e) => h("div", { class: "fr-row", id: `free-${e.id}`, title: `${e.data}. Its free key is made at ${e.keyUrl}.` },
+      h("div", { class: "row" }, h("b", { text: e.name }), h("span", { class: "note grow fr-free", text: e.free }),
+        h("button", { class: "btn small primary", type: "button", text: "Connect", onclick: () => startFree(e) })),
+      S.freeOpen === e.id && e.how !== "signin" ? freeForm(e) : null);
+    const head = h("div", { class: "row fr-head" }, h("b", { text: "Free models" }), h("span", { class: "note", text: `${on.length} of ${f.list.length} connected` }),
+      ...on.map((e) => h("span", { class: "chip good fr-chip", id: `free-${e.id}`, title: `${e.free}. ${e.data}.`, text: `${e.name} ✓` })));
+    if (!off.length && !f.found.length) return h("div", { class: "free-list" }, head);
+    return h("div", { class: "free-list" }, head,
+      h("details", { class: "more fr-more", ...(!on.length || off.some((e) => e.id === S.freeOpen) ? { open: true } : {}) },
+        h("summary", { text: off.length ? `Connect more (${off.length})` : "More free models" }),
+        off.length ? h("div", { class: "note fr-hint", text: "You make the free account; Leanfare does the rest." }) : null,
+        ...off.map(row),
+        f.found.length ? h("div", { class: "note fr-found", text: `${f.found.length} more with free models, not reviewed by Leanfare: ${f.found.map((x) => `${x.name} (${x.free})`).join(", ")}. If you trust one, add it by name under Models and keys, Add a provider.` }) : null));
   }
   function startFree(e) {
     S.freeOpen = e.id;
