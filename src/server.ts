@@ -47,7 +47,9 @@ import { setUp, setupView } from "./setup";
 import { OFF_TEST, OFF_TEXT, OFF_TRIAL, setSwitch, switchedOn } from "./switch";
 import { startTest, stopTest, testRunning, testView } from "./localtest";
 import { WHERE_NAME, WHERE_SAYS, platformsView, setPlatform, whereCounts, whereStop } from "./platforms";
-import { retirementNotices } from "./retire";
+import { hideRetireNotice, retireNotice } from "./retire";
+// The models in use: the ones you ticked, and the one savings are measured against.
+const inUseNow = () => { const u = usualModel(); return [...settings().ticked, ...(u ? [u.id] : [])]; };
 import { savings, spendItems } from "./savings";
 import { checkKey, effortLevels, UserError } from "./upstream";
 import { FILE_LIMITS, checkFile, prepareMessages, takesImages, takesPdfs, type Attachment, type ChatMsg } from "./files";
@@ -121,13 +123,10 @@ export function state() {
   for (const list of Object.values(byProvider)) list.sort((a, b) => (b.rating ?? -1) - (a.rating ?? -1) || a.label.localeCompare(b.label));
   const usual = usualModel();
   const notices: any[] = [];
-  const inUse = [...s.ticked, ...(usual ? [usual.id] : [])];
-  for (const n of retirementNotices(inUse, day)) {
-    notices.push({ kind: "retire", level: n.retired ? "error" : "warn", model: n.model, successor: n.successor,
-      text: n.retired
-        ? `${n.label} retired on ${n.retire}. ${n.successorLabel ? `Leanfare now sends its requests to ${n.successorLabel}.` : "Leanfare found no successor; untick it and pick another model."}`
-        : `${n.label} retires on ${n.retire}, in ${n.daysLeft} day${n.daysLeft === 1 ? "" : "s"}. ${n.successorLabel ? `On that day Leanfare will switch to ${n.successorLabel}.` : "Leanfare found no successor yet."}` });
-  }
+  // The models you use that retire within 30 days, on one line (retire.ts: free ones need nothing from you, so they are
+  // not on it; × hides it until another model retires).
+  const retiring = retireNotice(inUseNow(), day);
+  if (retiring) notices.push(retiring);
   const b = budgetState();
   if (b.reached) notices.push({ kind: "budget", level: "error", text: `Your ${dollars(b.budget!)} budget for this month is used up. ${s.atLimit === "stop" ? "New requests are refused until next month or until you raise it." : "Leanfare keeps going on the cheapest model you ticked."}` });
   else if (b.warn) notices.push({ kind: "budget", level: "warn", text: `You have used ${Math.floor(b.pct!)}% of this month's ${dollars(b.budget!)} budget.` });
@@ -503,6 +502,7 @@ async function api(req: Request, url: URL): Promise<Response> {
   // A lasting state's notice hidden until it changes (keystate.ts: hideNotice); the provider's card still says it.
   if (p === "/api/notices/hide" && m === "POST") {
     const b = await readBody(req);
+    if (b.kind === "retire") { hideRetireNotice(inUseNow(), localDay()); return json({ ok: true, state: state() }); } // the retirement line (retire.ts)
     const def = provider(b.provider);
     if (!def || !def.needsKey || !LASTING.includes(b.kind)) return fail(400, "Say which notice: a provider and one of " + LASTING.join(", ") + ".");
     hideNotice(def.id, b.kind);
