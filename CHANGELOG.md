@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.13.5
+
+- Quiet about what lasts: a notice for no credit, a refused or expiring key, or a provider turning requests away has a **×** that hides it until it changes; the provider's card in Settings still says it, with its own **Check again**. A hand off's receipt mentions each of these once a day instead of every time.
+- A provider that blocks your network (a VPN, say) is said calmly: Leanfare uses your other models and checks it again every 30 minutes by itself, and there is nothing to do.
+
 ## 0.13.4
 
 Fixed from 0.13.3:

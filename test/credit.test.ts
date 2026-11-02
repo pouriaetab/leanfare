@@ -122,7 +122,7 @@ describe("said where you look", () => {
     expect(st.providers.find((p: any) => p.id === "openrouter").keyTrouble.noCredit).toMatchObject({ status: 402 });
     const doc = await openApp(url);
     const notice = [...doc.querySelectorAll("#notices .notice")].find((x: any) => x.textContent.includes("OpenRouter has no credit left")) as any;
-    expect([...notice.querySelectorAll("a, button")].map((b: any) => b.textContent)).toEqual(["Add credit", "Check again"]);
+    expect([...notice.querySelectorAll("a, button")].map((b: any) => b.textContent)).toEqual(["Add credit", "Check again", "×"]);
     expect(notice.querySelector("a").getAttribute("href")).toBe("https://openrouter.ai/settings/credits");
   }, 20000);
 });
