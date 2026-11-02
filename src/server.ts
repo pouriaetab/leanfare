@@ -39,7 +39,7 @@ import { askModels, askReport, checkAsk } from "./askreport";
 import { liveVersion, liveView } from "./live";
 import { notNowWhy } from "./allowance";
 import { FREE_LIST, afterFreeKey, freeView } from "./freelist";
-import { keepKeysFresh, keyChanged, keyNotices, keyState, recheckKey } from "./keystate";
+import { keepKeysFresh, keyChanged, keyNotices, keyState, noCredit, recheckKey } from "./keystate";
 import { TASK_OF, shareView } from "./share";
 import { checkPlan, gradePart, keptPlan, makePlan, nextStarted, runView, startRun, stopAllRuns, stopRun, tookAnswers } from "./planner";
 import { setAuto } from "./workers";
@@ -154,7 +154,7 @@ export function state() {
       local: !!p.local, custom: !!p.custom, more: !!p.more,
       ready: providerReady(p.id), on: s.providers[p.id]?.on !== false, free: !!s.providers[p.id]?.free,
       key: p.needsKey ? { saved: !!getKey(p.id), where: keyWhere(p.id), hint: keyHint(p.id), canUndo: (removedKeys.get(p.id)?.until ?? 0) > Date.now() } : null,
-      keyTrouble: p.needsKey && getKey(p.id) ? { refused: keyState(p.id).refused ?? null, expires: keyState(p.id).expires ?? null } : null,
+      keyTrouble: p.needsKey && getKey(p.id) ? { refused: keyState(p.id).refused ?? null, expires: keyState(p.id).expires ?? null, noCredit: noCredit(p.id) } : null,
       list: p.id === "openrouter" ? store.status.openrouter : p.id === "ollama" ? store.status.ollama : null,
       credit: p.id === "openrouter" && getKey("openrouter") ? connect.credit : null,
       base: baseOf(p.id),

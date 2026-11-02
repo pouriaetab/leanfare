@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.3
+
+Fixed from 0.13.2:
+
+- A provider with no credit left (OpenRouter's "requires more credits", DeepSeek's "Insufficient Balance", Anthropic's "credit balance is too low") no longer fails hand offs and checks. Leanfare leaves its paid models out and passes the work to your next model, its free models keep working, and the page says so with **Add credit** and **Check again**. OpenRouter's balance is read again every 30 minutes and the others are tried again after 6 hours, so they come back as soon as there is credit.
+
 ## 0.13.2
 
 - What you spent, call by call: press the spending pill at the top, or the Mac app menu's spending line, for each call that cost something this month: when, the model, what it was for, its tokens and its cost, with Show all.

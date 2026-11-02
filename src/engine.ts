@@ -16,8 +16,8 @@ import { failOfStatus, failOfText, type FailKind } from "./fails";
 import { noteFailure, restOf, restText } from "./rest";
 import { SAYS_GONE, noQuota, noQuotaNow, noQuotaText, noteRefusal } from "./quota";
 import { firstMedian, needsCredit, notNowWhy, unsteady, usedUp } from "./allowance";
-import { clearRefused, keyRefusal, keyUnusable, noteRefused } from "./keystate";
-import { TASK_OF, shareFor } from "./share";
+import { clearNoCredit, clearRefused, creditRefusal, keyRefusal, keyUnusable, noCredit, noteNoCredit, noteRefused } from "./keystate";
+import { TASK_OF, freeToYou, shareFor } from "./share";
 import type { GradedKind } from "./grades";
 import { fitsFree, onFreePlan } from "./freeplans";
 import { learnedShift } from "./learn";
@@ -51,7 +51,7 @@ export function notReadyMessage(id: ProviderId): string {
 // has no quota for (quota.ts), not a paid only one on a free key, and not one whose free allowance for today is used up
 // (allowance.ts). A model you name yourself is asked anyway.
 export function usableModels(only?: (m: Model) => boolean): Model[] {
-  return settings().ticked.map((id) => getModel(id)).filter((m): m is Model => !!m && providerReady(m.provider) && served(m) && !noQuota(m.id) && !needsCredit(m) && !usedUp(m) && !keyUnusable(m.provider) && (!only || only(m)));
+  return settings().ticked.map((id) => getModel(id)).filter((m): m is Model => !!m && providerReady(m.provider) && served(m) && !noQuota(m.id) && !needsCredit(m) && !usedUp(m) && !keyUnusable(m.provider) && !(noCredit(m.provider) && !freeToYou(m)) && (!only || only(m)));
 }
 
 // A provider you have but ticked none of the models of (a key just added, Ollama just found, or Set up's
@@ -469,7 +469,7 @@ export function thinkingOf(m: Model, u: Usage | null, chars: number): { tokens: 
 }
 
 export function record(p: Plan, m: Model, source: string, usage: Usage | null, o: { status: "ok" | "stopped" | "error"; error?: string; ms: number; firstMs?: number | null; reportedCost?: number | null; estimated?: boolean; thinkingChars?: number; fail?: FailKind }): LedgerResult {
-  if (o.status === "ok") clearRefused(m.provider); // its provider took the key again (keystate.ts)
+  if (o.status === "ok") { clearRefused(m.provider); if (!freeToYou(m)) clearNoCredit(m.provider); } // its provider took the key, and a paid answer means credit (keystate.ts)
   const u = usage ?? ZERO;
   const think = usage || o.thinkingChars ? thinkingOf(m, usage, o.thinkingChars ?? 0) : { tokens: null, source: null }; // a call that failed before any answer: nothing to split
   // A failed request costs nothing unless the provider had already written part of an answer.
@@ -546,7 +546,7 @@ async function sendWithFallback(p: Plan, source: string, body: any, stream: bool
   for (let i = 0; i < Math.min(tries.length, 3); i++) {
     const m = tries[i];
     if (i > 0) {
-      if (keyUnusable(m.provider)) continue; // its provider refused the key a moment ago (keystate.ts)
+      if (keyUnusable(m.provider) || (noCredit(m.provider) && !freeToYou(m))) continue; // its provider refused the key, or has no credit, a moment ago (keystate.ts)
       if (!reserveAgain(p, m, p.maxOut)) break;
       p.model = m;
     }
@@ -573,8 +573,11 @@ async function sendWithFallback(p: Plan, source: string, body: any, stream: bool
       // model of another provider (keystate.ts).
       const refused = !page && keyRefusal(res.status, msg);
       if (refused) { noteRefused(m.provider, res.status); last = new UserError(502, `${/[.!?]$/.test(msg.trim()) ? msg.trim() : `${msg.trim()}.`} Keys can expire: make a new ${def.name} key in Leanfare's page (Settings, ${def.name}).`, "key_refused"); }
-      if ((!page && !RETRYABLE.has(res.status) && !gone && !(refused && p.auto)) || i === tries.length - 1) throw last;
-      p.notes.push(`${m.label} ${page ? "sent a web page instead of an answer" : gone ? `is no longer served to your ${def.name} key` : refused ? `could not be used: ${def.name} refused your key, which may have expired` : `answered ${res.status}`}, so Auto passed the request to its next pick.`);
+      // No credit left (0.13.3): noted, so its paid models are left out until there is credit again, and Auto goes on.
+      const broke = !page && !refused && creditRefusal(res.status, msg);
+      if (broke) { noteNoCredit(m.provider, res.status); last = new UserError(502, `${/[.!?]$/.test(msg.trim()) ? msg.trim() : `${msg.trim()}.`} Leanfare leaves ${def.name}'s paid models out until it has credit again: add credit there, or pick another model.`, "no_credit"); }
+      if ((!page && !RETRYABLE.has(res.status) && !gone && !((refused || broke) && p.auto)) || i === tries.length - 1) throw last;
+      p.notes.push(`${m.label} ${page ? "sent a web page instead of an answer" : gone ? `is no longer served to your ${def.name} key` : refused ? `could not be used: ${def.name} refused your key, which may have expired` : broke ? `could not be used: ${def.name} has no credit left` : `answered ${res.status}`}, so Auto passed the request to its next pick.`);
     } catch (e: any) {
       if (e instanceof UserError) throw e;
       if (signal.aborted) throw new UserError(499, "Stopped.", "stopped");
