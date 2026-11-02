@@ -63,7 +63,13 @@ describe("the Mac app's needs", () => {
 
   test("the app uses only addresses the server has", () => {
     const paths = [...swift.matchAll(/(?:"|\))(\/(?:api|healthz|unlock)[^"\\?]*)/g)].map((m) => m[1]);
-    expect([...new Set(paths)].sort()).toEqual(["/api/control/stop", "/api/pause", "/api/summary", "/healthz", "/unlock"]);
+    expect([...new Set(paths)].sort()).toEqual(["/api/control/stop", "/api/open", "/api/pause", "/api/summary", "/healthz", "/unlock"]);
+  });
+
+  test("the menu's spending line opens the list of each paid call in the window (0.13.2)", () => {
+    expect(swift).toContain('menu.addItem(item("Today \\(s.todayText) · This month \\(s.monthText)", #selector(openSpending)))');
+    expect(swift).toContain('server.post("/api/open", ["what": "spend"]) { _ in }');
+    expect(swift).toContain("@objc func openSpending()");
   });
 
   test("Info.plist allows the local address and names the notes file", () => {
