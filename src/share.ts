@@ -138,7 +138,7 @@ export function shareView(models: Model[], ratingFor: RatingFor, t = now().getTi
   return {
     demand: Object.fromEntries(KINDS.map((k) => [k, Math.round((need[k] ?? 0) * 10) / 10])),
     pools: models.map((m) => ({ m, d: today(m, t) })).filter((x) => x.d).map(({ m, d }) => ({
-      id: m.id, label: m.label, perDay: d!.perDay, used: d!.used, left: d!.left, resets: d!.resets, learned: d!.learned,
+      id: m.id, label: m.label, perDay: d!.perDay, used: d!.used, left: d!.left, resets: d!.resets, zone: d!.allowance.resets, learned: d!.learned,
       best: bestKinds(m, models.filter((o) => o.id !== m.id), ratingFor),
     })),
   };
