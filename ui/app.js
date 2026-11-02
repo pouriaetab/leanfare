@@ -3182,6 +3182,11 @@
   // ---- ChatGPT, next to your apps (0.13) --------------------------------------------------------------
   // One press: Leanfare installs Codex if it is not here, opens ChatGPT's sign in, and turns hand offs on the ChatGPT
   // plan on once Codex says it is signed in (codex.ts). Making a ChatGPT account, in the browser, is the person's part.
+  async function fixCodexSetting(signal) {
+    const r = await api("/api/codex/setting/fix", { body: {}, signal });
+    toast(r.message, r.ok ? "done" : "error");
+    await loadCodex(false);
+  }
   async function loadCodex(fresh) {
     try { S.codex = await api(`/api/codex${fresh ? "?fresh=1" : ""}`); } catch { S.codex = { installed: false, signedIn: false, version: null }; }
     renderSettings();
@@ -3215,6 +3220,10 @@
       h("div", { class: "row" }, h("span", { class: "grow" }, h("b", { text: "ChatGPT" }), h("span", { class: "note", text: !c ? " · looking" : on ? " · connected" : going ? " · connecting" : c.signedIn ? " · signed in" : " · not connected" })), btn),
       h("div", { class: "note", text: line }),
       k.step === "signing_in" && k.url ? h("div", { class: "note" }, "No page opened? ", h("a", { href: k.url, target: "_blank", rel: "noopener", text: "Sign in to ChatGPT" }), ".") : null,
+      // Codex's own setting names a model ChatGPT no longer offers (codex.ts, 0.13.2): one press turns that line off.
+      c?.setting?.stale ? h("div", { class: "row codex-fix" },
+        h("span", { class: "note warn-text grow", text: `Codex is set to ${c.setting.model}, which your ChatGPT plan no longer offers${c.setting.using ? `. Leanfare uses ${c.setting.using} for now` : ""}.` }),
+        runButton("Fix it", fixCodexSetting, "btn small primary")) : null,
       h("details", { class: "more" }, h("summary", { text: "Details" }), h("p", { class: "note", text: "Codex runs those parts read only, in the folder of their files, without your MCP servers, apps or plugins, and they count toward your ChatGPT plan's Codex limits; Leanfare pays nothing for them. Codex itself decides what it reads there, as when you use it. Parts that change your project stay with the app you work in. Near 85% of your ChatGPT plan's 5 hours or week, Leanfare leaves Codex alone." })));
   }
 
