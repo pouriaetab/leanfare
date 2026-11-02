@@ -31,7 +31,7 @@ import { meterViews, setStatusline } from "./meter";
 import { checkDelegate, fixHandOff, gradeRow, gradeTogether, handOffRow, markFixed, planRow, runDelegate, startDelegate, stopDelegates, waitDelegate } from "./delegate";
 import { sideMonth, sideStandings, sideText, stopSideBySide } from "./sidebyside";
 import { endRest } from "./rest";
-import { clearNoQuota, noQuotaNow, noQuotaWhy } from "./quota";
+import { clearNoQuota, noQuota, noQuotaNow, noQuotaWhy } from "./quota";
 import { TOOLS, clientLabel, resourceContents, runToolFor } from "./mcp";
 import { setSelf } from "./client";
 import { checkReport, report } from "./report";
@@ -39,7 +39,7 @@ import { askModels, askReport, checkAsk } from "./askreport";
 import { liveVersion, liveView } from "./live";
 import { notNowWhy } from "./allowance";
 import { FREE_LIST, afterFreeKey, freeView } from "./freelist";
-import { LASTING, hideNotice, keepKeysFresh, keyChanged, keyNotices, keyState, noCredit, recheckKey } from "./keystate";
+import { LASTING, hideNotice, keepKeysFresh, keyChanged, keyNotices, keyState, keyUnusable, noCredit, providerAway, recheckKey } from "./keystate";
 import { TASK_OF, shareView } from "./share";
 import { checkPlan, gradePart, keptPlan, makePlan, nextStarted, runView, startRun, stopAllRuns, stopRun, tookAnswers } from "./planner";
 import { setAuto } from "./workers";
@@ -475,7 +475,9 @@ async function api(req: Request, url: URL): Promise<Response> {
   // Free models, ready to connect (freelist.ts, 0.13): the reviewed list, those found but not reviewed, and one press.
   if (p === "/api/free" && m === "GET") return json(await freeView());
   // Free models today (share.ts): each ticked model with a daily allowance, and the parts today's pace expects.
-  if (p === "/api/share" && m === "GET") return json(shareView(settings().ticked.map((id) => getModel(id)).filter((mm): mm is Model => !!mm && providerReady(mm.provider)), (mm, k) => rating(mm, TASK_OF[k])));
+  // Free models today: the ticked ones your keys can use now (0.13.7: not one gone or with no quota for your key, nor
+  // one of a provider refusing your key or turning requests away); one used up for today still shows, with when it is back.
+  if (p === "/api/share" && m === "GET") return json(shareView(settings().ticked.map((id) => getModel(id)).filter((mm): mm is Model => !!mm && providerReady(mm.provider) && served(mm) && !noQuota(mm.id) && !keyUnusable(mm.provider) && !providerAway(mm.provider)), (mm, k) => rating(mm, TASK_OF[k])));
   if (p === "/api/free/connect" && m === "POST") {
     const b = await readBody(req);
     const e = FREE_LIST.find((x) => x.id === b?.id);
