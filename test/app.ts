@@ -21,6 +21,7 @@ import { setNow } from "../src/util";
 import { KEYS, type startFake } from "./fake";
 import * as connect from "../src/connect";
 import * as local from "../src/local";
+import { clearKeyState } from "../src/keystate";
 
 export const FIXTURE = new URL("./fixtures/catalog.json", import.meta.url).pathname;
 export const fake = (globalThis as any).__fake as ReturnType<typeof startFake>;
@@ -67,9 +68,11 @@ export async function reset(patch: Partial<Settings> = {}) {
   fake.seen.length = 0;
   fake.hooks.answer = null;
   fake.hooks.refuse = null;
+  fake.hooks.revoked.clear();
+  clearKeyState(); // a key refused or expiring in one test (keystate.ts)
   fake.hooks.fail = null;
   fake.hooks.slow = null;
-  Object.assign(fake.oauth, { expireNext: false, deny: false, failExchange: 0, failMessage: "fake failure", badKey: false, credits: true });
+  Object.assign(fake.oauth, { expireNext: false, deny: false, failExchange: 0, failMessage: "fake failure", badKey: false, credits: true, expiresAt: null });
   fake.oauth.codes.clear();
   // Short answers (on by default) add an instruction to every chat request; the tests that check
   // what a provider gets turn it off, and chat.test.ts checks it on its own.

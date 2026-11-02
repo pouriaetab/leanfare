@@ -25,6 +25,7 @@ import { parseSpeed, secondsText, type SpeedChoice } from "./speed";
 import { TASKS, fitsText, getModel, isRetired, type Model } from "./data";
 import { db } from "./db";
 import { passedLocal } from "./localpass";
+import { keepKeysFresh, keysLeftOut } from "./keystate";
 import { mayTake, modelOn, platformOn, readRisk, whereStop, whereWhy } from "./platforms";
 import { CODEX_ID, CODEX_LABEL, codexFor, runCodex } from "./codex";
 import { movedDown } from "./grades";
@@ -338,6 +339,7 @@ export async function estimateDelegate(input: DelegateInput, signal: AbortSignal
 
 export async function runDelegate(input: DelegateInput, signal: AbortSignal): Promise<DelegateResult> {
   const started = performance.now();
+  keepKeysFresh(); // a refused key checked again, OpenRouter's expiry read (keystate.ts), in the background
   const numbered = input.kind !== "write";
   const block = filesBlock(input.files, numbered);
   const prompt = block ? `${input.task}\n\n${block}` : input.task;
@@ -543,6 +545,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
 
   const model = who(final.meta.model);
   const answerTokens = tokensOf(final.text.length);
+  const keysOut = keysLeftOut(settings().ticked.map((id) => getModel(id)?.provider ?? "").filter(Boolean)); // keys refused or expired: their models left out
   const result: Omit<DelegateResult, "receipt"> = {
     answer: final.text,
     model,
@@ -551,7 +554,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     rerunError,
     swap,
     // What Auto said on the way to the answer: a model resting (rest.ts), busy, or slow to start (engine.ts).
-    passed: ((final.meta?.notes ?? []) as string[]).filter((n) => /is resting|passed the request to its next pick|is resting after failing|is unsteady today|^Saving |^Fastest first|^Spreading the work/.test(n)).slice(0, 3),
+    passed: [...((final.meta?.notes ?? []) as string[]).filter((n) => /is resting|passed the request to its next pick|is resting after failing|is unsteady today|^Saving |^Fastest first|^Spreading the work/.test(n)).slice(0, 3), ...(keysOut ? [keysOut] : [])],
     row: null,
     total: add(...spent),
     task: guess.task,

@@ -110,12 +110,13 @@ export function startFake() {
     fail: null as null | ((prompt: string, provider: string) => number | null),
     slow: null as null | ((prompt: string, provider: string) => number), // milliseconds to wait before answering
     refuse: null as null | ((body: any, provider: string) => { status: number; message: string } | null), // an error with the provider's own words
+    revoked: new Set<string>(), // providers that refuse their key everywhere, as for a key that expired
   };
   const onceSeen = new Set<string>();
   // OpenRouter's sign in: /openrouter/auth shows the "Authorize" step and sends the browser back with a
   // one time code; /openrouter/api/v1/auth/keys trades the code for a key and checks the PKCE proof
   // (the verifier must hash to the challenge). The switches steer the unhappy paths.
-  const oauth = { n: 0, codes: new Map<string, { challenge: string; method: string; expired: boolean }>(), expireNext: false, deny: false, failExchange: 0, failMessage: "fake failure", badKey: false, credits: true };
+  const oauth = { n: 0, codes: new Map<string, { challenge: string; method: string; expired: boolean }>(), expireNext: false, deny: false, failExchange: 0, failMessage: "fake failure", badKey: false, credits: true, expiresAt: null as string | null };
   // Ollama's own addresses: what is installed and loaded, a download that streams its progress as
   // JSON lines (and can fail, be cut off or be held for a Stop), and a removal. Sizes are bytes.
   const GB = 1e9;
@@ -250,7 +251,7 @@ export function startFake() {
         }), { headers: { "content-type": "application/x-ndjson" } });
       }
 
-      const keyOk = provider === "ollama" || auth === KEYS[provider] || auth === SHAPED[provider] || (provider === "openrouter" && auth === OAUTH_KEY);
+      const keyOk = !hooks.revoked.has(provider) && (provider === "ollama" || auth === KEYS[provider] || auth === SHAPED[provider] || (provider === "openrouter" && auth === OAUTH_KEY));
       // Perplexity has no model list: a request naming a model that does not exist answers 400 to a good key.
       if (provider === "perplexity" && body?.model === "leanfare-key-check") return keyOk ? Response.json({ error: { message: "Invalid model" } }, { status: 400 }) : Response.json({ error: { message: "Invalid API key" } }, { status: 401 });
       // Sonar's old chat completions address is gone (July 2026): Perplexity answers only through its Agent API.
@@ -263,7 +264,7 @@ export function startFake() {
         if (!keyOk) return provider === "anthropic"
           ? Response.json({ type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } }, { status: 401 })
           : Response.json({ error: { message: `Incorrect API key provided: ${String(auth).slice(0, 6)}***. You can find your API key at the dashboard.`, code: "invalid_api_key" } }, { status: 401 });
-        if (provider === "openrouter") return Response.json({ data: { label: "test", usage: 0, limit: null } });
+        if (provider === "openrouter") return Response.json({ data: { label: "test", usage: 0, limit: null, expires_at: oauth.expiresAt } });
         return Response.json({ object: "list", data: [{ id: "model-a" }, { id: "model-b" }] });
       }
       if (!keyOk) return Response.json({ error: { message: "wrong key for this provider" } }, { status: 401 });

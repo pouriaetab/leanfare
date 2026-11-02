@@ -20,6 +20,7 @@ process.env.LEANFARE_SHELL_ENV = "off"; // tests never read your login shell's v
 process.env.LEANFARE_LOCAL_PORTS = "none"; // nor look for model apps on this computer's ports (providers.test.ts points at fakes)
 process.env.LEANFARE_UPDATE_CHECK = "off"; // nor ask GitHub for new versions (update.test.ts uses a stand in)
 process.env.LEANFARE_NOW = "2026-10-21T12:00:00Z";
+process.env.LEANFARE_KEY_CHECKS = "off"; // no key checked again in the background, but in keystate.test.ts
 // Claude Code's own claude command is never run by a test: a test that needs one sets the stand in (fakeclaude.ts).
 process.env.LEANFARE_CLAUDE_BIN = join(process.env.LEANFARE_DATA_DIR, "no-claude-command");
 // Every provider's key variable, so no key of yours is ever used or read by a test.

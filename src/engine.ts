@@ -16,6 +16,7 @@ import { failOfStatus, failOfText, type FailKind } from "./fails";
 import { noteFailure, restOf, restText } from "./rest";
 import { SAYS_GONE, noQuota, noQuotaNow, noQuotaText, noteRefusal } from "./quota";
 import { firstMedian, needsCredit, notNowWhy, unsteady, usedUp } from "./allowance";
+import { clearRefused, keyRefusal, keyUnusable, noteRefused } from "./keystate";
 import { TASK_OF, shareFor } from "./share";
 import type { GradedKind } from "./grades";
 import { fitsFree, onFreePlan } from "./freeplans";
@@ -50,7 +51,7 @@ export function notReadyMessage(id: ProviderId): string {
 // has no quota for (quota.ts), not a paid only one on a free key, and not one whose free allowance for today is used up
 // (allowance.ts). A model you name yourself is asked anyway.
 export function usableModels(only?: (m: Model) => boolean): Model[] {
-  return settings().ticked.map((id) => getModel(id)).filter((m): m is Model => !!m && providerReady(m.provider) && served(m) && !noQuota(m.id) && !needsCredit(m) && !usedUp(m) && (!only || only(m)));
+  return settings().ticked.map((id) => getModel(id)).filter((m): m is Model => !!m && providerReady(m.provider) && served(m) && !noQuota(m.id) && !needsCredit(m) && !usedUp(m) && !keyUnusable(m.provider) && (!only || only(m)));
 }
 
 // A provider you have but ticked none of the models of (a key just added, Ollama just found, or Set up's
@@ -468,6 +469,7 @@ export function thinkingOf(m: Model, u: Usage | null, chars: number): { tokens: 
 }
 
 export function record(p: Plan, m: Model, source: string, usage: Usage | null, o: { status: "ok" | "stopped" | "error"; error?: string; ms: number; firstMs?: number | null; reportedCost?: number | null; estimated?: boolean; thinkingChars?: number; fail?: FailKind }): LedgerResult {
+  if (o.status === "ok") clearRefused(m.provider); // its provider took the key again (keystate.ts)
   const u = usage ?? ZERO;
   const think = usage || o.thinkingChars ? thinkingOf(m, usage, o.thinkingChars ?? 0) : { tokens: null, source: null }; // a call that failed before any answer: nothing to split
   // A failed request costs nothing unless the provider had already written part of an answer.
@@ -544,6 +546,7 @@ async function sendWithFallback(p: Plan, source: string, body: any, stream: bool
   for (let i = 0; i < Math.min(tries.length, 3); i++) {
     const m = tries[i];
     if (i > 0) {
+      if (keyUnusable(m.provider)) continue; // its provider refused the key a moment ago (keystate.ts)
       if (!reserveAgain(p, m, p.maxOut)) break;
       p.model = m;
     }
@@ -566,8 +569,12 @@ async function sendWithFallback(p: Plan, source: string, body: any, stream: bool
       record(p, m, source, null, { status: "error", error: msg, ms: performance.now() - t0, fail: page ? "other" : failOfStatus(res.status) });
       last = new UserError(page ? 502 : res.status === 401 || res.status === 403 ? 502 : res.status, msg, "provider_error");
       const gone = !page && (res.status === 404 || res.status === 400) && SAYS_GONE.test(msg); // no longer served to this key (quota.ts)
-      if ((!page && !RETRYABLE.has(res.status) && !gone) || i === tries.length - 1) throw last;
-      p.notes.push(`${m.label} ${page ? "sent a web page instead of an answer" : gone ? `is no longer served to your ${def.name} key` : `answered ${res.status}`}, so Auto passed the request to its next pick.`);
+      // The key itself refused (it may have expired): noted, so its provider's models are left out, and Auto goes on to a
+      // model of another provider (keystate.ts).
+      const refused = !page && keyRefusal(res.status, msg);
+      if (refused) { noteRefused(m.provider, res.status); last = new UserError(502, `${/[.!?]$/.test(msg.trim()) ? msg.trim() : `${msg.trim()}.`} Keys can expire: make a new ${def.name} key in Leanfare's page (Settings, ${def.name}).`, "key_refused"); }
+      if ((!page && !RETRYABLE.has(res.status) && !gone && !(refused && p.auto)) || i === tries.length - 1) throw last;
+      p.notes.push(`${m.label} ${page ? "sent a web page instead of an answer" : gone ? `is no longer served to your ${def.name} key` : refused ? `could not be used: ${def.name} refused your key, which may have expired` : `answered ${res.status}`}, so Auto passed the request to its next pick.`);
     } catch (e: any) {
       if (e instanceof UserError) throw e;
       if (signal.aborted) throw new UserError(499, "Stopped.", "stopped");
