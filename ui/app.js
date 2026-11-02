@@ -2461,6 +2461,7 @@
         const r = await api("/api/connect/openrouter/status", { signal });
         if (r.status === "connected") {
           S.st = r.state;
+          if (S.freeOpen === "openrouter") { try { const f = await api("/api/free/connect", { body: { id: "openrouter", after: true } }); S.st = f.state; } catch {} S.freeOpen = null; S.free = undefined; }
           renderShell(); renderSettings(); renderComposerBar(); if (!S.messages.length) renderMessages();
           t.set(r.message, "done");
           return;
@@ -3154,6 +3155,41 @@
       h("details", { class: "more" }, h("summary", { text: "Details" }), h("p", { class: "note", text: "Codex runs those parts read only, in the folder of their files, without your MCP servers, apps or plugins, and they count toward your ChatGPT plan's Codex limits; Leanfare pays nothing for them. Codex itself decides what it reads there, as when you use it. Parts that change your project stay with the app you work in. Near 85% of your ChatGPT plan's 5 hours or week, Leanfare leaves Codex alone." })));
   }
 
+  // ---- Free models, ready to connect (freelist.ts, 0.13) ----------------------------------------------
+  // The providers whose free plans Leanfare has read: one line each, Connect opens the page where the free key is made and
+  // takes the key (OpenRouter signs in instead); the free plan box and the free models are then set by themselves.
+  async function loadFree() { try { S.free = await api("/api/free"); } catch { S.free = { list: [], found: [] }; } renderSettings(); }
+  function freeRowsEl() {
+    if (S.free === undefined) { S.free = null; loadFree(); }
+    const f = S.free;
+    if (!f) return h("div", { class: "note", text: "Looking for free models…" });
+    const row = (e) => h("div", { class: "app-row", id: `free-${e.id}` },
+      h("div", { class: "row" }, h("span", { class: "grow" }, h("b", { text: e.name }), h("span", { class: "note", text: e.connected ? " · connected" : " · free" })),
+        e.connected ? null : h("button", { class: "btn small primary", type: "button", text: "Connect", onclick: () => startFree(e) })),
+      h("div", { class: "note", text: e.free }),
+      S.freeOpen === e.id && e.how !== "signin" ? freeForm(e) : null,
+      h("details", { class: "more" }, h("summary", { text: "Details" }), h("p", { class: "note", text: `${e.data}. Its free key is made at ${e.keyUrl}.` })));
+    return h("div", { class: "free-list" }, h("div", { class: "note free-head", text: "Free models: you make the free account, Leanfare does the rest." }), ...f.list.map(row),
+      f.found.length ? h("details", { class: "more" }, h("summary", { text: `${f.found.length} more with free models, not reviewed by Leanfare` }),
+        ...f.found.map((x) => h("div", { class: "note", text: `${x.name}: ${x.free} free model${x.free === 1 ? "" : "s"}. If you trust it, add it by name under Models and keys, Add a provider.` }))) : null);
+  }
+  function startFree(e) {
+    S.freeOpen = e.id;
+    if (e.how === "signin") { connectOpenRouter(new AbortController().signal).catch((err) => toast(err?.message ?? String(err), "error")); return; }
+    window.open(e.keyUrl, "_blank", "noopener");
+    renderSettings();
+  }
+  function freeForm(e) {
+    const key = h("input", { type: "password", placeholder: "Paste the key", "aria-label": `${e.name} key`, autocomplete: "off" });
+    const account = e.how === "account" ? h("input", { type: "text", placeholder: "Account ID", "aria-label": `${e.name} account ID`, autocomplete: "off" }) : null;
+    return h("div", { class: "free-form" }, h("div", { class: "note", text: `Make a free key on the page that opened, then paste it here${account ? " with your account ID" : ""}.` }),
+      h("div", { class: "row" }, account, key, runButton("Save", async (signal) => {
+        const r = await api("/api/free/connect", { body: { id: e.id, key: key.value, ...(account ? { account: account.value } : {}) }, signal });
+        if (!r.ok) throw new Error(r.message);
+        S.st = r.state; S.freeOpen = null; S.free = undefined; toast(r.message, "done"); renderSettings();
+      }, "btn small primary")));
+  }
+
   // ---- How the models did for you (Settings) ---------------------------------------------------------
   const GRADE_KIND = { read: "reading", write: "drafting", reason: "working things out", search: "searching" };
   async function loadGrades() {
@@ -3493,7 +3529,7 @@
     const right = h("div", { class: "colR" },
       h("div", { class: "section-title", text: "In your apps" }),
       appsSettingEl(),
-      h("div", { class: "setting workers", id: "workersSetting" }, h("h3", { text: "Hand work to your other AI plans" }), codexSettingEl(s)),
+      h("div", { class: "setting workers", id: "workersSetting" }, h("h3", { text: "Hand work to your other AI plans" }), codexSettingEl(s), freeRowsEl()),
       h("div", { class: "section-title", text: "Choices" }),
       levelSettingEl(s), keepSettingEl(s),
       h("div", { class: "setting" }, h("h3", { text: "How Auto picks" }), modeSeg,

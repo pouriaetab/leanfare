@@ -889,3 +889,6 @@ tr.wd td { background: var(--panel-2); }
 #tab-settings .setting p, #tab-settings .setting .note { font-size: 12.5px; }
 #tab-settings details.more > summary { cursor: pointer; color: var(--muted); font-size: 12px; margin: 2px 0; }
 @media (prefers-reduced-motion: reduce) { #tab-settings details.group > summary::before { transition: none; } }
+.workers .free-list { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
+.workers .free-form .row { gap: 6px; flex-wrap: wrap; }
+.workers .free-form input { min-width: 12em; flex: 1; }
