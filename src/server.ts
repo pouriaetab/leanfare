@@ -38,6 +38,7 @@ import { checkReport, report } from "./report";
 import { askModels, askReport, checkAsk } from "./askreport";
 import { liveVersion, liveView } from "./live";
 import { notNowWhy } from "./allowance";
+import { FREE_LIST, afterFreeKey, freeView } from "./freelist";
 import { checkPlan, gradePart, keptPlan, makePlan, nextStarted, runView, startRun, stopAllRuns, stopRun, tookAnswers } from "./planner";
 import { setAuto } from "./workers";
 import { setUp, setupView } from "./setup";
@@ -462,6 +463,31 @@ async function api(req: Request, url: URL): Promise<Response> {
     for (const id of ids) b.on ? set.add(id) : set.delete(id);
     saveSettings({ ticked: [...set] });
     return json(state());
+  }
+  // Free models, ready to connect (freelist.ts, 0.13): the reviewed list, those found but not reviewed, and one press.
+  if (p === "/api/free" && m === "GET") return json(await freeView());
+  if (p === "/api/free/connect" && m === "POST") {
+    const b = await readBody(req);
+    const e = FREE_LIST.find((x) => x.id === b?.id);
+    if (!e) return fail(400, "Unknown free provider.");
+    if (b.after === true) return json({ ok: true, ticked: afterFreeKey(e.id), state: state() }); // after OpenRouter's sign in
+    const key = String(b.key ?? "").trim();
+    if (key.length < 8 || /\s/.test(key)) return fail(400, "That does not look like a key: it should be one word with no spaces.");
+    if (e.how === "account") {
+      const account = String(b.account ?? "").trim();
+      if (!/^[0-9a-f]{32}$/i.test(account)) return fail(400, "The account ID is 32 letters and digits: in Cloudflare's dashboard, Workers AI, Use REST API.");
+      const api = (await extra.registry())?.providers[e.registry!]?.api ?? "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1";
+      const r = await extra.addCustomProvider({ name: e.name, base: api.replace("${CLOUDFLARE_ACCOUNT_ID}", account), key, registry: e.registry! });
+      if (!r.ok) return json({ ok: false, message: redact(r.message, [key]), state: state() });
+      await saveKey(r.id as ProviderId, key);
+      return json({ ok: true, message: `${e.name} is connected, with ${r.models} models.`, state: state() });
+    }
+    const check = await checkKey(e.id as ProviderId, key, req.signal);
+    if (!check.ok) return json({ ok: false, message: redact(check.message, [key]), state: state() });
+    await saveKey(e.id as ProviderId, key);
+    await keySaved(e.id as ProviderId, req.signal, check.models);
+    const ticked = afterFreeKey(e.id);
+    return json({ ok: true, message: `${e.name} is connected${ticked.length ? `: ${ticked.length} free model${ticked.length === 1 ? "" : "s"} ticked` : ""}.`, ticked, state: state() });
   }
   if (p === "/api/keys" && m === "POST") {
     const b = await readBody(req);

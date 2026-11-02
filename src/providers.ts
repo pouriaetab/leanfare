@@ -148,7 +148,10 @@ export function customFor(registryId: string | null, base: string): CustomProvid
 }
 
 export async function addCustomProvider(input: { name: string; base: string; key: string | null; registry: string | null }): Promise<{ ok: true; id: string; models: number } | { ok: false; message: string }> {
-  const list = await modelList(input.base, input.key, 15_000);
+  let list = await modelList(input.base, input.key, 15_000);
+  // A provider from models.dev's list whose address gives no model list in OpenAI's shape (Cloudflare Workers AI): its
+  // models come from that list (0.13).
+  if (!list && input.registry) { try { const ids = Object.keys((await registry())?.providers[input.registry]?.models ?? {}); if (ids.length) list = { ids } as any; } catch {} }
   if (!list) return { ok: false, message: `${input.base}/models did not answer with a model list in OpenAI's format. Check the address (most end in /v1) and the key.` };
   if (!list.ids.length) return { ok: false, message: `${input.name} answered, but its model list is empty.` };
   const all = settings().custom ?? [];
