@@ -433,7 +433,9 @@
       list.push(h("div", { class: "notice " + x.level }, h("span", { class: "grow", text: x.text }),
         x.kind === "retire" ? h("button", { class: "btn small", text: "Settings", onclick: () => setTab("settings") }) : null,
         x.kind === "budget" ? h("button", { class: "btn small", text: "Budget", onclick: () => setTab("settings") }) : null,
-        x.kind === "update" && x.url ? h("a", { class: "btn small", href: x.url, target: "_blank", rel: "noopener noreferrer", text: "What changed" }) : null));
+        x.kind === "update" && x.url ? h("a", { class: "btn small", href: x.url, target: "_blank", rel: "noopener noreferrer", text: "What changed" }) : null,
+        x.kind === "key" || x.kind === "expires" ? newKeyButton(x.provider) : null,
+        x.kind === "key" ? runButton("Check again", (signal) => recheckKey(x.provider, signal), "btn small quiet") : null));
     }
     // Drawn again only when what they say changes, so a button is never rebuilt under your finger.
     const key = list.map((x) => x.textContent).join("|");
@@ -2507,6 +2509,33 @@
     }
   }
 
+  // A key refused, expired or about to expire (keystate.ts): one press to make a new one. OpenRouter signs you in again,
+  // which makes a new key by itself; the others open the page where their keys are made, and the box for the new one here.
+  function newKeyButton(id) {
+    if (id === "openrouter") return runButton("Sign in again", connectOpenRouter, "btn small");
+    return h("button", { class: "btn small", type: "button", text: "Make a new key", onclick: () => newKey(id) });
+  }
+  function newKey(id) {
+    const p = S.st?.providers.find((x) => x.id === id);
+    if (!p) return;
+    if (p.keyUrl) window.open(p.keyUrl, "_blank", "noopener,noreferrer");
+    S.open[id] = true; store.set("open", S.open);
+    setTab("settings");
+    const input = document.querySelector(`input[data-keep="${id}"]`);
+    const group = input?.closest("details.group");
+    if (group) group.open = true;
+    input?.scrollIntoView?.({ block: "center" });
+    input?.focus();
+    toast(`Make a new key on ${p.name}'s page, then paste it here and press Test and save.`);
+  }
+  async function recheckKey(id, signal) {
+    const r = await api("/api/keys/recheck", { body: { provider: id }, signal });
+    S.st = r.state;
+    toast(r.message, r.ok ? "done" : "error");
+    renderShell(); renderSettings(); renderComposerBar();
+  }
+  const keyDate = (iso) => new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+
   async function removeKey(p) {
     const t = toast(`Removing the ${p.name} key…`);
     try {
@@ -2841,7 +2870,9 @@
     const tickedCount = ms.filter((m) => m.ticked).length;
     const open = S.open[p.id] ?? false;
     let status;
+    const kt = p.keyTrouble, expired = !!kt?.expires && Date.parse(kt.expires) <= Date.now();
     if (!p.on) status = h("span", { class: "chip", text: "Off" });
+    else if (kt?.refused || expired) status = h("span", { class: "chip bad", text: kt?.refused ? "Key refused" : "Key expired" });
     else if (p.ready) status = h("span", { class: "chip good", text: `Ready · ${tickedCount} of ${ms.length} ticked` });
     else if (p.id === "ollama" || p.local) status = h("span", { class: "chip", text: "Not running" });
     else status = h("span", { class: "chip", text: "Add a key" });
@@ -2856,6 +2887,8 @@
           h("span", { text: p.key.where === "keychain" ? "in the macOS Keychain" : p.key.where === "environment" ? "from your environment" : p.key.where === "shell" ? "from your shell's settings" : "in a file only you can read" }),
           h("span", { class: "grow" }),
           p.key.where === "environment" || p.key.where === "shell" ? null : h("button", { class: "btn small", text: "Remove key", onclick: () => removeKey(p) })));
+        if (kt?.refused) body.append(h("div", { class: "note warn-text", text: `${p.name} refused this key on ${keyDate(kt.refused.at)} (${kt.refused.status}), so its models are left out. Keys can expire: make a new one (Get a key) and paste it below.` }));
+        else if (kt?.expires) body.append(h("div", { class: expired ? "note warn-text" : "note", text: `This key ${expired ? "expired" : "expires"} on ${keyDate(kt.expires)}, as ${p.name} says.` }));
       }
       if (p.id === "openrouter") body.append(h("div", { class: "row" },
         runButton(p.key.saved ? "Connect again" : "Connect OpenRouter", connectOpenRouter, "btn primary"),
