@@ -162,3 +162,24 @@ jobs:
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --target "$GITHUB_SHA"
             echo "Published $TAG at $GITHUB_SHA, with its files."
           fi
+
+  # The official MCP Registry gets the new version's server.json (0.13), signed in with this run's own GitHub token
+  # (OIDC), so no secret is kept: the Registry checks that io.github.pouriaetab/leanfare belongs to this repository's
+  # owner. A version it already has is refused, so running this again changes nothing there.
+  registry:
+    needs: publish
+    if: ${{ always() && needs.publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # the sign in to the Registry
+      contents: read
+    steps:
+      - name: The release's server.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" -p server.json
+      - name: Publish it to the MCP Registry
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
