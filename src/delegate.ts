@@ -417,7 +417,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
       const check: DelegateCheck = { chance: 0, picked: false, verdict: "skipped", why: "Codex answered on your ChatGPT plan, and no stronger model you ticked can check it", checker: null, cost: null };
       const result: Omit<DelegateResult, "receipt"> = {
         answer: r.answer, model, cost: 0, first: null, rerunError: null, swap: null,
-        passed: ["None of the models you ticked could take it now, so Codex took it on your ChatGPT plan."],
+        passed: ["None of the models you ticked could take it now, so Codex took it on your ChatGPT plan.", ...(r.note ? [r.note] : [])],
         row: null, total: 0, task: guess.task, taskLabel: taskLabel(guess.task), kind: input.kind, effort: input.effort, mode: TIER[input.effort], check,
         tokens: { files: fileTokens, answer: tokensOf(r.answer.length) }, cut: false, seconds: (performance.now() - started) / 1000,
       };
