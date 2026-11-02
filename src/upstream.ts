@@ -350,7 +350,7 @@ export function ollamaChunks(o: any, model: string): any[] {
   return out;
 }
 
-export interface KeyCheck { ok: boolean; status: number; message: string; models: string[] | null }
+export interface KeyCheck { ok: boolean; status: number; message: string; models: string[] | null; expires?: string | null } // expires: when the provider says the key ends (OpenRouter), null for never
 
 function plainError(def: ProviderDef, status: number, body: string, key: string | null): string {
   const said = redact(providerMessage(body), key ? [key] : []);
@@ -385,13 +385,15 @@ export async function checkKey(id: ProviderId, key: string | null, signal?: Abor
     const text = await res.text();
     if (!res.ok) return { ok: false, status: res.status, message: plainError(def, res.status, text, key), models: null };
     let models: string[] | null = null;
+    let expires: string | null | undefined;
     try {
       const j = JSON.parse(text);
-      const list = id === "ollama" ? j.models?.map((m: any) => m.name) : j.data?.map((m: any) => String(m.id ?? "").replace(/^models\//, ""));
+      if (id === "openrouter") { const e = j?.data?.expires_at; expires = typeof e === "string" && !Number.isNaN(Date.parse(e)) ? e : null; } // its key endpoint: when the key ends
+      const list = id === "ollama" ? j.models?.map((m: any) => m.name) : Array.isArray(j.data) ? j.data.map((m: any) => String(m.id ?? "").replace(/^models\//, "")) : null;
       if (Array.isArray(list)) models = list.filter(Boolean);
     } catch {}
     const message = id === "openrouter" ? "OpenRouter accepted the key." : models ? `${def.name} accepted the key: ${models.length} models available to it.` : `${def.name} accepted the key.`;
-    return { ok: true, status: res.status, message, models };
+    return { ok: true, status: res.status, message, models, ...(expires !== undefined ? { expires } : {}) };
   } catch (e: any) {
     return { ok: false, status: 0, message: networkError(def, e), models: null };
   }

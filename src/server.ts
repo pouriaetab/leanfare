@@ -39,6 +39,7 @@ import { askModels, askReport, checkAsk } from "./askreport";
 import { liveVersion, liveView } from "./live";
 import { notNowWhy } from "./allowance";
 import { FREE_LIST, afterFreeKey, freeView } from "./freelist";
+import { keepKeysFresh, keyChanged, keyNotices, keyState, recheckKey } from "./keystate";
 import { TASK_OF, shareView } from "./share";
 import { checkPlan, gradePart, keptPlan, makePlan, nextStarted, runView, startRun, stopAllRuns, stopRun, tookAnswers } from "./planner";
 import { setAuto } from "./workers";
@@ -134,6 +135,8 @@ export function state() {
   if (ageDays >= 3) notices.push({ kind: "data", level: "warn", text: `Prices are ${ageDays} days old${ds.state === "failed" ? ` (the daily update failed: ${ds.error})` : ""}.` });
   const up = updateNotice(s.updateCheck);
   if (up) notices.push(up);
+  notices.push(...keyNotices()); // a key refused, expired, or that expires within 7 days (keystate.ts)
+  keepKeysFresh();
   const ready = allProviders().filter((p) => providerReady(p.id));
   return {
     version: VERSION,
@@ -149,6 +152,7 @@ export function state() {
       local: !!p.local, custom: !!p.custom, more: !!p.more,
       ready: providerReady(p.id), on: s.providers[p.id]?.on !== false, free: !!s.providers[p.id]?.free,
       key: p.needsKey ? { saved: !!getKey(p.id), where: keyWhere(p.id), hint: keyHint(p.id), canUndo: (removedKeys.get(p.id)?.until ?? 0) > Date.now() } : null,
+      keyTrouble: p.needsKey && getKey(p.id) ? { refused: keyState(p.id).refused ?? null, expires: keyState(p.id).expires ?? null } : null,
       list: p.id === "openrouter" ? store.status.openrouter : p.id === "ollama" ? store.status.ollama : null,
       credit: p.id === "openrouter" && getKey("openrouter") ? connect.credit : null,
       base: baseOf(p.id),
@@ -417,8 +421,9 @@ async function readBody(req: Request): Promise<any> {
 
 // A key was saved, pasted or by signing in: switch the provider on, load
 // OpenRouter's list and balance, and tick the provider's short list.
-async function keySaved(id: ProviderId, signal?: AbortSignal, liveModels?: string[] | null) {
+async function keySaved(id: ProviderId, signal?: AbortSignal, liveModels?: string[] | null, expires?: string | null) {
   removedKeys.delete(id);
+  keyChanged(id, expires); // a refusal or an expiry of the old key goes (keystate.ts)
   clearNoQuota({ provider: id }); // a new key may have the quota the last one lacked
   if (liveModels && provider(id)?.more) store.live.set(id, new Set(liveModels));
   saveSettings({ providers: { ...settings().providers, [id]: { ...(settings().providers[id] ?? {}), on: true } } });
@@ -488,9 +493,16 @@ async function api(req: Request, url: URL): Promise<Response> {
     const check = await checkKey(e.id as ProviderId, key, req.signal);
     if (!check.ok) return json({ ok: false, message: redact(check.message, [key]), state: state() });
     await saveKey(e.id as ProviderId, key);
-    await keySaved(e.id as ProviderId, req.signal, check.models);
+    await keySaved(e.id as ProviderId, req.signal, check.models, check.expires);
     const ticked = afterFreeKey(e.id);
     return json({ ok: true, message: `${e.name} is connected${ticked.length ? `: ${ticked.length} free model${ticked.length === 1 ? "" : "s"} ticked` : ""}.`, ticked, state: state() });
+  }
+  // A refused key checked again (keystate.ts): working, the refusal goes; still refused, it says so.
+  if (p === "/api/keys/recheck" && m === "POST") {
+    const b = await readBody(req);
+    const def = provider(b.provider);
+    if (!def || !def.needsKey) return fail(400, "Unknown provider.");
+    return json({ ...(await recheckKey(def.id, req.signal)), state: state() });
   }
   if (p === "/api/keys" && m === "POST") {
     const b = await readBody(req);
@@ -501,7 +513,7 @@ async function api(req: Request, url: URL): Promise<Response> {
     const check = await checkKey(def.id, key, req.signal);
     if (!check.ok) return json({ ok: false, message: redact(check.message, [key]), state: state() }, 200);
     const where = await saveKey(def.id, key);
-    await keySaved(def.id, req.signal, check.models);
+    await keySaved(def.id, req.signal, check.models, check.expires);
     return json({ ok: true, message: `${check.message} Saved in ${where === "keychain" ? "the macOS Keychain" : "a file only you can read"}.`, state: state() });
   }
   // Sign in with OpenRouter instead of pasting a key (see connect.ts). The page
@@ -695,7 +707,7 @@ async function api(req: Request, url: URL): Promise<Response> {
       const check = await checkKey(id, key, req.signal);
       if (!check.ok) { tried.push(`${def.name}: ${redact(check.message, [key])}`); if (check.status === 0) break; continue; }
       const where = await saveKey(id, key);
-      await keySaved(id, req.signal, check.models);
+      await keySaved(id, req.signal, check.models, check.expires);
       return json({ ok: true, provider: id, message: `A ${def.name} key. ${check.message} Saved in ${where === "keychain" ? "the macOS Keychain" : "a file only you can read"}.`, state: state() });
     }
     return json({ ok: false, message: `It looks like a ${r.providers.map((id) => provider(id)!.name).join(" or ")} key, but it did not work. ${tried.join(" ")}`, state: state() });
@@ -716,7 +728,7 @@ async function api(req: Request, url: URL): Promise<Response> {
         const check = await checkKey(f.provider, key, req.signal);
         if (!check.ok) { results.push({ ref, ok: false, message: `${f.label}: ${redact(check.message, [key])}` }); continue; }
         await saveKey(f.provider, key);
-        await keySaved(f.provider, req.signal, check.models);
+        await keySaved(f.provider, req.signal, check.models, check.expires);
         results.push({ ref, ok: true, message: `${f.label}: ${check.message}` });
       } else if (f.registry) {
         const already = extra.customFor(f.registry.id, f.registry.api);
@@ -775,6 +787,7 @@ async function api(req: Request, url: URL): Promise<Response> {
       if (!r || r.until < Date.now()) return fail(410, "Too late to undo; paste the key again.");
       await saveKey(def.id, r.key);
       removedKeys.delete(def.id);
+      keyChanged(def.id); // what was known of a key goes with it (keystate.ts)
       if (def.id === "openrouter") await connect.refreshCredit(r.key, req.signal);
       return json({ ok: true, state: state() });
     }
@@ -782,6 +795,7 @@ async function api(req: Request, url: URL): Promise<Response> {
       const old = getKey(def.id);
       if (old && keyWhere(def.id) !== "environment" && keyWhere(def.id) !== "shell") removedKeys.set(def.id, { key: old, until: Date.now() + 30_000 });
       const still = await removeKey(def.id);
+      keyChanged(def.id);
       if (def.id === "openrouter") connect.forgetCredit();
       return json({ ok: true, env: still?.env ?? null, from: still?.from ?? null, state: state() });
     }
@@ -1033,7 +1047,7 @@ export async function handle(req: Request, server: { timeout(r: Request, s: numb
     if (url.pathname !== "/api/control/stop" && req.headers.get("x-leanfare") !== "1") return fail(403, "Missing the x-leanfare header.");
     if (url.pathname !== "/api/unlock" && !url.pathname.startsWith("/api/control/") && !pageAllowed(req, controlToken)) return json({ error: "Leanfare is locked. Paste its access key to open it.", locked: true }, 401);
     // Requests that can wait a long time on providers or other programs: no idle cut-off.
-    if (["/api/mcp/call", "/api/chat", "/api/delegate", "/api/plan", "/api/keys", "/api/refresh", "/api/import", "/api/keys/import", "/api/keys/recognize", "/api/keys/found", "/api/providers/custom", "/api/providers/registry", "/api/apps", "/api/setup", "/api/switch", "/api/trial/stop", "/api/report/ask", "/api/live/stream"].includes(url.pathname)) server?.timeout(req, 0);
+    if (["/api/mcp/call", "/api/chat", "/api/delegate", "/api/plan", "/api/keys", "/api/keys/recheck", "/api/refresh", "/api/import", "/api/keys/import", "/api/keys/recognize", "/api/keys/found", "/api/providers/custom", "/api/providers/registry", "/api/apps", "/api/setup", "/api/switch", "/api/trial/stop", "/api/report/ask", "/api/live/stream"].includes(url.pathname)) server?.timeout(req, 0);
     try { return await api(req, url); }
     catch (e: any) { return fail(e instanceof UserError ? e.status : 500, e instanceof UserError ? e.message : `Leanfare hit an unexpected problem: ${String(e?.message ?? e)}`); }
   }
