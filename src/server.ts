@@ -48,7 +48,7 @@ import { OFF_TEST, OFF_TEXT, OFF_TRIAL, setSwitch, switchedOn } from "./switch";
 import { startTest, stopTest, testRunning, testView } from "./localtest";
 import { WHERE_NAME, WHERE_SAYS, platformsView, setPlatform, whereCounts, whereStop } from "./platforms";
 import { retirementNotices } from "./retire";
-import { savings } from "./savings";
+import { savings, spendItems } from "./savings";
 import { checkKey, effortLevels, UserError } from "./upstream";
 import { FILE_LIMITS, checkFile, prepareMessages, takesImages, takesPdfs, type Attachment, type ChatMsg } from "./files";
 import type { Msg } from "./router";
@@ -63,6 +63,8 @@ import { dollars, localDay, now, randomId, redact } from "./util";
 
 // The system's name as people say it, for Report a problem's form (Settings): only the name, never its version.
 const SYSTEM_NAME: Record<string, string> = { darwin: "macOS", win32: "Windows", linux: "Linux" };
+// Something the Mac app asked the page to open (its menu's spending line, 0.13.2): the page opens it once, within 30 seconds.
+let openAsked: { what: string; at: string } | null = null;
 const EFFORTS = ["auto", "low", "medium", "high"];
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...headers } });
@@ -171,6 +173,7 @@ export function state() {
     where: { now: whereStop(s), names: WHERE_NAME, says: WHERE_SAYS, counts: whereCounts() }, // where work may go (platforms.ts, 0.12)
     budget: b,
     month: (() => { const v = savings(); return { spent: v.spent, today: v.today, answers: v.answers }; })(),
+    open: openAsked && Date.now() - Date.parse(openAsked.at) < 30_000 ? openAsked : null,
     notices,
     data: {
       built: store.catalog.built, from: store.catalogFrom, ratingsDate: store.catalog.ratingsDate,
@@ -942,6 +945,15 @@ async function api(req: Request, url: URL): Promise<Response> {
     if (!locked()) return json({ ok: true });
     if (!keyOk(typeof b.key === "string" ? b.key.trim() : null)) { await Bun.sleep(400); return json({ error: "That is not Leanfare's access key.", locked: true }, 401); }
     return json({ ok: true }, 200, { "set-cookie": sessionCookie(settings().accessKey!) });
+  }
+  // What was paid, call by call (savings.ts): the spending pill's list.
+  if (p === "/api/spend" && m === "GET") return json(spendItems(url.searchParams.get("span") === "today" ? "today" : "month", Math.min(500, Number(url.searchParams.get("limit")) || 200)));
+  // The Mac app's menu asks the page to open something: for now the spending list.
+  if (p === "/api/open" && m === "POST") {
+    const b = await readBody(req);
+    if (b?.what !== "spend") return fail(400, "Say what to open: spend.");
+    openAsked = { what: "spend", at: new Date().toISOString() };
+    return json({ ok: true });
   }
   if (p === "/api/pause" && m === "POST") {
     const b = await readBody(req);
