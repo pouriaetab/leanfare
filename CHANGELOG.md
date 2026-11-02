@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.1
+
+- A key a provider refuses (it may have expired): Leanfare leaves that provider's models out, so the work goes to your other models, and a hand off that tried it passes to a model of another provider. The page says so at the top with one press to make a new key (OpenRouter signs you in again, which makes a new key; the others open the page where their keys are made, next to the box for the new one) and **Check again**. A new key, an answer from that provider, or a check every 30 minutes that finds the key working again clears it.
+- OpenRouter says when its key expires: Leanfare reads it as the key is saved and once a day, and says so from 7 days before.
+- The plugin has its icon for Claude's plugin directory, a description for its marketplace, and install steps by link.
+
+Fixed from 0.13.0:
+
+- Every part on Codex failed when Codex's own settings named a model ChatGPT sign in no longer offers ("The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account"). Leanfare now asks Codex which models it offers your account, runs the part on Codex's own pick (or the next), keeps it, and the receipt says how to change the setting.
+
 ## 0.13.0
 
 - The plan runs by itself: in Claude and other apps, the plan tool starts Leanfare's parts at once (local and free ones, paid ones within your cap) and answers with those that finish within about 25 seconds; your app does its own parts meanwhile, collects the rest, reviews and grades them. The plan's page in the chat has no buttons any more: it follows each part from waiting to running, done, with Claude and checked, and says in one line where the whole plan is.
