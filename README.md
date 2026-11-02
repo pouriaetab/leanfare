@@ -30,6 +30,7 @@ It works with Claude Desktop, Cowork, Claude Code, Cursor, Codex, Gemini CLI, Wi
 
 2. **Open it.** Type `leanfare`. The app opens in your browser.
 3. **Press Turn on Leanfare.** Leanfare finds the AI apps on your computer and adds itself to each one. Then do the one step it shows for each app (most need a restart).
+4. **Connect your free models (optional).** In Settings, under your apps: ChatGPT (a free account works) and free models from Gemini, Groq, OpenRouter, Mistral and Cloudflare, one press each. Leanfare shares their daily allowances out by the kind of work you do.
 
 That's all. Keep working in your apps: Leanfare steps in on reading and drafting.
 
