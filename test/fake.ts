@@ -116,7 +116,7 @@ export function startFake() {
   // OpenRouter's sign in: /openrouter/auth shows the "Authorize" step and sends the browser back with a
   // one time code; /openrouter/api/v1/auth/keys trades the code for a key and checks the PKCE proof
   // (the verifier must hash to the challenge). The switches steer the unhappy paths.
-  const oauth = { n: 0, codes: new Map<string, { challenge: string; method: string; expired: boolean }>(), expireNext: false, deny: false, failExchange: 0, failMessage: "fake failure", badKey: false, credits: true, expiresAt: null as string | null };
+  const oauth = { n: 0, codes: new Map<string, { challenge: string; method: string; expired: boolean }>(), expireNext: false, deny: false, failExchange: 0, failMessage: "fake failure", badKey: false, credits: true, expiresAt: null as string | null, balance: null as number | null };
   // Ollama's own addresses: what is installed and loaded, a download that streams its progress as
   // JSON lines (and can fail, be cut off or be held for a Stop), and a removal. Sizes are bytes.
   const GB = 1e9;
@@ -188,7 +188,7 @@ export function startFake() {
       if (provider === "openrouter" && url.pathname.endsWith("/credits")) {
         if (auth !== KEYS.openrouter && auth !== OAUTH_KEY) return Response.json({ error: { message: "invalid key" } }, { status: 401 });
         if (!oauth.credits) return Response.json({ error: { message: "this key cannot read credits" } }, { status: 403 });
-        return Response.json({ data: { total_credits: 10, total_usage: 2.5 } });
+        return Response.json({ data: { total_credits: oauth.balance === null ? 10 : 2.5 + oauth.balance, total_usage: 2.5 } });
       }
       if (url.pathname === "/data.json") return dataStatus === 200 && dataJson ? Response.json(dataJson) : new Response("down", { status: dataStatus });
       // models.dev's list, as small as the tests need (providers.test.ts serves its own).
