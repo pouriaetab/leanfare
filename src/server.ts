@@ -39,7 +39,7 @@ import { askModels, askReport, checkAsk } from "./askreport";
 import { liveVersion, liveView } from "./live";
 import { notNowWhy } from "./allowance";
 import { FREE_LIST, afterFreeKey, freeView } from "./freelist";
-import { keepKeysFresh, keyChanged, keyNotices, keyState, noCredit, recheckKey } from "./keystate";
+import { LASTING, hideNotice, keepKeysFresh, keyChanged, keyNotices, keyState, noCredit, recheckKey } from "./keystate";
 import { TASK_OF, shareView } from "./share";
 import { checkPlan, gradePart, keptPlan, makePlan, nextStarted, runView, startRun, stopAllRuns, stopRun, tookAnswers } from "./planner";
 import { setAuto } from "./workers";
@@ -499,6 +499,14 @@ async function api(req: Request, url: URL): Promise<Response> {
     await keySaved(e.id as ProviderId, req.signal, check.models, check.expires);
     const ticked = afterFreeKey(e.id);
     return json({ ok: true, message: `${e.name} is connected${ticked.length ? `: ${ticked.length} free model${ticked.length === 1 ? "" : "s"} ticked` : ""}.`, ticked, state: state() });
+  }
+  // A lasting state's notice hidden until it changes (keystate.ts: hideNotice); the provider's card still says it.
+  if (p === "/api/notices/hide" && m === "POST") {
+    const b = await readBody(req);
+    const def = provider(b.provider);
+    if (!def || !def.needsKey || !LASTING.includes(b.kind)) return fail(400, "Say which notice: a provider and one of " + LASTING.join(", ") + ".");
+    hideNotice(def.id, b.kind);
+    return json({ ok: true, state: state() });
   }
   // A refused key, or a provider turning requests away, checked again (keystate.ts): working, it goes; still not, it says so.
   if (p === "/api/keys/recheck" && m === "POST") {
