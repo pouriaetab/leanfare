@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.4
+
+Fixed from 0.13.3:
+
+- A provider that turned a request away for a reason other than the key or credit (Groq's 403 "Access denied. Please check your network settings.") ended the hand off, and Leanfare called it a refused key. Now Auto passes the work to the next model at once, skipping that provider's other models, and leaves its models out while it keeps refusing; the page says so with **Check again**, and Leanfare checks again by itself every 30 minutes. A refusal about one model leaves out that model only, and one about the request just passes the work on.
+- A hand off now asks up to three models even when some of Auto's picks belong to a provider that just failed: those are skipped instead of counted.
+
 ## 0.13.3
 
 Fixed from 0.13.2:
