@@ -11,6 +11,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
+import { VERSION } from "./config";
 import { planView, windowsNow } from "./plans";
 import { saveSettings, settings } from "./settings";
 import { shellEnv } from "./shellenv";
@@ -120,7 +121,7 @@ export interface CodexState { installed: boolean; signedIn: boolean; login: "cha
 let state: CodexState | null = null;
 let at = 0;
 let pending: Promise<CodexState> | null = null;
-export function forgetCodex() { state = null; at = 0; pending = null; }
+export function forgetCodex() { state = null; at = 0; pending = null; picked = null; offered = null; }
 export async function codexState(fresh = false): Promise<CodexState> {
   if (!fresh && state && Date.now() - at < 60_000) return state;
   pending ??= (async () => {
@@ -207,12 +208,84 @@ export function codexPrompt(p: CodexPart): string {
   ].join("\n");
 }
 
-export function codexArgs(effort: CodexPart["effort"], answerFile: string, extra: string[] = []): string[] {
-  return ["exec", "--sandbox", "read-only", "--skip-git-repo-check", "--color", "never", "-c", 'approval_policy="never"', "-c", `model_reasoning_effort="${effort}"`,
+export function codexArgs(effort: CodexPart["effort"], answerFile: string, extra: string[] = [], model: string | null = null): string[] {
+  return ["exec", ...(model ? ["-m", model] : []), "--sandbox", "read-only", "--skip-git-repo-check", "--color", "never", "-c", 'approval_policy="never"', "-c", `model_reasoning_effort="${effort}"`,
     ...OFF.flatMap((f) => ["-c", `features.${f}=false`]), ...extra, "-o", answerFile, "-"];
 }
 
-export async function runCodex(p: CodexPart, signal: AbortSignal, ms = CODEX_WAIT_MS): Promise<{ answer: string; seconds: number }> {
+// ---- the model: one the ChatGPT plan offers (0.13.1) ---------------------------------------------
+// Codex runs a part on the model its settings name (~/.codex/config.toml), or on its own pick when they name none.
+// ChatGPT sign in drops older models from time to time (GPT-5.5 on 14 Oct 2026), and a setting that still names one
+// stops every part: "The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account". Then Leanfare asks
+// Codex which models it offers this account (its app server's model list, the one its pickers show, else `codex debug
+// models`), runs the part again on Codex's own pick (then the next, up to three in all), and keeps that model for the
+// next parts until Leanfare restarts. The receipt says so, and how to change the setting.
+const NOT_OFFERED = /not supported when using Codex with a ChatGPT account/i;
+// The model Codex was refused, from what it printed: its name, "" when it gave none, null when this is another error.
+export function notOffered(said: string): string | null {
+  if (!NOT_OFFERED.test(said)) return null;
+  return /'([^'\s]{1,80})' model is not supported/i.exec(said)?.[1] ?? "";
+}
+let picked: { model: string; instead: string } | null = null;
+let offered: { at: number; list: string[] } | null = null;
+export const codexPicked = () => picked;
+
+// The models Codex offers the account it is signed in with, its own pick first, without those it offers an upgrade
+// from; [] when it cannot say. Asked at most every 6 hours.
+export async function codexModels(bin: string, signal?: AbortSignal): Promise<string[]> {
+  if (offered && Date.now() - offered.at < 6 * 3_600_000) return offered.list;
+  let list = await modelList(bin, signal);
+  if (!list?.length && !signal?.aborted) {
+    const r = await run(bin, ["debug", "models"], { signal, ms: 20_000 });
+    try {
+      const all = JSON.parse(r.out)?.models;
+      list = Array.isArray(all) ? all.filter((m: any) => typeof m?.slug === "string" && m.visibility === "list" && !m.upgrade).sort((a: any, b: any) => (a.priority ?? 99) - (b.priority ?? 99)).map((m: any) => m.slug as string) : [];
+    } catch { list = []; }
+  }
+  if (list?.length) offered = { at: Date.now(), list };
+  return list ?? [];
+}
+// Codex's app server (codex app-server, JSON lines on its input and output): initialize, then model/list. null when
+// it does not answer within 20 seconds.
+async function modelList(bin: string, signal?: AbortSignal): Promise<string[] | null> {
+  const env = await childEnv(bin);
+  return new Promise((done) => {
+    let p: ChildProcess;
+    try { p = spawn(bin, ["app-server"], { env, stdio: ["pipe", "pipe", "ignore"], detached: process.platform !== "win32", windowsHide: true }); }
+    catch { done(null); return; }
+    live.add(p);
+    let buf = "", over = false;
+    const end = (v: string[] | null) => {
+      if (over) return;
+      over = true; clearTimeout(timer); signal?.removeEventListener("abort", stop); live.delete(p); endAll(p); done(v);
+    };
+    const stop = () => end(null);
+    const timer = setTimeout(stop, 20_000);
+    signal?.addEventListener("abort", stop, { once: true });
+    p.on("error", stop);
+    p.on("exit", stop);
+    p.stdout?.on("data", (d) => {
+      buf += d;
+      for (let i = buf.indexOf("\n"); i >= 0; i = buf.indexOf("\n")) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 1);
+        let o: any = null;
+        try { o = JSON.parse(line); } catch { continue; }
+        if (o?.id !== 2) continue;
+        const data = Array.isArray(o.result?.data) ? o.result.data : [];
+        const ok = data.filter((m: any) => typeof m?.model === "string" && !m.hidden && !m.upgrade);
+        end([...ok.filter((m: any) => m.isDefault), ...ok.filter((m: any) => !m.isDefault)].map((m: any) => m.model as string));
+        return;
+      }
+    });
+    p.stdin?.on("error", () => {});
+    const send = (o: object) => p.stdin?.write(JSON.stringify(o) + "\n");
+    send({ method: "initialize", id: 1, params: { clientInfo: { name: "leanfare", title: "Leanfare", version: VERSION }, capabilities: null } });
+    send({ method: "initialized" });
+    send({ method: "model/list", id: 2, params: {} });
+  });
+}
+
+export async function runCodex(p: CodexPart, signal: AbortSignal, ms = CODEX_WAIT_MS): Promise<{ answer: string; seconds: number; model: string | null; note: string | null }> {
   const bin = await codexBin();
   if (!bin) throw new UserError(503, "Codex is not on this computer (any more), so this part did not run.", "codex_missing");
   const free = await slot(signal);
@@ -226,13 +299,29 @@ export async function runCodex(p: CodexPart, signal: AbortSignal, ms = CODEX_WAI
     const servers = await mcpOff(bin, cwd, signal);
     if (signal.aborted) throw new UserError(499, "Stopped.", "stopped");
     const t0 = performance.now();
-    const r = await run(bin, [...(p.search ? ["--search"] : []), ...codexArgs(p.effort, answerFile, servers)], { cwd, input: codexPrompt(p), signal, ms });
+    const go = (m: string | null) => run(bin, [...(p.search ? ["--search"] : []), ...codexArgs(p.effort, answerFile, servers, m)], { cwd, input: codexPrompt(p), signal, ms });
+    let model = picked?.model ?? null;
+    let r = await go(model);
+    const bad = r.code !== 0 && !r.timedOut && !signal.aborted ? notOffered(`${r.err}\n${r.out}`) : null;
+    if (bad !== null) {
+      const tries = (await codexModels(bin, signal)).filter((m) => m !== bad && m !== model).slice(0, 3);
+      for (const m of tries) {
+        if (signal.aborted) break;
+        r = await go(m);
+        model = m;
+        if (r.code === 0 || r.timedOut || notOffered(`${r.err}\n${r.out}`) === null) break; // it ran, or failed for another reason
+      }
+      if (r.code === 0 && model) picked = { model, instead: bad };
+      else if (!signal.aborted && !r.timedOut && notOffered(`${r.err}\n${r.out}`) !== null)
+        throw new UserError(502, `Codex's settings name ${bad || "a model"}, which ChatGPT sign in does not offer${tries.length ? `, and Codex did not run ${tries.join(", ")} either` : ", and Codex did not say which models it offers"}. Remove the model line from ~/.codex/config.toml (or set a model your plan has), or run codex and pick one with /model.`, "codex_model");
+    }
     if (signal.aborted) throw new UserError(499, "Stopped.", "stopped");
     if (r.timedOut) throw new UserError(504, `Codex did not finish this part within ${Math.round(ms / 60_000)} minutes.`, "codex_timeout");
     if (r.code !== 0) throw new UserError(502, `Codex stopped with an error: ${tail(r.err || r.out)}`, "codex_failed");
     const answer = existsSync(answerFile) ? readFileSync(answerFile, "utf8").trim() : "";
     if (!answer) throw new UserError(502, "Codex finished without an answer.", "codex_empty");
-    return { answer, seconds: (performance.now() - t0) / 1000 };
+    const note = picked && model === picked.model ? `Codex's settings name ${picked.instead || "a model"}, which your ChatGPT plan does not offer, so it ran on ${picked.model}, a model Codex offers you. To make that stick, remove the model line from ~/.codex/config.toml.` : null;
+    return { answer, seconds: (performance.now() - t0) / 1000, model, note };
   } finally {
     free();
     if (dir) rmSync(dir, { recursive: true, force: true });
