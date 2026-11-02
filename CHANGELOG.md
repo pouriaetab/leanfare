@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.13.2
+
+- What you spent, call by call: press the spending pill at the top, or the Mac app menu's spending line, for each call that cost something this month: when, the model, what it was for, its tokens and its cost, with Show all.
+- Free models, compact: Savings shows a small tile for each free model used today, with its daily limit and when it resets, the most used first; Show all adds the rest. Settings shows the connected free providers as chips, the others behind Connect more.
+- Codex's model setting fixed in one press: when Codex's own settings name a model ChatGPT no longer offers, the ChatGPT row says so, and **Fix it** turns that setting off.
+- A privacy policy (PRIVACY.md in the repository), linked from the plugin for Claude's plugin directory.
+
+Fixed from 0.13.1:
+
+- Free models today read its numbers once and kept them until the page was reloaded; it reads them again each time Savings opens.
+
 ## 0.13.1
 
 - A key a provider refuses (it may have expired): Leanfare leaves that provider's models out, so the work goes to your other models, and a hand off that tried it passes to a model of another provider. The page says so at the top with one press to make a new key (OpenRouter signs you in again, which makes a new key; the others open the page where their keys are made, next to the box for the new one) and **Check again**. A new key, an answer from that provider, or a check every 30 minutes that finds the key working again clears it.
