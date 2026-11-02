@@ -39,6 +39,7 @@ import { askModels, askReport, checkAsk } from "./askreport";
 import { liveVersion, liveView } from "./live";
 import { notNowWhy } from "./allowance";
 import { FREE_LIST, afterFreeKey, freeView } from "./freelist";
+import { TASK_OF, shareView } from "./share";
 import { checkPlan, gradePart, keptPlan, makePlan, nextStarted, runView, startRun, stopAllRuns, stopRun, tookAnswers } from "./planner";
 import { setAuto } from "./workers";
 import { setUp, setupView } from "./setup";
@@ -53,7 +54,7 @@ import type { Msg } from "./router";
 import { exportAll, importChats, readArchive, searchChats } from "./archive";
 import { clearCookie, controlOk, engineAllowed, keyOk, locked, newAccessKey, pageAllowed, sessionCookie } from "./lock";
 import { chargeOf, errorResponse, handleAnthropic, handleOpenAI, idle, pauseState, plan, planView, providerReady, runChat, runningList, setPaused, stopRunning, tickTop, usableModels, usualModel } from "./engine";
-import { guessTask } from "./router";
+import { guessTask, rating } from "./router";
 import { parseSpeed } from "./speed";
 import { startTrial, stopTrial, trialRunning, trialView } from "./trial";
 import { updateNotice } from "./update";
@@ -466,6 +467,8 @@ async function api(req: Request, url: URL): Promise<Response> {
   }
   // Free models, ready to connect (freelist.ts, 0.13): the reviewed list, those found but not reviewed, and one press.
   if (p === "/api/free" && m === "GET") return json(await freeView());
+  // Free models today (share.ts): each ticked model with a daily allowance, and the parts today's pace expects.
+  if (p === "/api/share" && m === "GET") return json(shareView(settings().ticked.map((id) => getModel(id)).filter((mm): mm is Model => !!mm && providerReady(mm.provider)), (mm, k) => rating(mm, TASK_OF[k])));
   if (p === "/api/free/connect" && m === "POST") {
     const b = await readBody(req);
     const e = FREE_LIST.find((x) => x.id === b?.id);

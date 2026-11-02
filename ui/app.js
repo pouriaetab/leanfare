@@ -414,7 +414,7 @@
     const rp = $("#runningPill");
     rp.hidden = !st.running.length;
     if (st.running.length) {
-      rp.replaceChildren(h("span", { class: "spin" }), h("span", { class: "lbl", text: `${st.running.length} running` }),
+      rp.replaceChildren(h("span", { class: "spin" }), h("button", { class: "lbl live-link", type: "button", text: `${st.running.length} running · Live`, title: "See each model call as it runs, in Savings", onclick: () => openLive() }),
         h("button", { text: "Stop", title: "Stop every answer that is running now, from the chat and from your other apps", onclick: async () => { try { S.st = await api("/api/running/stop", { body: {} }); renderShell(); toast("Stopped what was running.", "done"); } catch (e) { failed(e); } } }));
       rp.title = st.running.map((r) => `${r.label} (${r.source}, ${r.seconds} s)`).join("\n");
     }
@@ -2201,6 +2201,35 @@
     if (S.tokens.view === "bars" && old.dataset.sig === liveSig()) { patchLiveBars(old); return; }
     old.replaceWith(liveCardEl());
   }
+  // From the running pill: Savings, scrolled to the Live card (0.13).
+  function openLive() {
+    setTab("savings");
+    setTimeout(() => { const c = document.querySelector("#liveCard"); if (c) { c.scrollIntoView({ block: "start", behavior: "smooth" }); c.classList.add("flash"); setTimeout(() => c.classList.remove("flash"), 1500); } }, 150);
+  }
+
+  // ---- Free models today (share.ts, 0.13) ---------------------------------------------------------
+  // Each free model with a daily allowance: its day so far, when it comes back, what it is best at, and the parts of
+  // each kind today's pace expects. Numbers only.
+  const SHARE_WORD = { read: "reading", write: "drafting", reason: "working out", search: "searching" };
+  async function loadShare() { try { S.share = await api("/api/share"); } catch { S.share = { demand: {}, pools: [] }; } const old = document.querySelector("#freeToday"); if (old) old.replaceWith(freeTodayEl()); }
+  function freeTodayEl() {
+    if (S.share === undefined) { S.share = null; loadShare(); }
+    const v = S.share;
+    const head = h("h3", { text: "Free models today" });
+    if (!v) return h("section", { class: "lv-card", id: "freeToday" }, head, h("p", { class: "note", text: "Reading today's numbers…" }));
+    if (!v.pools.length) return h("section", { class: "lv-card", id: "freeToday" }, head, h("p", { class: "note", text: "No model you ticked has a daily free allowance. Connect a free one in Settings, Your apps and AI plans." }));
+    const when = (iso) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const rows = v.pools.map((p) => h("tr", {},
+      h("td", { text: p.label }),
+      h("td", { class: "num", text: `${p.used} of about ${p.perDay}${p.learned ? " (learned)" : ""}` }),
+      h("td", { class: "num", text: p.left > 0 ? `${p.left} left` : `back at ${when(p.resets)}` }),
+      h("td", { class: "note", text: p.best.length ? `kept for ${p.best.map((k) => SHARE_WORD[k] ?? k).join(", ")}` : "" })));
+    const expect = Object.entries(v.demand).filter(([, n]) => n > 0).map(([k, n]) => `${SHARE_WORD[k] ?? k} ${n}`).join(", ");
+    return h("section", { class: "lv-card", id: "freeToday" }, head,
+      h("table", { class: "lv-table" }, h("thead", {}, h("tr", {}, ...["Model", "Used today", "Left", ""].map((x) => h("th", { text: x })))), h("tbody", {}, ...rows)),
+      h("p", { class: "note", text: expect ? `Expected today, at your usual pace: ${expect} parts. The share planner keeps a scarce model for what it is best at when it could run out.` : "Leanfare learns your usual pace from the parts you hand over." }));
+  }
+
   function liveCardEl() {
     liveStartStream();
     const v = S.tokens.data, L = S.tokens;
@@ -2413,6 +2442,7 @@
     const src = v.bySource.map((s) => `${SOURCES[s.source] ?? s.source}: ${num(s.answers)}`).join(" · ");
     el.replaceChildren(
       liveCardEl(),
+      freeTodayEl(),
       reportCardEl(),
       h("div", { class: "sv-head" }, h("h2", { text: title }), h("span", { class: "grow" }), pickMonth, runButton("Refresh", async (signal) => { await loadSavings(); await loadPlans(true, signal); loadReport(); toast("Up to date.", "done"); })),
       workCardEl(v.work, v.delegate),
