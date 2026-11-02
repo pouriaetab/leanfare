@@ -140,17 +140,17 @@ describe("said where you look", () => {
     expect(d.model.id).toBe(CLAUDE);
     expect(d.receipt).toContain("OpenAI is turning requests away, so its models were left out. Leanfare checks again every 30 minutes.");
     const st = (await ui(url, "/api/state")).json;
-    expect(st.notices.find((x: any) => x.kind === "away")).toEqual({ kind: "away", level: "warn", provider: "openai",
-      text: "OpenAI is turning away requests from your network (403), so Leanfare leaves its models out and checks again every 30 minutes. A VPN or a proxy can cause this; it is not your key." });
+    expect(st.notices.find((x: any) => x.kind === "away")).toEqual({ kind: "away", level: "info", provider: "openai",
+      text: "OpenAI blocks requests from your network (403), so Leanfare uses your other models and checks OpenAI again every 30 minutes by itself. Your key is fine." });
     expect(st.providers.find((p: any) => p.id === "openai").keyTrouble.away).toMatchObject({ status: 403, place: true });
     const doc = await openApp(url, { screen: "settings" });
     for (let i = 0; i < 100 && !doc.querySelector(".prov-head"); i++) await Bun.sleep(50);
-    const notice = [...doc.querySelectorAll("#notices .notice")].find((x: any) => x.textContent.includes("OpenAI is turning away requests")) as any;
-    expect([...notice.querySelectorAll("a, button")].map((b: any) => b.textContent)).toEqual(["Check again"]);
+    const notice = [...doc.querySelectorAll("#notices .notice")].find((x: any) => x.textContent.includes("OpenAI blocks requests from your network")) as any;
+    expect([...notice.querySelectorAll("a, button")].map((b: any) => b.textContent)).toEqual(["Check again", "×"]);
     const head = [...doc.querySelectorAll(".prov-head")].find((x: any) => x.querySelector(".name")?.textContent === "OpenAI") as any;
     expect(head.querySelector(".chip").textContent).toBe("Turned away");
     head.click();
-    await waitFor(() => doc.body.textContent.includes("OpenAI turned requests away on"));
-    expect(doc.body.textContent).toContain("OpenAI turned requests away on Oct 21, 2026 (403), so its models are left out. Leanfare checks again every 30 minutes; a VPN or a proxy can cause this, not your key. Check again is at the top.");
+    await waitFor(() => doc.body.textContent.includes("OpenAI has blocked requests from your network since"));
+    expect(doc.body.textContent).toContain("OpenAI has blocked requests from your network since Oct 21, 2026 (403), so its models are left out. Leanfare checks again every 30 minutes by itself; your key is fine.");
   }, 20000);
 });

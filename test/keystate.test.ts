@@ -143,8 +143,8 @@ describe("on the page", () => {
     const notices = [...doc.querySelectorAll("#notices .notice")];
     const google = notices.find((x: any) => x.textContent.includes("Google Gemini refused your key"))!;
     const or = notices.find((x: any) => x.textContent.includes("Your OpenRouter key expires"))!;
-    expect([...google.querySelectorAll("button")].map((b: any) => b.textContent)).toEqual(["Make a new key", "Check again"]);
-    expect([...or.querySelectorAll("button")].map((b: any) => b.textContent)).toEqual(["Sign in again"]);
+    expect([...google.querySelectorAll("button")].map((b: any) => b.textContent)).toEqual(["Make a new key", "Check again", "×"]);
+    expect([...or.querySelectorAll("button")].map((b: any) => b.textContent)).toEqual(["Sign in again", "×"]);
     const opened: string[] = [];
     win.open = (u: string) => { opened.push(u); return null; };
     google.querySelector("button").click();
