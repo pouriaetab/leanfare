@@ -299,6 +299,18 @@ export function gradeTogether(verdict: string, by: { row: number; by: "you" } | 
   } catch (e) { console.error("leanfare: could not keep the prompt's grade:", String(e)); return false; }
 }
 
+// The receipt's lines about providers left out (keystate.ts, each once a day): keys refused or expired, no credit for
+// paid models, turning requests away. The provider whose model answered was not left out (0.13.7): a paid answer from it
+// means it had credit, whatever a later check found.
+export function leftOutLines(ticked: Model[], answered: Model | null): string[] {
+  const not = (id: string) => id !== answered?.provider;
+  const paidAnswer = answered && !freeToYou(answered) ? answered.provider : null;
+  return [
+    keysLeftOut(ticked.map((m) => m.provider).filter(not)),
+    creditLeftOut(ticked.filter((m) => !freeToYou(m)).map((m) => m.provider).filter((id) => id !== paidAnswer)),
+    awayLeftOut(ticked.map((m) => m.provider).filter(not)),
+  ].filter((x): x is string => !!x);
+}
 export function receiptOf(r: Omit<DelegateResult, "receipt">, maxOut: number): string {
   const parts: string[] = [];
   const c = r.check;
@@ -547,9 +559,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   const model = who(final.meta.model);
   const answerTokens = tokensOf(final.text.length);
   const tickedModels = settings().ticked.map((id) => getModel(id)).filter((m): m is Model => !!m);
-  const keysOut = keysLeftOut(tickedModels.map((m) => m.provider)); // keys refused or expired: their models left out
-  const creditOut = creditLeftOut(tickedModels.filter((m) => !freeToYou(m)).map((m) => m.provider)); // no credit: their paid models left out
-  const awayOut = awayLeftOut(tickedModels.map((m) => m.provider)); // turning requests away: their models left out
+  const leftOut = leftOutLines(tickedModels, getModel(final.meta.model?.id ?? "") ?? null);
   const result: Omit<DelegateResult, "receipt"> = {
     answer: final.text,
     model,
@@ -558,7 +568,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     rerunError,
     swap,
     // What Auto said on the way to the answer: a model resting (rest.ts), busy, or slow to start (engine.ts).
-    passed: [...((final.meta?.notes ?? []) as string[]).filter((n) => /is resting|passed the request to its next pick|is resting after failing|is unsteady today|^Saving |^Fastest first|^Spreading the work/.test(n)).slice(0, 3), ...(keysOut ? [keysOut] : []), ...(creditOut ? [creditOut] : []), ...(awayOut ? [awayOut] : [])],
+    passed: [...((final.meta?.notes ?? []) as string[]).filter((n) => /is resting|passed the request to its next pick|is resting after failing|is unsteady today|^Saving |^Fastest first|^Spreading the work/.test(n)).slice(0, 3), ...leftOut],
     row: null,
     total: add(...spent),
     task: guess.task,
