@@ -5,7 +5,9 @@
 // asked. Two ways to know: the provider says its limit is 0, or every try of the last 30 days was refused as rate limited,
 // at least 4 of them on 2 or more days, and not one answered. And a third (0.11.2): the provider says it no longer serves
 // the model to this key (Google: "This model ... is no longer available to new users"; OpenAI: "does not exist or you do
-// not have access to it"; Groq: "has been decommissioned"). Kept: the model, when, how many tries, why. No words.
+// not have access to it"; Groq: "has been decommissioned"). And a fourth (0.13.4): the provider turned away a request for
+// this one model (OpenAI's 403 "Project ... does not have access to model gpt-5"). Kept: the model, when, how many tries,
+// why. No words.
 import { getModel } from "./data";
 import { db } from "./db";
 import { failOfText } from "./fails";
@@ -14,9 +16,12 @@ import { now } from "./util";
 export const NO_QUOTA = { tries: 4, within: 30 * 86_400_000, keep: 14 * 86_400_000 };
 const SAYS_ZERO = /\blimit:\s*0\b/i; // Google: "Quota exceeded for metric: ...free_tier_requests, limit: 0, model: ..."
 
-export interface NoQuota { model: string; provider: string; since: string; tries: number; why: "said" | "refused" | "gone" }
+export interface NoQuota { model: string; provider: string; since: string; tries: number; why: "said" | "refused" | "gone" | "denied" }
 // The provider says it no longer serves this model to the key: a model not found, retired or closed to new users.
 export const SAYS_GONE = /\bmodels?\b.{0,100}?\b(no longer available|not found|does not exist|(has been|was) (deprecated|retired|shut down|decommissioned))|model_not_found|decommissioned|does not know this: model: /i;
+// The provider turned away a request for this one model (0.13.4): OpenAI's 403 "Project ... does not have access to model
+// gpt-5", or a model not served where you are (upstream.ts words these "turned the request away"; fails.ts: turnedAway).
+const SAYS_DENIED = /turned the request away \((?:400|403|451)\):.*\bmodels?\b/i;
 
 let cache: { at: number; map: Map<string, NoQuota> } | null = null;
 export const forgetNoQuota = () => { cache = null; };
@@ -26,7 +31,7 @@ function current(): Map<string, NoQuota> {
   const map = new Map<string, NoQuota>();
   try {
     const rows = db.query("SELECT model, provider, since, tries, why FROM noquota WHERE cleared IS NULL AND since > ? ORDER BY id").all(new Date(t - NO_QUOTA.keep).toISOString()) as any[];
-    for (const r of rows) map.set(r.model, { model: r.model, provider: r.provider, since: r.since, tries: r.tries, why: r.why === "said" || r.why === "gone" ? r.why : "refused" });
+    for (const r of rows) map.set(r.model, { model: r.model, provider: r.provider, since: r.since, tries: r.tries, why: r.why === "said" || r.why === "gone" || r.why === "denied" ? r.why : "refused" });
   } catch { if (cache) return cache.map; } // the database busy: what was known
   cache = { at: t, map };
   return map;
@@ -43,6 +48,7 @@ export function noteRefusal(model: string, provider: string, error: string | nul
   const t = now().getTime();
   let mark: { tries: number; why: NoQuota["why"] } | null = null;
   if (k === "refused" && error && SAYS_GONE.test(error)) mark = { tries: 1, why: "gone" };
+  else if (k === "refused" && error && SAYS_DENIED.test(error) && !/moderation|flagged/i.test(error)) mark = { tries: 1, why: "denied" };
   else if (k !== "limit") return;
   else if (error && SAYS_ZERO.test(error)) mark = { tries: 1, why: "said" };
   else {
@@ -78,6 +84,7 @@ export function clearNoQuota(by: { model?: string; provider?: string }): number 
 export function noQuotaWhy(q: NoQuota, providerName?: string): string {
   const who = providerName ?? q.provider;
   if (q.why === "gone") return `your ${who} key can't use it anymore (${who} said it is no longer available)`;
+  if (q.why === "denied") return `${who} turned it away (your key, or where you are, can't use it)`;
   return q.why === "said" ? `your ${who} key has no quota for it (${who} said its limit is 0)`
     : `your ${who} key has no quota for it: all ${q.tries} tries in 30 days were refused as rate limited, and none answered`;
 }

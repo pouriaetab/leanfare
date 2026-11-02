@@ -16,14 +16,27 @@
 // models left out, and the work goes to your next model; its free ones (OpenRouter's ":free" models) keep working.
 // OpenRouter's balance is read again every 30 minutes, for free; the others are tried again after 6 hours. An answer from
 // one of its paid models clears it, and so does Check again once there is credit.
+//
+// Turned away (0.13.4): a provider can refuse a request for a reason that is neither the key nor credit. Groq answers 403
+// "Access denied. Please check your network settings." to some networks, Google 400 "User location is not supported for
+// the API use.", and a 403 can be about one model or one request. Auto passes the work to its next pick at once. When
+// the provider turned it away as a whole, its other models are skipped, and its models are left out from then on: at
+// once when its words point at the network or location, else only if its free model list is turned away too (so a 403
+// about one request never leaves a provider out). It is checked again every 30 minutes, in the background, and with
+// Check again; an answer clears it. A 403 about one model leaves out that model only (quota.ts), and one about the
+// request (a moderation flag) is passed on and not remembered.
 import { provider, type ProviderId } from "./config";
 import { getSetting, putSetting } from "./db";
 import { refreshCredit } from "./connect";
 import { getKey } from "./keys";
+import { SAYS_PLACE, creditRefusal, keyRefusal, turnedAway } from "./fails";
 import { checkKey } from "./upstream";
 import { now } from "./util";
+export { SAYS_PLACE, creditRefusal, keyRefusal, turnedAway }; // what counts as each refusal (fails.ts)
 
-export interface KeyState { refused?: { at: string; status: number } | null; expires?: string | null; read?: string | null; checked?: string | null; noCredit?: { at: string; status: number } | null; creditChecked?: string | null }
+export interface KeyState { refused?: { at: string; status: number } | null; expires?: string | null; read?: string | null; checked?: string | null; noCredit?: { at: string; status: number } | null; creditChecked?: string | null; away?: Away | null; awayChecked?: string | null }
+// Turned away since then, with the status, and whether its words pointed at the network or location.
+export interface Away { at: string; status: number; place: boolean }
 const KEY = "keystate";
 export const KEYS_EVERY = { recheck: 30 * 60_000, read: 24 * 3_600_000, warn: 7 * 86_400_000, credit: 6 * 3_600_000 };
 // Where each provider takes credit, for the page's Add credit (else the page where its keys are made).
@@ -32,14 +45,6 @@ let cache: Record<string, KeyState> | null = null;
 const all = (): Record<string, KeyState> => (cache ??= getSetting<Record<string, KeyState>>(KEY, {}));
 function put(id: string, next: KeyState) { cache = { ...all(), [id]: next }; putSetting(KEY, cache); }
 export function clearKeyState() { cache = {}; putSetting(KEY, {}); } // the tests
-
-// A provider refusing the key itself: 401; or 400 and 403 when its words are about the key (Google answers 400 "API key
-// expired. Please renew the API key."); a 403 about a model or a region is not the key's fault.
-export function keyRefusal(status: number, said: string): boolean {
-  if (status === 401) return true;
-  if (status !== 400 && status !== 403) return false;
-  return /API_KEY_INVALID|api[_ ]key (has )?(expired|not valid|is (invalid|expired|disabled)|was revoked)|(invalid|incorrect|expired|revoked|disabled) api[_ ]key|\bkey (has )?(expired|been revoked|is (disabled|invalid|revoked|expired))/i.test(said);
-}
 
 export const keyState = (id: string): KeyState => all()[id] ?? {};
 // Refused, or past the date its provider gave: its models are left out until a new key or a working check.
@@ -57,15 +62,33 @@ export function clearRefused(id: string) {
 }
 // A new key: what was known of the old one goes. expires: what the provider said of the new one (undefined: not asked).
 export function keyChanged(id: string, expires?: string | null) {
-  put(id, { refused: null, expires: expires ?? null, read: expires === undefined ? null : now().toISOString(), checked: null, noCredit: null, creditChecked: null });
+  put(id, { refused: null, expires: expires ?? null, read: expires === undefined ? null : now().toISOString(), checked: null, noCredit: null, creditChecked: null, away: null, awayChecked: null });
 }
 
-// A provider refusing for want of credit: 402; or 400 and 403 whose words say the balance or credit is too low.
-export function creditRefusal(status: number, said: string): boolean {
-  if (status === 402) return true;
-  if (status !== 400 && status !== 403) return false;
-  return /credit balance is too low|insufficient (balance|credits?|funds)|requires more credits|no credits? left|out of credits?|payment required|billing hard limit/i.test(said);
+// Turned away (fails.ts: turnedAway): since when, or null.
+export const providerAway = (id: string): Away | null => all()[id]?.away ?? null;
+export function noteAway(id: string, status: number, place: boolean) {
+  const s = all()[id] ?? {};
+  if (!s.away) put(id, { ...s, away: { at: now().toISOString(), status, place }, awayChecked: null }); // the first time counts
 }
+export function clearAway(id: string) {
+  const s = all()[id];
+  if (s?.away) put(id, { ...s, away: null, awayChecked: null });
+}
+// A 403 whose words do not point at the network: its provider's models are left out only if its free model list is
+// turned away too (no tokens are used; at most 5 seconds). A list that works means the 403 was about that one request.
+export async function confirmAway(id: ProviderId, signal?: AbortSignal): Promise<boolean> {
+  if (all()[id]?.away) return true;
+  const key = getKey(id);
+  if (!key) return false;
+  const c = await checkKey(id, key, AbortSignal.any([AbortSignal.timeout(5_000), ...(signal ? [signal] : [])])).catch(() => null);
+  if (!c || c.ok) return false;
+  if (keyRefusal(c.status, c.message)) { noteRefused(id, c.status); return true; }
+  if (turnedAway(c.status, c.message) !== "provider") return false;
+  noteAway(id, c.status, SAYS_PLACE.test(c.message));
+  return true;
+}
+
 // No credit since then, or null: OpenRouter until its balance is back; the others for 6 hours, then they are tried again.
 export function noCredit(id: string, t = now().getTime()): { at: string; status: number } | null {
   const c = all()[id]?.noCredit;
@@ -90,29 +113,33 @@ export async function recheckCredit(id: ProviderId, signal?: AbortSignal): Promi
   return { ok: false, message: c ? "OpenRouter still has no credit, so its paid models stay out; its free models keep working." : "Leanfare could not read OpenRouter's balance; it tries again in 30 minutes." };
 }
 
-// Checks a key again with the provider's free model list (no tokens are used): working, the refusal is cleared and
-// OpenRouter's expiry read; refused, it is noted.
+// Checks a key again with the provider's free model list (no tokens are used): working, a refusal or a turning away is
+// cleared and OpenRouter's expiry read; refused, it is noted; turned away, it stays out.
 export async function recheckKey(id: ProviderId, signal?: AbortSignal): Promise<{ ok: boolean; message: string }> {
   const key = getKey(id);
   const name = provider(id)?.name ?? id;
   if (!key) return { ok: false, message: `There is no ${name} key to check.` };
-  if (!all()[id]?.refused && noCredit(id)) return recheckCredit(id, signal); // the key works; its credit is what is checked
+  if (!all()[id]?.refused && !all()[id]?.away && noCredit(id)) return recheckCredit(id, signal); // the key works; its credit is what is checked
   const c = await checkKey(id, key, signal);
   const s = all()[id] ?? {}, at = now().toISOString();
-  if (c.ok) put(id, { ...s, refused: null, checked: at, ...(c.expires !== undefined ? { expires: c.expires, read: at } : {}) });
-  else put(id, { ...s, checked: at, refused: keyRefusal(c.status, c.message) ? s.refused ?? { at, status: c.status } : s.refused ?? null });
-  return { ok: c.ok, message: c.ok ? `${name} takes your key again.` : c.message };
+  if (c.ok) put(id, { ...s, refused: null, away: null, checked: at, awayChecked: s.away ? at : s.awayChecked ?? null, ...(c.expires !== undefined ? { expires: c.expires, read: at } : {}) });
+  else put(id, { ...s, checked: at, awayChecked: s.away ? at : s.awayChecked ?? null, refused: keyRefusal(c.status, c.message) ? s.refused ?? { at, status: c.status } : s.refused ?? null });
+  return { ok: c.ok, message: c.ok ? (s.away && !s.refused ? `${name} answers again: its models are back.` : `${name} takes your key again.`) : c.message };
 }
 
-// As the page asks for its state, and as work is handed over: a refused key is checked again at most every 30 minutes
-// (it may have been a hiccup on the provider's side), and OpenRouter's expiry is read once a day (a read that failed, at
-// most every 30 minutes). In the background: nothing waits for it. LEANFARE_KEY_CHECKS=off turns it off (the tests).
+// As the page asks for its state, and as work is handed over: a refused key, and a provider that turned requests away,
+// are checked again at most every 30 minutes (it may have been a hiccup on the provider's side), and OpenRouter's expiry
+// is read once a day (a read that failed, at most every 30 minutes). In the background: nothing waits for it.
+// LEANFARE_KEY_CHECKS=off turns it off (the tests).
 let busy = false;
 const since = (t: number, iso: string | null | undefined) => (iso ? t - Date.parse(iso) : Infinity);
 export function keepKeysFresh(t = now().getTime()) {
   if (busy || process.env.LEANFARE_KEY_CHECKS === "off") return;
   const due: ProviderId[] = [];
-  for (const [id, s] of Object.entries(all())) if (s.refused && getKey(id as ProviderId) && since(t, s.checked ?? s.refused.at) >= KEYS_EVERY.recheck) due.push(id as ProviderId);
+  for (const [id, s] of Object.entries(all())) {
+    if (!getKey(id as ProviderId)) continue;
+    if (s.refused ? since(t, s.checked ?? s.refused.at) >= KEYS_EVERY.recheck : !!s.away && since(t, s.awayChecked ?? s.away.at) >= KEYS_EVERY.recheck) due.push(id as ProviderId);
+  }
   const or = all().openrouter;
   if (getKey("openrouter") && !or?.refused && since(t, or?.read) >= KEYS_EVERY.read && since(t, or?.checked) >= KEYS_EVERY.recheck) due.push("openrouter");
   const credit = getKey("openrouter") && !or?.refused && noCredit("openrouter", t) && since(t, or?.creditChecked ?? or?.noCredit?.at) >= KEYS_EVERY.recheck; // its balance, every 30 minutes
@@ -126,7 +153,7 @@ export function keepKeysFresh(t = now().getTime()) {
 
 const dateText = (iso: string) => new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 // For the page's notices: a refused key, one past its date, and one that expires within 7 days, each with its provider.
-export type KeyNotice = { kind: "key" | "expires" | "credit"; level: "error" | "warn"; provider: string; text: string; url?: string };
+export type KeyNotice = { kind: "key" | "expires" | "credit" | "away"; level: "error" | "warn"; provider: string; text: string; url?: string };
 export function keyNotices(t = now().getTime()): KeyNotice[] {
   const out: KeyNotice[] = [];
   for (const [id, s] of Object.entries(all())) {
@@ -142,8 +169,20 @@ export function keyNotices(t = now().getTime()): KeyNotice[] {
     // No credit: its paid models are left out (and its free ones keep working).
     if (!s.refused && noCredit(id, t)) out.push({ kind: "credit", level: "warn", provider: id, url: CREDIT_URL[id] ?? def.keyUrl,
       text: `${def.name} has no credit left, so Leanfare leaves its paid models out${id === "openrouter" ? " (its free models keep working)" : ""}. Add credit there, or Leanfare keeps going on your other models.` });
+    // Turned away: its models are left out, and it is checked again every 30 minutes.
+    if (!s.refused && s.away) out.push({ kind: "away", level: "warn", provider: id, text: s.away.place
+      ? `${def.name} is turning away requests from your network (${s.away.status}), so Leanfare leaves its models out and checks again every 30 minutes. A VPN or a proxy can cause this; it is not your key.`
+      : `${def.name} is turning requests away (${s.away.status}), so Leanfare leaves its models out and checks again every 30 minutes.` });
   }
   return out;
+}
+
+// For a hand off's receipt: the providers turning requests away now, of those given (the ones with models ticked).
+export function awayLeftOut(ids: string[], t = now().getTime()): string | null {
+  const names = [...new Set(ids)].filter((id) => !keyUnusable(id, t) && all()[id]?.away).map((id) => provider(id as ProviderId)?.name ?? id);
+  if (!names.length) return null;
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  return `${list} ${names.length === 1 ? "is" : "are"} turning requests away, so ${names.length === 1 ? "its" : "their"} models were left out. Leanfare checks again every 30 minutes.`;
 }
 
 // For a hand off's receipt: the providers with no credit now, of those given (the ones with paid models ticked).
