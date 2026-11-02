@@ -288,7 +288,8 @@ export function buildOpenRouter(list: any, ratingsFrom: Catalog, asOf = now()): 
       source: "openrouter",
       maker,
       name,
-      label: (labels.get(rkey) ?? String(r.name ?? name).replace(/^[^:]+:\s*/, "")) + (free ? " (free)" : ""),
+      // OpenRouter's own name of a free model already ends in "(free)": said once (0.13.6), and spaces tidied.
+      label: (labels.get(rkey) ?? String(r.name ?? name).replace(/^[^:]+:\s*/, "")).replace(/\s*\(free\)\s*$/i, "").replace(/\s+/g, " ").trim() + (free ? " (free)" : ""),
       input: free ? 0 : perM(p.prompt),
       output: free ? 0 : perM(p.completion),
       cacheRead: free ? 0 : perM(p.input_cache_read),

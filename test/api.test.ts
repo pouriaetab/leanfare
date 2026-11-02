@@ -244,10 +244,10 @@ describe("retirement", () => {
     await keys("anthropic");
     setNow("2026-10-20T12:00:00Z"); // Sonnet 4.5 retires 2026-11-10: 21 days
     const st = (await ui(url, "/api/state")).json;
-    const n = st.notices.find((x: any) => x.kind === "retire" && x.model === "anthropic/claude-sonnet-4-5");
-    expect(n.text).toBe("Claude Sonnet 4.5 retires on 2026-11-10, in 21 days. On that day Leanfare will switch to Claude Sonnet 4.6.");
+    const n = st.notices.find((x: any) => x.kind === "retire" && x.models.includes("anthropic/claude-sonnet-4-5"));
+    expect(n.text).toBe("Claude Sonnet 4.5 retires on Nov 10, 2026, in 21 days; Leanfare will then use Claude Sonnet 4.6.");
     setNow("2026-09-01T12:00:00Z"); // 70 days ahead: no notice yet
-    expect((await ui(url, "/api/state")).json.notices.some((x: any) => x.model === "anthropic/claude-sonnet-4-5")).toBe(false);
+    expect((await ui(url, "/api/state")).json.notices.some((x: any) => x.models?.includes("anthropic/claude-sonnet-4-5"))).toBe(false);
   });
   test("your own successor choice wins", async () => {
     await reset({ ticked: ["openai/gpt-4o", "openai/gpt-5-mini"], successors: { "openai/gpt-4o": "openai/gpt-5-mini" } });

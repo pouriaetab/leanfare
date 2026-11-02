@@ -1,9 +1,15 @@
 # Changelog
 
+## 0.13.6
+
+- Retiring models, said once: a free model that retires needs nothing from you, so it gets no notice (its row in Settings says when). Other retirements share one line at the top, with the date in words, and a **×** hides it until another model retires.
+- Fixed: a free model retiring was set to switch to its paid copy (OpenRouter ends a model's free copy while the paid one goes on). A successor is now always of the same kind: free stays free, paid stays paid. With no free successor, a free model is simply dropped on its day.
+- Fixed: OpenRouter's free models said "(free)" twice.
+
 ## 0.13.5
 
-- Quiet about what lasts: a notice for no credit, a refused or expiring key, or a provider turning requests away has a **×** that hides it until it changes; the provider's card in Settings still says it, with its own **Check again**. A hand off's receipt mentions each of these once a day instead of every time.
-- A provider that blocks your network (a VPN, say) is said calmly: Leanfare uses your other models and checks it again every 30 minutes by itself, and there is nothing to do.
+- Quiet about what lasts: a notice about no credit, a refused or expiring key, or a provider turning requests away has a **×** that hides it until the problem changes; the provider's card in Settings still shows the problem, with its own **Check again**. A hand off's receipt mentions each of these once a day instead of every time.
+- When a provider blocks your network (a VPN, for example), Leanfare handles it quietly: it uses your other models and checks that provider again every 30 minutes by itself. There is nothing to do.
 
 ## 0.13.4
 
