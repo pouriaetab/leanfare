@@ -76,9 +76,9 @@ describe("Free models today", () => {
     noteAway("google", 403, true);
     expect((await ids()).some((id: string) => id.startsWith("google/"))).toBe(false);
   });
-  test("a long name is cut inside its tile, never drawn over the next one", () => {
+  test("a long name is cut inside its line, never drawn over the next column", () => {
     const css = readFileSync(join(import.meta.dir, "..", "ui", "app.css"), "utf8");
-    expect(css).toMatch(/\.ft-tile \{[^}]*grid-template-columns: minmax\(0, 1fr\)[^}]*\}/);
+    expect(css).toMatch(/\.ft-row \{[^}]*grid-template-columns: minmax\(0, 240px\)[^}]*\}/);
     expect(css).toMatch(/\.ft-name \{[^}]*text-overflow: ellipsis[^}]*\}/);
   });
 });
