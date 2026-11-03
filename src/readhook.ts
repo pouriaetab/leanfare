@@ -60,7 +60,7 @@ export function readReminder(input: any, now = clock(), set: Record<string, any>
   s.days[day] = { n: (s.days[day]?.n ?? 0) + 1, kb: (s.days[day]?.kb ?? 0) + Math.round(size / 1024) };
   save(s, now);
   return `Leanfare: ${basename(path)} is about ${tokText(size)} tokens (${sizeText(size)}). If you need facts from it rather than to change it, `
-    + `hand it to Leanfare's delegate (files: ["${path}"], kind: read, and a task that says what to find): only the answer comes back, `
+    + `hand it to Leanfare's delegate tool, whose name ends in leanfare__delegate (files: ["${path}"], kind: read, and a task that says what to find): only the answer comes back, `
     + `and the file stays out of your context. To read it yourself anyway, read it again: it goes through.`;
 }
 

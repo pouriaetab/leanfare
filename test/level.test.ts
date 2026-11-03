@@ -55,8 +55,8 @@ describe("which level is in effect", () => {
 
   test("what the app is told at 1 and 3, and when raised", () => {
     expect(levelAdvice({ level: 1, base: 1, from: "chat", raised: null }, "chat")).toBe("Leanfare: level 1 (Off) in this chat. Use Leanfare only when the user asks for it.");
-    expect(levelAdvice({ level: 3, base: 3, from: "default", raised: null }, "session")).toBe("Leanfare: level 3 (More) in this session. Hand reading over about 10 KB that you will not change, project wide searches, summaries, reviews and first drafts to Leanfare first (delegate, or plan for several parts); keep decisions, changes to files and the final answer. Pass level 3 to delegate and plan.");
-    expect(levelAdvice(levelFor({ level: 3 }, "Claude Code", null, mode("low")), "session")).toStartWith("Leanfare: level 4 (Most) in this session (raised from 3: your Claude plan is running low: the week 74% used). Call Leanfare's plan tool first");
+    expect(levelAdvice({ level: 3, base: 3, from: "default", raised: null }, "session")).toBe("Leanfare: level 3 (More) in this session. It is set so the user's Claude plan lasts longer. Before you read a file over about 10 KB that you will not change, search the whole project, summarize, review or write a first draft, hand it to Leanfare's delegate tool (its name ends in leanfare__delegate) instead; for a task with several parts, use Leanfare's plan tool (its name ends in leanfare__plan). Keep decisions, changes to files and the final answer. Pass level 3 to delegate and plan.");
+    expect(levelAdvice(levelFor({ level: 3 }, "Claude Code", null, mode("low")), "session")).toStartWith("Leanfare: level 4 (Most) in this session (raised from 3: your Claude plan is running low: the week 74% used). It is set so the user's Claude plan lasts longer. Unless this prompt is a quick question, make Leanfare's plan tool (its name ends in leanfare__plan) your first tool call");
   });
 });
 
@@ -76,14 +76,14 @@ describe("Settings, the level tool and leanfare level", () => {
     const ctx = { client: "Claude", cwd: DATA(), canAsk: false };
     const call = (args: any) => runToolFor(ctx, "level", args, new AbortController().signal);
     const now = await call({});
-    expect(now.content[0].text).toStartWith("Leanfare: level 2 (Light) in this chat. Hand big reads");
+    expect(now.content[0].text).toStartWith("Leanfare: level 2 (Light) in this chat. It is set so the user's Claude plan lasts longer. Hand big reads");
     expect(now.content[0].text).toEndWith("The levels: 1 Off, 2 Light, 3 More, 4 Most, 5 All it can.");
     const chat = await call({ set: 4 });
     expect(chat.content[0].text).toContain("Leanfare: level 4 (Most) in this chat.");
     expect(chat.content[0].text).toContain("Set for this chat only: follow it until the user changes it. Leanfare's default stays 2 (Light).");
     expect(chat.structuredContent).toMatchObject({ level: 4, name: "Most", from: "chat", default: 2 });
     // Some apps read only the structured part (Cowork does): what to do at this level is there too.
-    expect(chat.structuredContent.advice).toStartWith("Leanfare: level 4 (Most) in this chat. Call Leanfare's plan tool first");
+    expect(chat.structuredContent.advice).toStartWith("Leanfare: level 4 (Most) in this chat. It is set so the user's Claude plan lasts longer. Unless this prompt is a quick question, make Leanfare's plan tool your first tool call");
     expect(chat.structuredContent.note).toContain("Set for this chat only");
     expect(settings().level).toBe(2); // nothing kept
     const app = await call({ set: 5, scope: "app" });
