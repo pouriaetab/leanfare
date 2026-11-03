@@ -48,13 +48,13 @@ describe("Free models today", () => {
     const tile = doc.querySelector("#freeToday .ft-row");
     expect(tile.querySelector(".ft-name").textContent).toBe("Gemini 3.8 Flash");
     expect(tile.querySelector(".ft-count").textContent).toBe("20/20");
-    expect(tile.querySelector(".ft-sub").textContent).toStartWith("used up · back at");
+    expect(tile.querySelector(".ft-sub").textContent).toStartWith("back at"); // a used up one says when it is back
     expect(tile.getAttribute("title")).toContain("20 used of its free limit of about 20 a day. It resets at midnight Pacific");
     expect(doc.querySelector("#freeToday .ft-sum").textContent).toBe("1 in use");
   }, 30000);
 });
 
-// Compact (0.13.2; one line a model from 0.13.10): the five most used show at first, "+N more in use" adds the rest that
+// Compact (0.13.2; one small line a model from 0.13.10, several to a row from 0.13.11): the six most used show at first, "+N more in use" adds the rest that
 // were used, Show all adds the ones not used yet, and nothing used is one quiet line.
 describe("Free models today, compact", () => {
   test("nothing used yet: one line; the used ones one line each, the most used first; Show all adds the idle ones, dimmed", async () => {
@@ -78,7 +78,8 @@ describe("Free models today, compact", () => {
     await waitFor(() => doc.querySelectorAll("#freeToday .ft-row").length > 0);
     expect(names()).toEqual(["GPT-OSS 120B"]); // only the used one
     expect(doc.querySelector("#freeToday .ft-count").textContent).toBe("3/1,000");
-    expect(doc.querySelector("#freeToday .ft-sub").textContent).toStartWith("a day · resets");
+    expect(doc.querySelector("#freeToday .ft-sub")).toBeNull(); // the rest is in its tooltip (0.13.11)
+    expect(doc.querySelector("#freeToday .ft-row").getAttribute("title")).toContain("It resets at midnight");
     expect(doc.querySelector("#freeToday .ft-sum").textContent).toBe("1 in use");
     ([...doc.querySelectorAll("#freeToday .ft-link")].find((b: any) => b.textContent === "Show all 2") as any).click();
     expect(doc.querySelectorAll("#freeToday .ft-row").length).toBe(2);
