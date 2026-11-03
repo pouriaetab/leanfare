@@ -259,6 +259,8 @@ Settings, **Show who wrote what**, marks each paragraph of the answers Leanfare 
 
 ## Your subscriptions and pay per use
 
+**Savings** is grouped, and each group opens and closes and keeps how you left it; a closed one says its gist on its title line: **Now** (Live, and Free models today with one line a model: its use today, a thin bar and when its limit resets), **Report**, the month (what Leanfare did, your subscriptions, and **Pay per use**, closed at first) and **Try the delegate first** (closed at first). With nothing running, Live shows only its title line and your last hand off.
+
 **What you spent, call by call.** The pill at the top says what Leanfare spent this month. Press it, or the Mac app menu's spending line, for each call that cost something: when, the model and its provider, what it was for (a hand off, a check, a plan's part, the chat, an app), its tokens and its cost, newest first, with Show all. Free and local answers cost $0 and are not listed.
 
 Savings opens with the [report](#the-report), then shows three things apart:
@@ -278,7 +280,7 @@ Settings, Where Leanfare may send work, shows the same windows next to each plat
 
 ### The report
 
-At the top of Savings, the report shows what Leanfare did for your apps over a span: the last hour, 6 hours, today, the last 7 or 30 days, a year, or days you pick (**Custom**). The filters keep one app, one provider, one model, one kind of work or one Claude Code thread (a session).
+On Savings, the report shows what Leanfare did for your apps over a span: the last hour, 6 hours, today, the last 7 or 30 days, a year, or days you pick (**Custom**). The filters keep one app, one provider, one model, one kind of work or one Claude Code thread (a session).
 
 - **Four tiles, both sides.** Each number says how sure it is: measured (from records), an estimate (with its method and range, in purple) or not known. Saved for your app, an estimate: what it would have used doing the parts alone, less what handing them off cost it. Outside models used, measured: what they read, thought and wrote, and the cost. Your app's own use, measured from Claude Code's files; Claude's chats and Cowork do not share theirs, so they show as not known, never guessed. Quality, three ways: the outside answers, the whole results together, and your app alone where sampled.
 - **Tokens over time.** Kept out against what your apps used, a point every 15 minutes up to 6 hours, every hour up to 2 days, every day up to 2 months, then every week. Point at the chart for the numbers.
