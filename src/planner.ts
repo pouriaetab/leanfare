@@ -30,6 +30,8 @@ import { LOCAL_CONTEXT, allModels, fitsText, getModel, localNeed, type Model } f
 import { fitsFree } from "./freeplans";
 import { chargeOf, plan as route, runChat, usableModels } from "./engine";
 import { addGrade, movedDown, standing, standingText, type GradedKind, type Verdict } from "./grades";
+import { freeHeld } from "./freerecord";
+import { freeToYou } from "./share";
 import { MODE_AT, planMode } from "./modes";
 import { gb, suggestLocal } from "./local";
 import { passedLocal } from "./localpass";
@@ -344,9 +346,14 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
     : priv ? "the plan is to stay on this computer, and none of your models here can take it"
     : usableModels((m) => anyFit(m) && modelOn(m)).length && whereWhy(work) ? `${whereWhy(work)} (Settings, Where Leanfare may send work), and no model there can take it`
     : "the platforms that could take it are turned off for plans and the delegate (Settings, Where Leanfare may send work)";
+  // Free models sit out a kind they have not done well for you, and working things out until they earn it
+  // (freerecord.ts): a paid model you ticked takes the part, or your ChatGPT plan through Codex, else it stays with you.
+  const held = priv ? null : freeHeld(part.kind, part.effort, level);
+  const unheld = (m: Model) => kindOk(m) && (!held || !freeToYou(m));
   // A model the manager's grades moved down for this kind is skipped, while another can take the part.
-  const graded = (m: Model) => kindOk(m) && !movedDown(m.id, part.kind);
-  const only = usableModels(graded).length ? graded : kindOk;
+  const graded = (m: Model) => unheld(m) && !movedDown(m.id, part.kind);
+  const only = usableModels(graded).length ? graded : unheld;
+  if (held && !offWhy && part.kind !== "search" && !usableModels(unheld).length && usableModels(kindOk).length) return codexCan ? onCodex(part, r, `your ChatGPT plan through Codex: ${held}`) : stay(held);
   if (part.kind === "search" && offWhy) return stay(`it searches the web, and ${offWhy}`);
   // A web search with no Perplexity ticked goes to your ChatGPT plan through Codex, which searches the web itself (0.13).
   if (part.kind === "search" && !usableModels((m) => m.provider === "perplexity").length && codex && !priv && whereStop() >= 2 && platformOn("chatgpt") && !movedDown(CODEX_ID, "search"))

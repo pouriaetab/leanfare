@@ -30,6 +30,7 @@ import { freeToYou } from "./share";
 import { mayTake, modelOn, platformOn, readRisk, whereStop, whereWhy } from "./platforms";
 import { CODEX_ID, CODEX_LABEL, codexFor, runCodex } from "./codex";
 import { movedDown } from "./grades";
+import { freeHeld } from "./freerecord";
 import { fromAnotherCompany, masked } from "./judge";
 import { restOf, restText } from "./rest";
 import { noQuota, noQuotaWhy } from "./quota";
@@ -409,9 +410,15 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   const work = { private: !!input.private, files: input.files.length > 0 };
   const allowed = (m: Model) => mayTake(m, work);
   const kept = (ok: (m: Model) => boolean) => (m: Model) => ok(m) && on(m) && allowed(m) && (!limit || limit(m));
+  // Free models sit out a kind they have not done well for you, and working things out until they earn it
+  // (freerecord.ts): a paid model you ticked takes it, or your ChatGPT plan through Codex, else your app keeps it. Not
+  // for a named model, the trial, an ask about the prompts or a private task.
+  const held = !input.model && !quiet && !input.private ? freeHeld(input.kind, input.effort, level) : null;
+  const heldLine = (who: string) => (held ? `${held[0].toUpperCase()}${held.slice(1)}, so ${who} took it.` : null);
   // A model the manager's grades moved down for this kind is skipped, while another can take it (grades.ts).
   const within = (ok: (m: Model) => boolean) => {
-    const base = kept(ok);
+    const k = kept(ok);
+    const base = (m: Model) => k(m) && (!held || !freeToYou(m));
     if (!input.kind) return base;
     const graded = (m: Model) => base(m) && !movedDown(m.id, input.kind);
     return usableModels(graded).length ? graded : base;
@@ -432,7 +439,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
       const check: DelegateCheck = { chance: 0, picked: false, verdict: "skipped", why: "Codex answered on your ChatGPT plan, and no stronger model you ticked can check it", checker: null, cost: null };
       const result: Omit<DelegateResult, "receipt"> = {
         answer: r.answer, model, cost: 0, first: null, rerunError: null, swap: null,
-        passed: ["None of the models you ticked could take it now, so Codex took it on your ChatGPT plan.", ...(r.note ? [r.note] : [])],
+        passed: [heldLine("Codex, on your ChatGPT plan,") ?? "None of the models you ticked could take it now, so Codex took it on your ChatGPT plan.", ...(r.note ? [r.note] : [])],
         row: null, total: 0, task: guess.task, taskLabel: taskLabel(guess.task), kind: input.kind, effort: input.effort, mode: TIER[input.effort], check,
         tokens: { files: fileTokens, answer: tokensOf(r.answer.length) }, cut: false, seconds: (performance.now() - started) / 1000,
       };
@@ -445,6 +452,8 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
   // Nothing may take it: a private task with no model here that can, files with nowhere Settings lets them go, or
   // platforms turned off. Said so, not as too much text.
   if (!usableModels(within(doFit.ok)).length) {
+    // Only free models could take it, and they sit this kind of work out for now (freerecord.ts).
+    if (held && usableModels(kept(doFit.ok)).length) throw Object.assign(new UserError(409, `Keep this one yourself: ${held}. A paid model you tick in Leanfare, within your cap for paid work, can take it instead.`, "free_held"), { spent: 0 });
     if (input.private && !usableModels((m) => !!m.local && doFit.ok(m)).length) throw Object.assign(new UserError(409, "This task is to stay on this computer, and none of your models here can take it. Do it yourself, or start Ollama with a model that fits (Settings, Local models).", "private_none"), { spent: 0 });
     const why = whereWhy(work); // the where knob kept it in (platforms.ts)
     if (!input.private && why && usableModels((m) => doFit.ok(m) && on(m) && (!limit || limit(m))).length && !usableModels((m) => doFit.ok(m) && on(m) && allowed(m) && (!limit || limit(m))).length)
@@ -568,7 +577,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     rerunError,
     swap,
     // What Auto said on the way to the answer: a model resting (rest.ts), busy, or slow to start (engine.ts).
-    passed: [...((final.meta?.notes ?? []) as string[]).filter((n) => /is resting|passed the request to its next pick|is resting after failing|is unsteady today|^Saving |^Fastest first|^Spreading the work/.test(n)).slice(0, 3), ...leftOut],
+    passed: [...((final.meta?.notes ?? []) as string[]).filter((n) => /is resting|passed the request to its next pick|is resting after failing|is unsteady today|^Saving |^Fastest first|^Spreading the work/.test(n)).slice(0, 3), ...(held ? [heldLine(model.label)!] : []), ...leftOut],
     row: null,
     total: add(...spent),
     task: guess.task,
