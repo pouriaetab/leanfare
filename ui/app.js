@@ -2207,6 +2207,7 @@
     const old = $("#liveCard");
     if (!old) return;
     // Bars move: when the same calls show the same way, only their widths and numbers change (so they glide).
+    setGist("live", liveGist());
     if (S.tokens.view === "bars" && old.dataset.sig === liveSig()) { patchLiveBars(old); return; }
     old.replaceWith(liveCardEl());
   }
@@ -2220,20 +2221,21 @@
   // Each free model with a daily allowance: its day so far, when it comes back, what it is best at, and the parts of
   // each kind today's pace expects. Numbers only.
   const SHARE_WORD = { read: "reading", write: "drafting", reason: "working out", search: "searching" };
-  async function loadShare() { try { S.share = await api("/api/share"); } catch { S.share = { demand: {}, pools: [] }; } const old = document.querySelector("#freeToday"); if (old) old.replaceWith(freeTodayEl()); }
-  // Free models today (0.13.10): one line a model (its name, a thin bar, what it used of its daily limit, and when the limit
-  // resets), the most used first; the five most used show at first, "+N more in use" adds the other used ones, and Show all
-  // adds the ones not used yet. Nothing used: one line.
+  async function loadShare() { try { S.share = await api("/api/share"); } catch { S.share = { demand: {}, pools: [] }; } redrawFree(); }
+  // Free capacity (0.13.11): a dense list, several models to a row, each on one small line (its name, a thin bar and what
+  // it used of its daily limit; a used up one also says when it is back; the rest is in its tooltip), the most used first;
+  // the six most used show at first, "+N more in use" adds the other used ones, and Show all adds the ones not used yet.
+  // Nothing used: one line. Its group's title line says how many are in use (freeGist).
   function freeTodayEl() {
     if (S.share === undefined) { S.share = null; loadShare(); }
     const v = S.share, all = !!store.get("freeAll", false);
     const card = (...kids) => h("section", { class: "lv-card ft", id: "freeToday" }, ...kids);
-    const head = (...extra) => h("div", { class: "ft-head" }, h("h3", { text: "Free models today" }), ...extra);
+    const head = (...extra) => h("div", { class: "ft-head" }, ...extra);
     if (!v) return card(head(), h("p", { class: "note", text: "Reading today's numbers…" }));
     if (!v.pools.length) return card(head(), h("p", { class: "note", text: "No model you ticked has a free daily limit. Connect one in Settings, Your apps and AI plans." }));
     const pools = [...v.pools].sort((a, b) => b.used - a.used || b.used / b.perDay - a.used / a.perDay || a.label.localeCompare(b.label));
     const used = pools.filter((p) => p.used > 0);
-    const shown = all ? pools : used.slice(0, S.freeMore ? used.length : 5);
+    const shown = all ? pools : used.slice(0, S.freeMore ? used.length : 6);
     const at = (iso) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
     const row = (p) => {
       const out = p.left <= 0, pct = Math.min(100, Math.round((p.used / Math.max(1, p.perDay)) * 100));
@@ -2242,18 +2244,26 @@
         h("span", { class: "ft-name", text: p.label }),
         h("span", { class: "ft-bar" }, h("i", { style: { width: `${pct}%` } })),
         h("span", { class: "ft-count", text: `${num(p.used)}/${num(p.perDay)}` }),
-        h("span", { class: "ft-sub", text: out ? `used up · back at ${at(p.resets)}` : `a day · resets ${at(p.resets)}` }));
+        out ? h("span", { class: "ft-sub", text: `back at ${at(p.resets)}` }) : null);
     };
     // Show all or Show less only when it changes what is shown.
-    const hidden = pools.length - (S.freeMore ? used.length : Math.min(5, used.length));
+    const hidden = pools.length - (S.freeMore ? used.length : Math.min(6, used.length));
     const toggle = hidden > 0 ? h("button", { class: "ft-link", type: "button", text: all ? "Show less" : `Show all ${pools.length}`, onclick: () => { store.set("freeAll", !all); redrawFree(); } }) : null;
-    const more = !all && !S.freeMore && used.length > 5 ? h("button", { class: "ft-link", type: "button", text: `+${used.length - 5} more in use`, onclick: () => { S.freeMore = true; redrawFree(); } }) : null;
+    const more = !all && !S.freeMore && used.length > 6 ? h("button", { class: "ft-link", type: "button", text: `+${used.length - 6} more in use`, onclick: () => { S.freeMore = true; redrawFree(); } }) : null;
     const expect = all ? Object.entries(v.demand).filter(([, n]) => n > 0).map(([k, n]) => `${SHARE_WORD[k] ?? k} ${n}`).join(", ") : "";
     return card(head(h("span", { class: "ft-sum", text: used.length ? `${used.length} in use` : "none used yet" }), h("span", { class: "grow" }), toggle),
       shown.length ? h("div", { class: "ft-list" }, ...shown.map(row)) : h("p", { class: "note", text: "None used yet today. Each limit is a day's, and resets by itself." }),
       more, expect ? h("p", { class: "note", text: `Expected today at your usual pace: ${expect} parts. The share planner keeps a scarce model for what it is best at.` }) : null);
   }
-  function redrawFree() { const old = document.querySelector("#freeToday"); if (old) old.replaceWith(freeTodayEl()); }
+  function redrawFree() { setGist("free", freeGist()); const old = document.querySelector("#freeToday"); if (old) old.replaceWith(freeTodayEl()); }
+  function freeGist() {
+    const pools = S.share?.pools;
+    if (!pools) return "";
+    if (!pools.length) return "no model you ticked has a free daily limit";
+    const n = pools.filter((p) => p.used > 0).length;
+    return n ? `${n} of ${plural(pools.length, "model")} in use today` : `none of ${plural(pools.length, "model")} used yet today`;
+  }
+  function liveGist() { const lv = S.tokens?.data; return lv?.running?.length ? `${plural(lv.running.length, "call")} running` : "nothing running"; }
 
   // Nothing running (0.13.7): the last hand off and this month's work, so the top of Savings is never empty after one ends.
   function liveIdleEl() {
@@ -2422,16 +2432,19 @@
     return lines.join("\n") + "\n";
   }
 
-  // Savings, compact (0.13.10): the sections sit in groups that open and close and keep how you left them; a closed one says
-  // its gist on its title line.
+  // Savings, compact (0.13.10; named and flat from 0.13.11): the sections sit in groups that open and close and keep how
+  // you left them, and a closed one says its gist on its title line: Live activity, Free capacity, Usage report, Monthly
+  // overview (the month the picker shows: the current one unless you pick another), API spend and Model trial.
   function fold(key, title, gist, openAtFirst, ...kids) {
     const d = h("details", { class: "fold", "data-fold": key },
-      h("summary", {}, h("span", { class: "fold-title", text: title }), gist ? h("span", { class: "fold-gist", text: gist }) : null),
+      h("summary", {}, h("span", { class: "fold-title", text: title }), h("span", { class: "fold-gist", text: gist || "" })),
       h("div", { class: "fold-body" }, ...kids));
     d.open = !!store.get(`fold:${key}`, openAtFirst);
     d.addEventListener("toggle", () => store.set(`fold:${key}`, d.open));
     return d;
   }
+  // A group's gist, kept current when its part redraws on its own (Live as calls run, Free capacity once it is read).
+  function setGist(key, text) { const g = document.querySelector(`#tab-savings details.fold[data-fold="${key}"] > summary .fold-gist`); if (g) g.textContent = text || ""; }
   function renderSavings() {
     const el = $("#tab-savings");
     const v = S.savings;
@@ -2484,24 +2497,24 @@
     if (v.estimated) notes.push(`Token counts were estimated for ${num(v.estimated)} answer${v.estimated === 1 ? "" : "s"} (the provider did not report them).`);
     const SOURCES = { chat: "Chat", openai: "Apps (OpenAI address)", anthropic: "Apps (Anthropic address)", delegate: "Delegated", check: "Checks", trial: "Trial", plan: "Plans", sidebyside: "Side by side", ask: "Asked about prompts" };
     const src = v.bySource.map((s) => `${SOURCES[s.source] ?? s.source}: ${num(s.answers)}`).join(" · ");
-    const lv = S.tokens?.data, pools = S.share?.pools, w = v.work;
-    const nowGist = [lv?.running?.length ? `${plural(lv.running.length, "call")} running` : "nothing running", pools?.length ? `${plural(pools.filter((p) => p.used > 0).length, "free model")} in use today` : null].filter(Boolean).join(" · ");
-    const monthGist = w ? `${plural(w.tasks, "task")} · ${tokShort(w.kept)} tokens kept out · ${money(w.cost)}` : "";
+    const w = v.work;
+    const monthGist = [title, ...(w ? [plural(w.tasks, "task"), `${tokShort(w.kept)} tokens kept out`, money(w.cost)] : [])].join(" · ");
     el.replaceChildren(
-      fold("now", "Now", nowGist, true, liveCardEl(), freeTodayEl()),
-      fold("report", "Report", "your prompts, and what each handed off", true, reportCardEl()),
-      fold("month", title, monthGist, true,
+      fold("live", "Live activity", liveGist(), true, liveCardEl()),
+      fold("free", "Free capacity", freeGist(), true, freeTodayEl()),
+      fold("report", "Usage report", "every prompt and what it handed off", true, reportCardEl()),
+      fold("month", "Monthly overview", monthGist, true,
         h("div", { class: "sv-head" }, h("span", { class: "grow" }), pickMonth, runButton("Refresh", async (signal) => { await loadSavings(); await loadPlans(true, signal); loadReport(); toast("Up to date.", "done"); })),
         workCardEl(v.work, v.delegate),
-        plansCardEl(),
-        fold("pay", "Pay per use", `what your keys and credits spent: ${money(v.spent)}, ${plural(v.answers, "answer")}`, false,
+        plansCardEl()),
+      fold("pay", "API spend", `${title} · ${money(v.spent)} · ${plural(v.answers, "answer")}`, false,
           cards,
           h("div", { class: "sv-grid" },
             h("div", { class: "card" }, h("h3", {}, "By model", h("span", { class: "grow" }), h("small", { text: src })), h("div", { class: "scroll" }, byModel)),
             h("div", { class: "card" }, h("h3", { text: "By task" }), h("div", { class: "scroll" }, byTask)),
             h("div", { class: "card" }, h("h3", {}, "By day", h("span", { class: "grow" }), h("small", { text: `most ${money(maxDay)}` })), days, h("div", { class: "days-axis" }, h("span", { text: "1" }), h("span", { text: String(Math.ceil(daysIn / 2)) }), h("span", { text: String(daysIn) })))),
-          h("p", { class: "fine" }, [...notes, "Costs use the providers' list prices; discounts and contracts are not known to Leanfare. Ratings: Arena leaderboard (CC BY 4.0)."].join(" ")))),
-      fold("trial", "Try the delegate first", "measure it on your own models before you rely on it", false, trialCardEl()));
+          h("p", { class: "fine" }, [...notes, "Costs use the providers' list prices; discounts and contracts are not known to Leanfare. Ratings: Arena leaderboard (CC BY 4.0)."].join(" "))),
+      fold("trial", "Model trial", "measure the delegate on your own models before you rely on it", false, trialCardEl()));
   }
 
   // ---- settings -----------------------------------------------------------------------------------
