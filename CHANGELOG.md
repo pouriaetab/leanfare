@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.9
+
+- Claude Code now hears its level as a plain first step: at level 4, Leanfare's plan tool is its first tool call for each prompt that is more than a quick question, named so Claude Code can find it, with the reason (so your Claude plan lasts longer). Before, it heard the level with every prompt but used Leanfare only when asked by name. The reminder before a big read names Leanfare's delegate tool the same way.
+
 ## 0.13.8
 
 - Free models get the work they do well. Your grades of all the free models now count together, by kind: working things out at medium or high effort waits until free models earn it (60 of 100 from 5 grades), and any kind they score under half at waits. A paid model you ticked takes it, or your ChatGPT plan through Codex, or your app keeps it, and the receipt says why. Low effort work still goes to them.
