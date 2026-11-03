@@ -77,12 +77,19 @@ export function levelAdvice(v: LevelView, where: "session" | "chat"): string {
   const raised = v.raised ? ` (${v.raised})` : "";
   const head = `Leanfare: level ${levelText(v.level)} in this ${where}${raised}.`;
   const tail = v.level === 1 ? "" : ` Pass level ${v.level} to delegate and plan.`;
+  // 0.13.9: why it is set, the first step said plainly, and in Claude Code (the prompt hook's session) the tools by name,
+  // as Claude Code may load an app's tools only when it looks for them. At level 4 Claude Code heard "call Leanfare's
+  // plan tool first" on 63 prompts in a week and called it on none, though it used Leanfare at once when asked by name.
+  const named = where === "session";
+  const plan = named ? "Leanfare's plan tool (its name ends in leanfare__plan)" : "Leanfare's plan tool";
+  const delegate = named ? "Leanfare's delegate tool (its name ends in leanfare__delegate)" : "Leanfare's delegate tool";
+  const why = v.level === 1 ? "" : " It is set so the user's Claude plan lasts longer.";
   const what: Record<Level, string> = {
     1: "Use Leanfare only when the user asks for it.",
-    2: "Hand big reads you will not change (about 40 KB of logs or docs, 200 KB of anything else, or more than 5 files) to Leanfare's delegate, and plan tasks with several parts with Leanfare's plan.",
-    3: "Hand reading over about 10 KB that you will not change, project wide searches, summaries, reviews and first drafts to Leanfare first (delegate, or plan for several parts); keep decisions, changes to files and the final answer.",
-    4: "Call Leanfare's plan tool first for each prompt that is more than a quick question, and follow its table; hand reading, searching, summaries, reviews and drafts to Leanfare.",
-    5: "Plan each prompt with Leanfare and hand every part a model can do to it (delegate, or plan, which starts Leanfare's parts itself); keep only decisions, changes to files and your final answer, and tell the user before any big job.",
+    2: `Hand big reads you will not change (about 40 KB of logs or docs, 200 KB of anything else, or more than 5 files) to ${delegate}, and plan tasks with several parts with ${plan}.`,
+    3: `Before you read a file over about 10 KB that you will not change, search the whole project, summarize, review or write a first draft, hand it to ${delegate} instead; for a task with several parts, use ${plan}. Keep decisions, changes to files and the final answer.`,
+    4: `Unless this prompt is a quick question, make ${plan} your first tool call and follow its table; hand reading, searching, summaries, reviews and drafts to Leanfare.`,
+    5: `Make ${plan} your first tool call for each prompt, and hand every part a model can do to Leanfare; keep only decisions, changes to files and your final answer, and tell the user before any big job.`,
   };
-  return `${head} ${what[v.level]}${tail}`;
+  return `${head}${why} ${what[v.level]}${tail}`;
 }
