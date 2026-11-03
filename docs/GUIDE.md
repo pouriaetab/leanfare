@@ -259,7 +259,7 @@ Settings, **Show who wrote what**, marks each paragraph of the answers Leanfare 
 
 ## Your subscriptions and pay per use
 
-**Savings** is grouped, and each group opens and closes and keeps how you left it; a closed one says its gist on its title line: **Now** (Live, and Free models today with one line a model: its use today, a thin bar and when its limit resets), **Report**, the month (what Leanfare did, your subscriptions, and **Pay per use**, closed at first) and **Try the delegate first** (closed at first). With nothing running, Live shows only its title line and your last hand off.
+**Savings** is grouped, and each group opens and closes and keeps how you left it; a closed one says its gist on its title line: **Live activity**, **Free capacity** (several free models to a row, each on one small line with its use today and a thin bar; a used up one says when it is back, and its tooltip has the rest), **Usage report**, **Monthly overview** (what Leanfare did and your subscriptions, for the month its picker shows: the current month unless you pick another, so it moves on by itself when a month starts), **API spend** and **Model trial** (both closed at first). With nothing running, Live activity shows one quiet line and your last hand off.
 
 **What you spent, call by call.** The pill at the top says what Leanfare spent this month. Press it, or the Mac app menu's spending line, for each call that cost something: when, the model and its provider, what it was for (a hand off, a check, a plan's part, the chat, an app), its tokens and its cost, newest first, with Show all. Free and local answers cost $0 and are not listed.
 
