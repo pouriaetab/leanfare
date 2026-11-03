@@ -40,6 +40,14 @@ async function appNewer(start: boolean): Promise<string | null> {
   return v && newer(v, DOOR.version) ? v : null;
 }
 let told = false; // the app was said to be newer, and the tool list to have changed, once
+// The door says which app opened it (0.13.8), once and only while Leanfare runs, so Leanfare can tell an app that never
+// opened its tools from one that had them and handed nothing off (silentapp.ts).
+let greeted = false;
+async function hello() {
+  if (greeted || !client) return;
+  greeted = true;
+  try { if (await healthy(where().base)) await call("/api/mcp/hello", { method: "POST", json: { client } }); } catch {}
+}
 const META = { "io.modelcontextprotocol/serverInfo": SERVER };
 const INSTRUCTIONS = "Leanfare runs every top AI model on this computer with the user's own keys, shows what each answer costs, and keeps a monthly budget. At the start of a task with several parts, call plan: it splits the task, starts Leanfare's parts at once by itself, and says in a short table which parts are yours; collect the rest of Leanfare's answers with plan_status, then review and grade each. Use delegate to hand work that reads a lot (big files, logs, many documents) to a cheaper model: Leanfare reads the files itself, so their text stays out of your context, and returns a short answer with a receipt. Use ask to hand a question to another model (Auto picks the cheapest one that rates well for the task); spend to see what was spent and saved; models to see which models and prices are available; estimate to price a prompt before sending it; trial to measure how well delegate answers on the user's models before relying on it.";
 
@@ -891,6 +899,7 @@ export async function handleMessage(msg: any, send = { reply, error }): Promise<
   }
   if (method === "ping") return done({});
   if (method === "tools/list") {
+    void hello();
     if (await appNewer(false)) { const { j } = await call("/api/mcp/tools"); if (Array.isArray(j?.tools)) return done({ tools: j.tools }); }
     return done({ tools: TOOLS });
   }

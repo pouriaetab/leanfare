@@ -190,10 +190,10 @@ export function hookLine(at = clock(), input: any = null, set: Record<string, an
   const v = levelFor(st, "Claude Code", facts?.level ?? null, mode);
   // The plan's numbers, unless the raise already said them.
   let line = levelAdvice(v, "session") + (parts.length && !v.raised ? ` The Claude plan: ${parts.join(", ")}.` : "");
-  if (st.askEachChat === true && sid) { // the first prompt of a session with no level of its own: ask the user
-    if (!facts?.level && !facts?.prompts) line += " Ask the user which Leanfare level to use for this session (1 Off, 2 Light, 3 More, 4 Most, 5 All it can), then call Leanfare's level tool with set.";
-    noteSession(sid, [["s", 1]], at);
-  }
+  // The first prompt of a session with no level of its own: ask the user.
+  if (st.askEachChat === true && sid && !facts?.level && !facts?.prompts) line += " Ask the user which Leanfare level to use for this session (1 Off, 2 Light, 3 More, 4 Most, 5 All it can), then call Leanfare's level tool with set.";
+  // That a prompt went (0.13.8: always, so Leanfare can tell when its line never reaches Claude Code: silentapp.ts).
+  if (sid) noteSession(sid, [["s", 1]], at);
   return line;
 }
 

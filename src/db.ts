@@ -121,6 +121,8 @@ CREATE INDEX IF NOT EXISTS rests_model ON rests(model);
 -- (Try again, or a new key). No words.
 CREATE TABLE IF NOT EXISTS noquota(id INTEGER PRIMARY KEY, model TEXT NOT NULL, provider TEXT NOT NULL, since TEXT NOT NULL, tries INTEGER NOT NULL, why TEXT NOT NULL, cleared TEXT);
 CREATE INDEX IF NOT EXISTS noquota_model ON noquota(model);
+-- The apps that opened Leanfare's tools (silentapp.ts, 0.13.8): the app's name, when it first and last did, how often.
+CREATE TABLE IF NOT EXISTS doors(app TEXT PRIMARY KEY, first TEXT NOT NULL, last TEXT NOT NULL, opens INTEGER NOT NULL);
 `;
 
 // Columns added after 0.1: an older file gets them on its first start.
