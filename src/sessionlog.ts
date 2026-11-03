@@ -1,6 +1,7 @@
 // What Leanfare notes about each Claude Code session (0.12), from its hooks: the hand offs and plans it got, which of
 // them the stop hook asked about, the level set for it, and that a prompt went. The session's id and numbers only,
-// never the words. One line per fact, appended (several hooks of one turn may write at once); two days are kept.
+// never the words. One line per fact, appended (several hooks of one turn may write at once). A session's facts are
+// read for two days; eight are kept (0.13.8), so the check of an app that hands nothing off sees a week (silentapp.ts).
 //
 //   <when>\t<session>\t<what>\t<value>   what: h a hand off, p a plan, a asked about, l a level, s a prompt
 import { Database } from "bun:sqlite";
@@ -11,6 +12,7 @@ import { paths } from "./config";
 export const sessionFile = () => join(dirname(paths.db), "review.log");
 export const SESSION_ID = /^[\w-]{1,100}$/;
 const KEEP = 2 * 86_400_000;
+const HELD = 8 * 86_400_000; // what the file keeps
 const BIG = 512 * 1024; // past this the file keeps its last two days only
 
 export function noteSession(sid: string, facts: [string, string | number][], now: number) {
@@ -38,10 +40,22 @@ export function sessionFacts(sid: string, now: number): SessionFacts | null {
   return seen ? s : null;
 }
 
+// The sessions that Leanfare's prompt line reached since a time (0.13.8): the prompt hook notes each prompt it adds to.
+export function heardSessions(since: number): Set<string> {
+  const out = new Set<string>();
+  let text = "";
+  try { text = readFileSync(sessionFile(), "utf8"); } catch { return out; }
+  for (const line of text.split("\n")) {
+    const [t, id, what] = line.split("\t");
+    if (what === "s" && id && Number(t) >= since) out.add(id);
+  }
+  return out;
+}
+
 export function compactSessions(now: number) {
   try {
     if (statSync(sessionFile()).size < BIG) return;
-    const keep = readFileSync(sessionFile(), "utf8").split("\n").filter((l) => l && now - Number(l.split("\t")[0]) < KEEP);
+    const keep = readFileSync(sessionFile(), "utf8").split("\n").filter((l) => l && now - Number(l.split("\t")[0]) < HELD);
     const tmp = `${sessionFile()}.${process.pid}`;
     writeFileSync(tmp, keep.map((l) => l + "\n").join(""), { mode: 0o600 });
     renameSync(tmp, sessionFile());

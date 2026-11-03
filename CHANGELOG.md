@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.13.8
+
+- Free models get the work they do well. Your grades of all the free models now count together, by kind: working things out at medium or high effort waits until free models earn it (60 of 100 from 5 grades), and any kind they score under half at waits. A paid model you ticked takes it, or your ChatGPT plan through Codex, or your app keeps it, and the receipt says why. Low effort work still goes to them.
+- When Claude Code runs prompts for a week and hands nothing off, a notice says why: Leanfare's line never reached it, it never opened Leanfare's tools, or it had both and still handed nothing off. To tell, Leanfare now notes each prompt its line reaches and each app that opens its tools (names and numbers only).
+
 ## 0.13.7
 
 - Live, with nothing running, shows your last hand off (when, the model, the tokens kept out, the cost) and this month's work, so the top of Savings is never empty after a hand off ends.
