@@ -440,7 +440,7 @@
         x.kind === "credit" && x.url ? h("a", { class: "btn small", href: x.url, target: "_blank", rel: "noopener noreferrer", text: "Add credit" }) : null,
         x.kind === "key" || x.kind === "credit" || x.kind === "away" ? runButton("Check again", (signal) => recheckKey(x.provider, signal), "btn small quiet") : null,
         // A state that can last (keystate.ts): × hides it until it changes; the provider's card in Settings still says it.
-        (x.provider && ["key", "expires", "credit", "away"].includes(x.kind)) || x.kind === "retire" ? h("button", { class: "notice-x", type: "button", "aria-label": "Hide", title: "Hide until this changes (Settings still shows it)", text: "×", onclick: () => hideNotice(x.provider, x.kind) }) : null));
+        (x.provider && ["key", "expires", "credit", "away", "silent"].includes(x.kind)) || x.kind === "retire" ? h("button", { class: "notice-x", type: "button", "aria-label": "Hide", title: "Hide until this changes (Settings still shows it)", text: "×", onclick: () => hideNotice(x.provider, x.kind) }) : null));
     }
     // Drawn again only when what they say changes, so a button is never rebuilt under your finger.
     const key = list.map((x) => x.textContent).join("|");

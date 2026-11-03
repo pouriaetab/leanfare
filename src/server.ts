@@ -47,6 +47,7 @@ import { setUp, setupView } from "./setup";
 import { OFF_TEST, OFF_TEXT, OFF_TRIAL, setSwitch, switchedOn } from "./switch";
 import { startTest, stopTest, testRunning, testView } from "./localtest";
 import { WHERE_NAME, WHERE_SAYS, platformsView, setPlatform, whereCounts, whereStop } from "./platforms";
+import { hideSilent, noteDoor, silentNotice } from "./silentapp";
 import { hideRetireNotice, retireNotice } from "./retire";
 // The models in use: the ones you ticked, and the one savings are measured against.
 const inUseNow = () => { const u = usualModel(); return [...settings().ticked, ...(u ? [u.id] : [])]; };
@@ -137,6 +138,8 @@ export function state() {
   const up = updateNotice(s.updateCheck);
   if (up) notices.push(up);
   notices.push(...keyNotices()); // a key refused, expired, or that expires within 7 days (keystate.ts)
+  const silent = silentNotice(); // Claude Code ran prompts and handed nothing off, and why (silentapp.ts)
+  if (silent) notices.push(silent);
   keepKeysFresh();
   const ready = allProviders().filter((p) => providerReady(p.id));
   return {
@@ -505,6 +508,7 @@ async function api(req: Request, url: URL): Promise<Response> {
   if (p === "/api/notices/hide" && m === "POST") {
     const b = await readBody(req);
     if (b.kind === "retire") { hideRetireNotice(inUseNow(), localDay()); return json({ ok: true, state: state() }); } // the retirement line (retire.ts)
+    if (b.kind === "silent") { hideSilent(); return json({ ok: true, state: state() }); } // an app that hands nothing off (silentapp.ts)
     const def = provider(b.provider);
     if (!def || !def.needsKey || !LASTING.includes(b.kind)) return fail(400, "Say which notice: a provider and one of " + LASTING.join(", ") + ".");
     hideNotice(def.id, b.kind);
@@ -663,6 +667,7 @@ async function api(req: Request, url: URL): Promise<Response> {
   // a call run here for that door's app and folder, and an MCP App's page. A call reads files and may spend, so only
   // Leanfare's own door makes one: it carries the control token.
   if (p === "/api/mcp/tools" && m === "GET") return json({ version: VERSION, tools: TOOLS });
+  if (p === "/api/mcp/hello" && m === "POST") { const b = await readBody(req); noteDoor(b?.client); return json({ ok: true }); } // an app opened the tools
   if (p === "/api/mcp/resource" && m === "POST") { const b = await readBody(req); return json({ contents: resourceContents(b?.uri) }); }
   if (p === "/api/mcp/call" && m === "POST") {
     if (!controlOk(req, controlToken)) return fail(403, "Wrong control token.");
