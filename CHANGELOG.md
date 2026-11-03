@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.11
+
+- Savings' groups have clear names: Live activity, Free capacity, Usage report, Monthly overview, API spend and Model trial. Free capacity opens and closes on its own, and its title line says how many models are in use today.
+- Monthly overview replaces the group named after the month: it shows the current month unless you pick another in its picker, moves on by itself when a new month starts, and says the month on its title line.
+- Free capacity is denser: smaller text and several models to a row, each on one line with its name, a thin bar and its count. A used up one says when it is back, and the tooltip has the rest.
+
 ## 0.13.10
 
 - Savings is compact: its sections sit in groups (Now, Report, the month, Pay per use, Try the delegate first) that open and close and keep how you left them, and a closed group says its gist on its title line. Pay per use and the trial start closed.
