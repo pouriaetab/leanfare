@@ -2221,9 +2221,9 @@
   // each kind today's pace expects. Numbers only.
   const SHARE_WORD = { read: "reading", write: "drafting", reason: "working out", search: "searching" };
   async function loadShare() { try { S.share = await api("/api/share"); } catch { S.share = { demand: {}, pools: [] }; } const old = document.querySelector("#freeToday"); if (old) old.replaceWith(freeTodayEl()); }
-  // Free models today (0.13.2): compact. Each free model in use today is a small tile (its name, what it used of its daily
-  // limit with a thin bar, and when the limit resets), the most used first, up to three to a row; the three most used show
-  // at first, "+N more in use" adds the other used ones, and Show all adds the ones not used yet. Nothing used: one line.
+  // Free models today (0.13.10): one line a model (its name, a thin bar, what it used of its daily limit, and when the limit
+  // resets), the most used first; the five most used show at first, "+N more in use" adds the other used ones, and Show all
+  // adds the ones not used yet. Nothing used: one line.
   function freeTodayEl() {
     if (S.share === undefined) { S.share = null; loadShare(); }
     const v = S.share, all = !!store.get("freeAll", false);
@@ -2233,23 +2233,24 @@
     if (!v.pools.length) return card(head(), h("p", { class: "note", text: "No model you ticked has a free daily limit. Connect one in Settings, Your apps and AI plans." }));
     const pools = [...v.pools].sort((a, b) => b.used - a.used || b.used / b.perDay - a.used / a.perDay || a.label.localeCompare(b.label));
     const used = pools.filter((p) => p.used > 0);
-    const shown = all ? pools : used.slice(0, S.freeMore ? used.length : 3);
+    const shown = all ? pools : used.slice(0, S.freeMore ? used.length : 5);
     const at = (iso) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    const tile = (p) => {
+    const row = (p) => {
       const out = p.left <= 0, pct = Math.min(100, Math.round((p.used / Math.max(1, p.perDay)) * 100));
       const why = `${p.label}: ${num(p.used)} used of its free limit of ${p.learned ? "" : "about "}${num(p.perDay)} a day${p.learned ? " (learned from a rate limit)" : ""}. It resets at midnight ${p.zone === "pacific" ? "Pacific" : "UTC"}, ${at(p.resets)} your time.${p.best.length ? ` Kept for ${p.best.map((k) => SHARE_WORD[k] ?? k).join(" and ")}.` : ""}`;
-      return h("div", { class: "ft-tile" + (p.used ? "" : " idle") + (out ? " out" : ""), title: why },
-        h("div", { class: "ft-top" }, h("span", { class: "ft-name", text: p.label }), h("span", { class: "ft-count", text: `${num(p.used)}/${num(p.perDay)}` })),
-        h("div", { class: "ft-bar" }, h("i", { style: { width: `${pct}%` } })),
-        h("div", { class: "ft-sub", text: out ? `used up · back at ${at(p.resets)}` : `a day · resets ${at(p.resets)}` }));
+      return h("div", { class: "ft-row" + (p.used ? "" : " idle") + (out ? " out" : ""), title: why },
+        h("span", { class: "ft-name", text: p.label }),
+        h("span", { class: "ft-bar" }, h("i", { style: { width: `${pct}%` } })),
+        h("span", { class: "ft-count", text: `${num(p.used)}/${num(p.perDay)}` }),
+        h("span", { class: "ft-sub", text: out ? `used up · back at ${at(p.resets)}` : `a day · resets ${at(p.resets)}` }));
     };
     // Show all or Show less only when it changes what is shown.
-    const hidden = pools.length - (S.freeMore ? used.length : Math.min(3, used.length));
+    const hidden = pools.length - (S.freeMore ? used.length : Math.min(5, used.length));
     const toggle = hidden > 0 ? h("button", { class: "ft-link", type: "button", text: all ? "Show less" : `Show all ${pools.length}`, onclick: () => { store.set("freeAll", !all); redrawFree(); } }) : null;
-    const more = !all && !S.freeMore && used.length > 3 ? h("button", { class: "ft-link", type: "button", text: `+${used.length - 3} more in use`, onclick: () => { S.freeMore = true; redrawFree(); } }) : null;
+    const more = !all && !S.freeMore && used.length > 5 ? h("button", { class: "ft-link", type: "button", text: `+${used.length - 5} more in use`, onclick: () => { S.freeMore = true; redrawFree(); } }) : null;
     const expect = all ? Object.entries(v.demand).filter(([, n]) => n > 0).map(([k, n]) => `${SHARE_WORD[k] ?? k} ${n}`).join(", ") : "";
     return card(head(h("span", { class: "ft-sum", text: used.length ? `${used.length} in use` : "none used yet" }), h("span", { class: "grow" }), toggle),
-      shown.length ? h("div", { class: "ft-grid" }, ...shown.map(tile)) : h("p", { class: "note", text: "None used yet today. Each limit is a day's, and resets by itself." }),
+      shown.length ? h("div", { class: "ft-list" }, ...shown.map(row)) : h("p", { class: "note", text: "None used yet today. Each limit is a day's, and resets by itself." }),
       more, expect ? h("p", { class: "note", text: `Expected today at your usual pace: ${expect} parts. The share planner keeps a scarce model for what it is best at.` }) : null);
   }
   function redrawFree() { const old = document.querySelector("#freeToday"); if (old) old.replaceWith(freeTodayEl()); }
@@ -2277,7 +2278,7 @@
       : L.view === "numbers" ? liveNumbersEl(v)
       : !calls.length ? liveIdleEl()
       : L.view === "lanes" ? liveLanesEl(calls) : liveBarsEl(calls);
-    const card = h("section", { class: "lv-card", id: "liveCard" }, head, kinds, body,
+    const card = h("section", { class: "lv-card" + (v && !calls.length && L.view !== "numbers" ? " idle" : ""), id: "liveCard" }, head, kinds, body,
       h("p", { class: "fine", text: "Numbers only: Leanfare counts the tokens as they come and keeps no words for this. Input is its estimate until the provider gives its own counts." }));
     card.dataset.sig = liveSig();
     return card;
@@ -2421,6 +2422,16 @@
     return lines.join("\n") + "\n";
   }
 
+  // Savings, compact (0.13.10): the sections sit in groups that open and close and keep how you left them; a closed one says
+  // its gist on its title line.
+  function fold(key, title, gist, openAtFirst, ...kids) {
+    const d = h("details", { class: "fold", "data-fold": key },
+      h("summary", {}, h("span", { class: "fold-title", text: title }), gist ? h("span", { class: "fold-gist", text: gist }) : null),
+      h("div", { class: "fold-body" }, ...kids));
+    d.open = !!store.get(`fold:${key}`, openAtFirst);
+    d.addEventListener("toggle", () => store.set(`fold:${key}`, d.open));
+    return d;
+  }
   function renderSavings() {
     const el = $("#tab-savings");
     const v = S.savings;
@@ -2473,21 +2484,24 @@
     if (v.estimated) notes.push(`Token counts were estimated for ${num(v.estimated)} answer${v.estimated === 1 ? "" : "s"} (the provider did not report them).`);
     const SOURCES = { chat: "Chat", openai: "Apps (OpenAI address)", anthropic: "Apps (Anthropic address)", delegate: "Delegated", check: "Checks", trial: "Trial", plan: "Plans", sidebyside: "Side by side", ask: "Asked about prompts" };
     const src = v.bySource.map((s) => `${SOURCES[s.source] ?? s.source}: ${num(s.answers)}`).join(" · ");
+    const lv = S.tokens?.data, pools = S.share?.pools, w = v.work;
+    const nowGist = [lv?.running?.length ? `${plural(lv.running.length, "call")} running` : "nothing running", pools?.length ? `${plural(pools.filter((p) => p.used > 0).length, "free model")} in use today` : null].filter(Boolean).join(" · ");
+    const monthGist = w ? `${plural(w.tasks, "task")} · ${tokShort(w.kept)} tokens kept out · ${money(w.cost)}` : "";
     el.replaceChildren(
-      liveCardEl(),
-      freeTodayEl(),
-      reportCardEl(),
-      h("div", { class: "sv-head" }, h("h2", { text: title }), h("span", { class: "grow" }), pickMonth, runButton("Refresh", async (signal) => { await loadSavings(); await loadPlans(true, signal); loadReport(); toast("Up to date.", "done"); })),
-      workCardEl(v.work, v.delegate),
-      plansCardEl(),
-      h("div", { class: "section-title", text: "Pay per use: what your keys and credits spent through Leanfare" }),
-      cards,
-      trialCardEl(),
-      h("div", { class: "sv-grid" },
-        h("div", { class: "card" }, h("h3", {}, "By model", h("span", { class: "grow" }), h("small", { text: src })), h("div", { class: "scroll" }, byModel)),
-        h("div", { class: "card" }, h("h3", { text: "By task" }), h("div", { class: "scroll" }, byTask)),
-        h("div", { class: "card" }, h("h3", {}, "By day", h("span", { class: "grow" }), h("small", { text: `most ${money(maxDay)}` })), days, h("div", { class: "days-axis" }, h("span", { text: "1" }), h("span", { text: String(Math.ceil(daysIn / 2)) }), h("span", { text: String(daysIn) })))),
-      h("p", { class: "fine" }, [...notes, "Costs use the providers' list prices; discounts and contracts are not known to Leanfare. Ratings: Arena leaderboard (CC BY 4.0)."].join(" ")));
+      fold("now", "Now", nowGist, true, liveCardEl(), freeTodayEl()),
+      fold("report", "Report", "your prompts, and what each handed off", true, reportCardEl()),
+      fold("month", title, monthGist, true,
+        h("div", { class: "sv-head" }, h("span", { class: "grow" }), pickMonth, runButton("Refresh", async (signal) => { await loadSavings(); await loadPlans(true, signal); loadReport(); toast("Up to date.", "done"); })),
+        workCardEl(v.work, v.delegate),
+        plansCardEl(),
+        fold("pay", "Pay per use", `what your keys and credits spent: ${money(v.spent)}, ${plural(v.answers, "answer")}`, false,
+          cards,
+          h("div", { class: "sv-grid" },
+            h("div", { class: "card" }, h("h3", {}, "By model", h("span", { class: "grow" }), h("small", { text: src })), h("div", { class: "scroll" }, byModel)),
+            h("div", { class: "card" }, h("h3", { text: "By task" }), h("div", { class: "scroll" }, byTask)),
+            h("div", { class: "card" }, h("h3", {}, "By day", h("span", { class: "grow" }), h("small", { text: `most ${money(maxDay)}` })), days, h("div", { class: "days-axis" }, h("span", { text: "1" }), h("span", { text: String(Math.ceil(daysIn / 2)) }), h("span", { text: String(daysIn) })))),
+          h("p", { class: "fine" }, [...notes, "Costs use the providers' list prices; discounts and contracts are not known to Leanfare. Ratings: Arena leaderboard (CC BY 4.0)."].join(" ")))),
+      fold("trial", "Try the delegate first", "measure it on your own models before you rely on it", false, trialCardEl()));
   }
 
   // ---- settings -----------------------------------------------------------------------------------

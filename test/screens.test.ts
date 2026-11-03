@@ -1198,7 +1198,8 @@ describe("Subscriptions on Savings and in Settings", () => {
     await waitFor(() => !!doc.querySelector("#plansCard") && doc.querySelector("#plansCard").textContent.includes("Codex says you are on this plan"));
     const card = doc.querySelector("#plansCard");
     expect(card.textContent).toContain("ChatGPT Plus");
-    expect(doc.querySelector("#tab-savings").textContent).toContain("Pay per use: what your keys and credits spent through Leanfare");
+    expect(doc.querySelector('#tab-savings details.fold[data-fold="pay"] .fold-title').textContent).toBe("Pay per use");
+    expect(doc.querySelector('#tab-savings details.fold[data-fold="pay"] .fold-gist').textContent).toStartWith("what your keys and credits spent:");
     [...card.querySelectorAll("button")].find((b: any) => b.textContent === "Use this plan").click();
     await waitFor(() => toasts(doc).includes("ChatGPT plan saved."));
     expect((await ui(url, "/api/state")).json.settings.plans.chatgpt).toEqual({ name: "ChatGPT Plus", price: 20 });

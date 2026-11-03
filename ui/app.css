@@ -925,19 +925,36 @@ tr.wd td { background: var(--panel-2); }
 #freeToday .ft-head h3 { margin: 0; }
 .ft-sum { font-size: 12px; color: var(--muted); }
 .ft-link { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit; font-size: 12px; justify-self: start; }
-.ft-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.ft-list { display: grid; gap: 1px; }
 /* minmax(0, 1fr): a long name is cut with … inside its tile, never drawn over the next one (0.13.7) */
-.ft-tile { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px; min-width: 0; overflow: hidden; }
+/* One line a model (0.13.10): the name, a thin bar, its count and when it resets; the name is cut inside its column. */
+.ft-row { display: grid; grid-template-columns: minmax(0, 240px) 72px 72px minmax(0, 1fr); align-items: center; gap: 10px; padding: 3px 2px; min-width: 0; }
 .lv-idle { display: grid; gap: 4px; padding: 6px 2px; font-size: 13px; }
-.ft-tile.idle { opacity: 0.55; }
-.ft-top { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.ft-row.idle { opacity: 0.55; }
 .ft-name { flex: 1; min-width: 0; font-weight: 550; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ft-count { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); }
 .ft-bar { height: 4px; border-radius: 99px; background: var(--line); overflow: hidden; }
 .ft-bar i { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
-.ft-tile.out .ft-bar i { background: var(--warn); }
+.ft-row.out .ft-bar i { background: var(--warn); }
+.ft-row .ft-count { text-align: right; }
+.ft-row .ft-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 560px) { .ft-row { grid-template-columns: minmax(0, 1fr) 48px 64px; } .ft-row .ft-sub { display: none; } }
+/* Savings, compact (0.13.10): groups that open and close; a closed one says its gist on its title line. */
+.fold { border-top: 1px solid var(--line); padding: 4px 0; min-width: 0; }
+.fold:first-child { border-top: 0; }
+.fold > summary { list-style: none; cursor: pointer; display: flex; align-items: baseline; gap: 10px; padding: 5px 2px; user-select: none; min-width: 0; }
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary::before { content: "▸"; color: var(--faint); font-size: 11px; width: 10px; flex: none; transition: transform 0.15s; }
+.fold[open] > summary::before { transform: rotate(90deg); }
+.fold-title { font-weight: 600; font-size: 14px; flex: none; }
+.fold-gist { font-size: 12px; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fold-body { display: grid; gap: 8px; padding: 4px 0 8px; min-width: 0; }
+.fold .lv-card { margin-bottom: 0; padding: 10px 12px; }
+.fold .fold { border-top: 0; padding: 0; }
+.fold[data-fold="report"] #reportCard > .sv-head, .fold[data-fold="trial"] #trialCard > h3 { display: none; } /* the group's title line says it */
+.lv-card.idle .lv-kinds, .lv-card.idle > .fine { display: none; } /* nothing running: the head and the last hand off only */
 .ft-sub { font-size: 11.5px; color: var(--muted); }
-.ft-tile.out .ft-sub { color: var(--warn); }
+.ft-row.out .ft-sub { color: var(--warn); }
 /* The free list in Settings, compact (0.13.2) */
 .free-list .fr-head { flex-wrap: wrap; gap: 6px; align-items: center; }
 .free-list .fr-chip { font-size: 11.5px; }

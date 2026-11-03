@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.10
+
+- Savings is compact: its sections sit in groups (Now, Report, the month, Pay per use, Try the delegate first) that open and close and keep how you left them, and a closed group says its gist on its title line. Pay per use and the trial start closed.
+- Free models today shows one line a model, with its name, a thin bar, what it used of its daily limit and when the limit resets, instead of a box each.
+- Live, with nothing running, shows only its title line and your last hand off.
+
 ## 0.13.9
 
 - Claude Code now hears its level as a plain first step: at level 4, Leanfare's plan tool is its first tool call for each prompt that is more than a quick question, named so Claude Code can find it, with the reason (so your Claude plan lasts longer). Before, it heard the level with every prompt but used Leanfare only when asked by name. The reminder before a big read names Leanfare's delegate tool the same way.

@@ -44,8 +44,8 @@ describe("Free models today", () => {
     expect(v.pools).toEqual([expect.objectContaining({ id: "google/gemini-3.8-flash", perDay: 20, used: 20, left: 0, resets: "2026-10-22T07:00:00.000Z" })]);
     const doc = await open(url);
     doc.querySelector('.tabs button[data-tab="savings"]').click();
-    await waitFor(() => !!doc.querySelector("#freeToday .ft-tile"));
-    const tile = doc.querySelector("#freeToday .ft-tile");
+    await waitFor(() => !!doc.querySelector("#freeToday .ft-row"));
+    const tile = doc.querySelector("#freeToday .ft-row");
     expect(tile.querySelector(".ft-name").textContent).toBe("Gemini 3.8 Flash");
     expect(tile.querySelector(".ft-count").textContent).toBe("20/20");
     expect(tile.querySelector(".ft-sub").textContent).toStartWith("used up · back at");
@@ -54,10 +54,10 @@ describe("Free models today", () => {
   }, 30000);
 });
 
-// Compact (0.13.2): the three most used show at first, "+N more in use" adds the rest that were used, Show all adds the
-// ones not used yet, and nothing used is one quiet line.
+// Compact (0.13.2; one line a model from 0.13.10): the five most used show at first, "+N more in use" adds the rest that
+// were used, Show all adds the ones not used yet, and nothing used is one quiet line.
 describe("Free models today, compact", () => {
-  test("nothing used yet: one line; the used ones as tiles, the most used first; Show all adds the idle ones, dimmed", async () => {
+  test("nothing used yet: one line; the used ones one line each, the most used first; Show all adds the idle ones, dimmed", async () => {
     const GEM = "google/gemini-3.8-flash", OSS = "groq/openai/gpt-oss-120b";
     await keys("google", "groq");
     saveSettings({ providers: { google: { on: true, free: true }, groq: { on: true, free: true } }, ticked: [GEM, OSS] });
@@ -67,7 +67,7 @@ describe("Free models today, compact", () => {
     await waitFor(() => !!doc.querySelector("#freeToday .ft-sum"));
     expect(doc.querySelector("#freeToday .ft-sum").textContent).toBe("none used yet");
     expect(doc.querySelector("#freeToday").textContent).toContain("None used yet today. Each limit is a day's, and resets by itself.");
-    expect(doc.querySelectorAll("#freeToday .ft-tile").length).toBe(0);
+    expect(doc.querySelectorAll("#freeToday .ft-row").length).toBe(0);
     const ts = new Date(Date.parse("2026-10-21T12:00:00Z") - 60_000).toISOString();
     const answer = (provider: string, model: string) => db.query("INSERT INTO ledger(ts, month, day, source, provider, model, auto, in_tokens, cached, cache_write, out_tokens, cost, list_cost, price_status, usage_status, status, ms, first_ms) VALUES (?, ?, ?, 'delegate', ?, ?, 1, 100, 0, 0, 10, 0, 0, 'listed', 'reported', 'ok', 2000, 1500)").run(ts, ts.slice(0, 7), ts.slice(0, 10), provider, model);
     for (let i = 0; i < 3; i++) answer("groq", OSS);
@@ -75,23 +75,23 @@ describe("Free models today, compact", () => {
     const names = () => [...doc.querySelectorAll("#freeToday .ft-name")].map((x: any) => x.textContent);
     doc.querySelector('.tabs button[data-tab="chat"]').click();
     doc.querySelector('.tabs button[data-tab="savings"]').click();
-    await waitFor(() => doc.querySelectorAll("#freeToday .ft-tile").length > 0);
+    await waitFor(() => doc.querySelectorAll("#freeToday .ft-row").length > 0);
     expect(names()).toEqual(["GPT-OSS 120B"]); // only the used one
     expect(doc.querySelector("#freeToday .ft-count").textContent).toBe("3/1,000");
     expect(doc.querySelector("#freeToday .ft-sub").textContent).toStartWith("a day · resets");
     expect(doc.querySelector("#freeToday .ft-sum").textContent).toBe("1 in use");
     ([...doc.querySelectorAll("#freeToday .ft-link")].find((b: any) => b.textContent === "Show all 2") as any).click();
-    expect(doc.querySelectorAll("#freeToday .ft-tile").length).toBe(2);
-    expect(doc.querySelectorAll("#freeToday .ft-tile.idle").length).toBe(1); // Gemini, not used yet, dimmed and last
-    expect(doc.querySelectorAll("#freeToday .ft-tile")[1].classList.contains("idle")).toBe(true);
+    expect(doc.querySelectorAll("#freeToday .ft-row").length).toBe(2);
+    expect(doc.querySelectorAll("#freeToday .ft-row.idle").length).toBe(1); // Gemini, not used yet, dimmed and last
+    expect(doc.querySelectorAll("#freeToday .ft-row")[1].classList.contains("idle")).toBe(true);
     for (let i = 0; i < 5; i++) answer("google", GEM);
     forgetAllowances(); forgetShare();
     doc.querySelector('.tabs button[data-tab="chat"]').click();
     doc.querySelector('.tabs button[data-tab="savings"]').click();
-    await waitFor(() => doc.querySelectorAll("#freeToday .ft-tile.idle").length === 0 && doc.querySelectorAll("#freeToday .ft-tile").length === 2);
+    await waitFor(() => doc.querySelectorAll("#freeToday .ft-row.idle").length === 0 && doc.querySelectorAll("#freeToday .ft-row").length === 2);
     expect(doc.querySelector("#freeToday .ft-name").textContent).toBe("Gemini 3.8 Flash"); // the most used first
     expect(doc.querySelectorAll("#freeToday .ft-link").length).toBe(0); // both in use: Show all or less would change nothing
-    expect(doc.querySelectorAll("#freeToday .ft-tile").length).toBe(2);
+    expect(doc.querySelectorAll("#freeToday .ft-row").length).toBe(2);
     expect(doc.querySelector("#freeToday .ft-sum").textContent).toBe("2 in use");
   }, 40000);
 });
