@@ -30,7 +30,7 @@ describe("which reads it reminds about", () => {
   test("a big log once a session: said with its size, and the second read goes through; another session is reminded again", () => {
     const log = file("app.log", 360);
     const said = readReminder(read(log))!;
-    expect(said).toBe(`Leanfare: app.log is about 92k tokens (360 KB). If you need facts from it rather than to change it, hand it to Leanfare's delegate (files: ["${log}"], kind: read, and a task that says what to find): only the answer comes back, and the file stays out of your context. To read it yourself anyway, read it again: it goes through.`);
+    expect(said).toBe(`Leanfare: app.log is about 92k tokens (360 KB). If you need facts from it rather than to change it, hand it to Leanfare's delegate tool, whose name ends in leanfare__delegate (files: ["${log}"], kind: read, and a task that says what to find): only the answer comes back, and the file stays out of your context. To read it yourself anyway, read it again: it goes through.`);
     expect(readReminder(read(log))).toBeNull();
     expect(readReminder(read("app.log", {}, "s2"))).not.toBeNull(); // a path from the session's folder
     expect(remindersLately()).toEqual({ n: 2, kb: 720 });
