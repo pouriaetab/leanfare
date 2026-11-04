@@ -43,6 +43,7 @@ import { LASTING, hideNotice, keepKeysFresh, keyChanged, keyNotices, keyState, k
 import { TASK_OF, shareView } from "./share";
 import { checkPlan, gradePart, keptPlan, makePlan, nextStarted, recordChecks, runView, sendAgain, startRun, stopAllRuns, stopRun, tookAnswers, yoursDone } from "./planner";
 import { allChecks, removeChecks } from "./checks";
+import { geminiCliState } from "./geminicli";
 import { setAuto } from "./workers";
 import { setUp, setupView } from "./setup";
 import { OFF_TEST, OFF_TEXT, OFF_TRIAL, setSwitch, switchedOn } from "./switch";
@@ -640,7 +641,7 @@ async function api(req: Request, url: URL): Promise<Response> {
       b.model = r.model; b.kind = r.kind; b.effort ??= r.effort;
     }
     if (typeof b.model === "string" && GRADED_KINDS.includes(b.kind)) {
-      if (b.model !== CODEX_ID && !getModel(b.model)) return fail(404, `Leanfare does not know the model ${String(b.model).slice(0, 80)}.`);
+      if (b.model !== CODEX_ID && b.model !== "gemini-cli/auto" && !getModel(b.model)) return fail(404, `Leanfare does not know the model ${String(b.model).slice(0, 80)}.`);
       addGrade({ model: b.model, kind: b.kind, effort: typeof b.effort === "string" ? b.effort.slice(0, 10) : null, verdict: b.verdict, source });
       // Kept with the hand off's row too (the one the app names, else its last of that model and kind).
       gradeRow(b.verdict, Number.isInteger(b.handoff) ? { row: b.handoff } : { model: b.model, kind: b.kind });
@@ -709,6 +710,8 @@ async function api(req: Request, url: URL): Promise<Response> {
     const connect = await connectProgress(), st = await codexState(url.searchParams.get("fresh") === "1");
     return json({ ...st, on: settings().codexPlan, connect, setting: st.signedIn ? await codexSetting(req.signal).catch(() => null) : null }); // Codex's model setting, stale or not (0.13.2)
   }
+  // Gemini CLI on your Google account (geminicli.ts, 0.14.1): found, signed in, on.
+  if (p === "/api/gemini-cli" && m === "GET") return json(await geminiCliState());
   if (p === "/api/codex/setting/fix" && m === "POST") return json(fixCodexSetting()); // the stale model line turned off, in one press
   if (p === "/api/codex/connect" && m === "POST") { const started = connectChatGPT(); const first = await Promise.race([started, Bun.sleep(1500).then(() => connectState())]); return json({ connect: first, on: settings().codexPlan }); }
   if (p === "/api/local/pull" && m === "POST") { const b = await readBody(req); return json({ pull: await local.startPull(b.name, b.sizeBytes) }); }

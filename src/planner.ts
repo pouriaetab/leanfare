@@ -25,6 +25,7 @@ import { isLevel, levelFor, levelText, type Level } from "./level";
 import { homedir } from "node:os";
 import { dirname, relative, sep } from "node:path";
 import { CODEX_ID, CODEX_LABEL, codexFor, runCodex } from "./codex";
+import { GEMINI_CLI_ID, GEMINI_CLI_LABEL, geminiCliFor, runGeminiCli } from "./geminicli";
 import { checkResult, checksFor, checksLine, parseChecks, setChecks, wordsFound, type Check, type CheckResult } from "./checks";
 import { DEFAULT_MAX_OUT, TIER, gradeRow, nameOf, notePart, runDelegate, taskFor, type Effort, type Kind } from "./delegate";
 import { LOCAL_CONTEXT, allModels, fitsText, getModel, localNeed, type Model } from "./data";
@@ -46,7 +47,7 @@ import { now, randomId, secondsText } from "./util";
 
 export type PartKind = "read" | "write" | "reason" | "code" | "search" | "act";
 export type Size = "none" | "small" | "medium" | "large";
-export type Where = "you" | "local" | "free" | "paid" | "codex"; // codex: Leanfare runs it through Codex, on your ChatGPT plan (codex.ts)
+export type Where = "you" | "local" | "free" | "paid" | "codex" | "gemini"; // codex: Leanfare runs it through Codex, on your ChatGPT plan (codex.ts); gemini: through Gemini CLI, on your Google account (geminicli.ts, 0.14.1)
 export const PART_KINDS: PartKind[] = ["read", "write", "reason", "code", "search", "act"];
 const SIZES: Size[] = ["none", "small", "medium", "large"];
 const EFFORTS: Effort[] = ["low", "medium", "high"];
@@ -103,6 +104,7 @@ export interface PlanResult {
   limits: { five: number | null; week: number | null } | null; // the person's plan windows, when known (percent used)
   local?: { name: string; size: number; like: string; rating: number; fit: string } | null; // a local model to download that would run reading and drafting free
   codex?: string | null; // why Codex took no part, when it is turned on in Settings and could not
+  gemini?: string | null; // 0.14.1: why Gemini CLI took no part, when it is turned on and could not
   private?: boolean; // stays on this computer: its parts go only to models here, or stay with you
   you?: { model: string | null; label: string | null; plan: string | null }; // the app's own model, as it said, and your plan for it
   level?: number; // 0.12: the level it was made at (level.ts); its parts run at it
@@ -318,15 +320,17 @@ export function modelInYourApp(part: { kind: PartKind; effort: Effort; task: str
 }
 
 // A part on Codex: its time is a rough guess (Codex is a whole agent: half a minute to start, then it reads).
+// A part on Gemini CLI (0.14.1): like Codex, a whole agent; it reads the files itself, in its account's own allowance.
+const onGemini = (part: Split, r: { tokens: number }, why: string): Part => ({ ...part, where: "gemini", model: { id: GEMINI_CLI_ID, label: GEMINI_CLI_LABEL }, use: null, seconds: Math.round(20 + r.tokens / 500), tokens: r.tokens + OUT_LEANFARE, cost: 0, risk: "Google's terms for a free account: people may read it", why });
 const onCodex = (part: Split, r: { tokens: number }, why: string): Part => ({ ...part, where: "codex", model: { id: CODEX_ID, label: CODEX_LABEL }, use: null, seconds: Math.round(30 + r.tokens / 400), tokens: r.tokens + OUT_LEANFARE, cost: 0, why });
 
 // Why more goes out: the plan near its limit, or the level (0.12) set to 4 or 5.
 const nearWords = (near: string, join: ": " | " (") => (near.startsWith("your Leanfare level") ? near : `your plan is near its limit${join}${near}${join === " (" ? ")" : ""}`);
-async function place(part: Split, files: PlanFile[], near: string | null, manager: string, signal: AbortSignal, codex = false, priv = false, level: Level = 2): Promise<Part> {
+async function place(part: Split, files: PlanFile[], near: string | null, manager: string, signal: AbortSignal, codex = false, priv = false, level: Level = 2, gemini = false): Promise<Part> {
   // 0.14: at level 4 and up a change to the project is drafted outside, as a patch: placed as drafting is (your Jobs rule
   // for drafting holds), and the app reads it and applies it with its own tools. Below 4 it stays, as before.
   if (part.kind === "code" && level >= 4 && !part.keep) {
-    const p = await place({ ...part, kind: "write" }, files, near, manager, signal, codex, priv, level);
+    const p = await place({ ...part, kind: "write" }, files, near, manager, signal, codex, priv, level, gemini);
     if (p.where === "you") return { ...p, kind: "code", use: modelInYourApp(part, manager) };
     return { ...p, kind: "code", patch: true, why: `your Leanfare level is ${levelText(level)}: a model drafts the change as a patch, and you read it and apply it (${p.why})` };
   }
@@ -339,6 +343,9 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
   // Codex moved down by the manager's grades for this kind takes only a part no model can take.
   const codexCan = codex && !priv && whereStop() >= 2 && platformOn("chatgpt") && !!DELEGATE_KIND[part.kind]; // a plan, not this computer
   const viaCodex = codexCan && !movedDown(CODEX_ID, part.kind);
+  // Your Google account through Gemini CLI (0.14.1): before anything paid, and for what Codex would not take.
+  const geminiCan = gemini && !priv && whereStop() >= 2 && !!DELEGATE_KIND[part.kind];
+  const viaGemini = geminiCan && !movedDown(GEMINI_CLI_ID, part.kind);
   if (part.kind === "code") return stay(`it changes the project, which only ${manager} can do`);
   if (part.kind === "act") return stay(`it needs ${manager}'s own tools`);
   // Your rules for this kind of job (Settings, Jobs; 0.11): to Leanfare, to Leanfare only when your plan runs low
@@ -367,7 +374,7 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
   // A model the manager's grades moved down for this kind is skipped, while another can take the part.
   const graded = (m: Model) => unheld(m) && !movedDown(m.id, part.kind);
   const only = usableModels(graded).length ? graded : unheld;
-  if (held && !offWhy && part.kind !== "search" && !usableModels(unheld).length && usableModels(kindOk).length) return codexCan ? onCodex(part, r, `your ChatGPT plan through Codex: ${held}`) : stay(held);
+  if (held && !offWhy && part.kind !== "search" && !usableModels(unheld).length && usableModels(kindOk).length) return codexCan ? onCodex(part, r, `your ChatGPT plan through Codex: ${held}`) : geminiCan ? onGemini(part, r, `your Google account through Gemini CLI: ${held}`) : stay(held);
   if (part.kind === "search" && offWhy) return stay(`it searches the web, and ${offWhy}`);
   // A web search with no Perplexity ticked goes to your ChatGPT plan through Codex, which searches the web itself (0.13).
   if (part.kind === "search" && !usableModels((m) => m.provider === "perplexity").length && codex && !priv && whereStop() >= 2 && platformOn("chatgpt") && !movedDown(CODEX_ID, "search"))
@@ -390,6 +397,7 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
     const p = await route({ source: "chat", asked: `auto-${TIER[part.effort]}`, messages, tokens: r.tokens, maxOut: null, signal, dry: true, effort: part.effort,
       guess: part.kind === "search" ? { task: "overall", why: "a web search", alt: null } : taskFor(kind, messages), only, onlyWhy: offWhy ?? `none of the models you ticked can take this much text (about ${tokText(need)} tokens with the answer)`, ledgerSource: "delegate" });
     const where = whereOf(p.model, p.estimate);
+    if (where === "paid" && !viaCodex && viaGemini) return onGemini(part, r, `your Google account through Gemini CLI, not pay per use${near && big ? ` (${nearWords(near, ": ")})` : ""}; Gemini CLI reads ${r.named ? "the files itself" : "what the task says"}, read only`);
     if (where === "paid" && viaCodex) return onCodex(part, r, `your ChatGPT plan through Codex, not pay per use${near && big ? ` (${nearWords(near, ": ")})` : ""}; Codex reads ${r.named ? "the files itself" : "what the task says"}, read only`);
     const why = (near && big ? `${nearWords(near, " (")}, so this goes out too` : where === "local" ? "reading and drafting go out: on this computer, $0"
       : where === "free" ? "reading and drafting go out: a free model" : `the cheapest model rated well enough at ${part.effort} effort`) + some;
@@ -397,6 +405,7 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
   } catch (e: any) {
     if (e?.status === 499) throw e;
     if (codexCan) return onCodex(part, r, "your ChatGPT plan through Codex: no model you ticked in Leanfare could take it");
+    if (geminiCan) return onGemini(part, r, "your Google account through Gemini CLI: no model you ticked in Leanfare could take it");
     return stay(e instanceof UserError ? `Leanfare has no model for it now (${e.message.replace(/\.$/, "").slice(0, 160)})` : "Leanfare has no model for it now");
   }
 }
@@ -461,7 +470,7 @@ export function isTiny(task: string, files: unknown[]): boolean {
 }
 const KEEP_WHY = "it is small enough to answer yourself: handing it off would cost more than it saves";
 const usd = (v: number | null) => (v === null ? "not known" : v === 0 ? "$0" : v < 0.01 ? "under $0.01" : `$${v.toFixed(2)}`);
-const RUNS: Record<Where, string> = { you: "you", local: "Leanfare, on this computer", free: "Leanfare, free model", paid: "Leanfare, pay per use", codex: "Leanfare, through Codex" };
+const RUNS: Record<Where, string> = { you: "you", local: "Leanfare, on this computer", free: "Leanfare, free model", paid: "Leanfare, pay per use", gemini: "Leanfare, through Gemini CLI", codex: "Leanfare, through Codex" };
 const cell = (s: string) => s.replace(/\|/g, "/").replace(/\n/g, " ");
 
 // How long Leanfare's parts take: the ones that start now, and the ones after yours (from when yours are done).
@@ -488,7 +497,7 @@ export function tableOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
   const rows = r.parts.map((p) => [
     String(p.n), p.title, `${LABEL_KIND[p.kind]}${p.patch ? " (patch)" : ""}, ${p.effort}`, p.where === "you" ? youText(r) : `${RUNS[p.where]}${p.risk ? ` (${p.risk})` : ""}`,
     p.model?.label ?? yourModelFor(p, r), p.seconds === null ? "" : secondsText(p.seconds).replace(/^about /, "~"),
-    p.where === "you" ? `~${tokText(p.tokens)} of your plan` : `~${tokText(p.tokens)} kept`, p.where === "you" ? "in your plan" : p.where === "codex" ? "in your ChatGPT plan" : usd(p.cost),
+    p.where === "you" ? `~${tokText(p.tokens)} of your plan` : `~${tokText(p.tokens)} kept`, p.where === "you" ? "in your plan" : p.where === "codex" ? "in your ChatGPT plan" : p.where === "gemini" ? "in your Google account" : usd(p.cost),
     p.needs.length ? `after ${p.needs.join(", ")}` : "now",
   ].map(cell).join(" | "));
   const t = r.totals;
@@ -519,8 +528,8 @@ export function nothingOut(parts: Pick<Part, "kind" | "where" | "files">[]): str
 
 // started: the parts Leanfare started by itself (the plan tool in an app, 0.13), so the app does not run them again.
 function nextOf(r: Omit<PlanResult, "table" | "next" | "id">, started: Set<number> | null = null): string {
-  const viaCodex = r.parts.filter((p) => p.where === "codex");
-  const out = r.parts.filter((p) => p.where !== "you" && p.where !== "codex"); // what delegate can run
+  const viaCodex = r.parts.filter((p) => p.where === "codex" || p.where === "gemini"); // run by plan_run only
+  const out = r.parts.filter((p) => p.where !== "you" && p.where !== "codex" && p.where !== "gemini"); // what delegate can run
   const mine = r.parts.filter((p) => p.where === "you");
   const now = out.filter((p) => !p.needs.length).map((p) => p.n);
   const list = (ns: number[]) => (ns.length === 1 ? `part ${ns[0]}` : `parts ${ns.slice(0, -1).join(", ")} and ${ns.at(-1)}`);
@@ -676,6 +685,7 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
 
   const limits = await limitsFor(manager);
   const codex = await codexFor(manager);
+  const gem = await geminiCliFor(manager);
   const known = limits.five !== null || limits.week !== null;
   // Claude's plan low or very low (modes.ts, 0.11: 70% used, or running out before it resets at this week's pace): more
   // parts go out. Another app's plan (Codex): near its limit, 85%.
@@ -691,11 +701,11 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
   // A reading part with no files named reads what an earlier part finds (a search's sources): its size is a guess.
   const guessed = (p: Split) => p.kind === "read" && p.size !== "none" && reading(p, input.files).named === 0;
   const mark = (x: Part, p: Split): Part => (guessed(p) ? { ...x, guess: true } : x);
-  for (const p of parts) placed.push(mark(await place(p, input.files, near, manager, input.signal, codex.ok, !!input.private, lv.level), p));
+  for (const p of parts) placed.push(mark(await place(p, input.files, near, manager, input.signal, codex.ok, !!input.private, lv.level, gem.ok), p));
   // A part that waits for one of yours is handed over by your app once yours are done, with delegate,
   // which cannot run it on Codex: such a part is placed as if Codex were off.
   const later = afterYours(placed);
-  for (let i = 0; i < placed.length; i++) if (placed[i].where === "codex" && later.has(placed[i].n)) placed[i] = mark(await place(parts[i], input.files, near, manager, input.signal, false, !!input.private, lv.level), parts[i]);
+  for (let i = 0; i < placed.length; i++) if ((placed[i].where === "codex" || placed[i].where === "gemini") && later.has(placed[i].n)) placed[i] = mark(await place(parts[i], input.files, near, manager, input.signal, false, !!input.private, lv.level, false), parts[i]);
   const out = placed.filter((p) => p.where !== "you");
   const costs = out.map((p) => p.cost);
   const time = chains(placed);
@@ -719,7 +729,7 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
   const folder = input.folder ?? null;
   if (folder && input.checks?.length) setChecks(folder, input.checks);
   const checks = checksFor(folder);
-  const base = { task: input.task, manager, parts: placed, totals, split, limits: known ? limits : null, local, codex: codex.why, ...(input.private ? { private: true } : {}), you, level: lv.level, folder, checks };
+  const base = { task: input.task, manager, parts: placed, totals, split, limits: known ? limits : null, local, codex: codex.why, ...(gem.why ? { gemini: gem.why } : {}), ...(input.private ? { private: true } : {}), you, level: lv.level, folder, checks };
   const result: PlanResult = { id: randomId(), ...base, table: tableOf(base), next: `${nextOf(base)}${ownSplit ? ` ${OWN_SPLIT}` : ""}` };
   keep(result, new Map(input.files.filter((f) => f.path).map((f) => [f.name, { path: f.path!, size: f.size }])));
   return result;
@@ -952,10 +962,21 @@ export const PATCH_ASK = "Draft this change as a patch: a unified diff, as git d
 async function runPart(p0: Part, plan: PlanResult, at: (n: number) => RunPart, signal: AbortSignal, yes: boolean): Promise<Partial<RunPart>> {
   // Sent out again (the loop): one tier up, another model, what was wrong said; on Leanfare's models, not Codex.
   const again = redoOf(plan.id, p0.n);
-  const p: Part = again ? { ...p0, effort: again.effort, model: p0.kind === "search" ? p0.model : null, where: p0.where === "codex" ? "free" : p0.where, task: p0.task + again.note } : p0;
+  const p: Part = again ? { ...p0, effort: again.effort, model: p0.kind === "search" ? p0.model : null, where: p0.where === "codex" || p0.where === "gemini" ? "free" : p0.where, task: p0.task + again.note } : p0;
   const before = p.needs.map((n) => { const x = at(n); return `Part ${n} (${x.title}):\n${(x.answer ?? "").slice(0, HANDED)}`; });
   const context = p.task.includes(CONTEXT) ? "" : `\n\n${CONTEXT} ${plan.task.slice(0, 4000)}`; // a part split by rules carries it already
   const task = `${p.patch ? `${PATCH_ASK}\n\n` : ""}${p.task}${before.length ? `\n\nWhat the earlier parts found:\n\n${before.join("\n\n")}` : ""}${context}`;
+  if (p.where === "gemini") {
+    const ok = await geminiCliFor(plan.manager);
+    if (!ok.ok) throw Object.assign(new UserError(409, `This part was to run on Gemini CLI, but ${ok.why ?? "Gemini CLI is off in Settings now"}. Make the plan again to place it elsewhere.`, "gemini_off"), { spent: 0 });
+    const known = wherePaths.get(plan.id) ?? new Map();
+    const paths = p.files.map((n) => known.get(n)?.path).filter((x): x is string => !!x);
+    const folder = commonFolder(paths);
+    const r = await runGeminiCli({ n: p.n, title: p.title, task, folder, files: folder ? paths.map((x) => relative(folder, x)) : paths }, signal, { light: ok.own });
+    const bytes = p.files.reduce((n, f) => n + (known.get(f)?.size ?? 0), 0);
+    notePart({ kind: p.patch ? "write" : p.kind, effort: p.effort, model: GEMINI_CLI_ID, cost: 0, files: paths.length, fileTokens: Math.ceil(bytes / 4), task, answer: r.answer, plan: `${plan.id}:${p.n}`, ...appOf(plan), ms: Math.round(r.seconds * 1000) });
+    return { status: "done", answer: r.answer, receipt: `${GEMINI_CLI_LABEL}${r.model ? ` (${r.model})` : ""}, read only, ${secondsText(r.seconds)}. It counts in your Google account's Gemini CLI allowance; nothing to pay here.`, model: GEMINI_CLI_LABEL, modelId: GEMINI_CLI_ID, cost: 0, seconds: r.seconds };
+  }
   if (p.where === "codex") {
     if (!platformOn("chatgpt")) throw Object.assign(new UserError(409, "This part was to run on Codex, but ChatGPT is turned off for plans now (Settings, Where Leanfare may send work). Make the plan again to place it elsewhere.", "codex_off"), { spent: 0 });
     // The switch in Settings and the ChatGPT plan's limits hold when the part runs, not only when the plan was made.
@@ -965,7 +986,7 @@ async function runPart(p0: Part, plan: PlanResult, at: (n: number) => RunPart, s
     const known = wherePaths.get(plan.id) ?? new Map();
     const paths = p.files.map((n) => known.get(n)?.path).filter((x): x is string => !!x);
     const folder = commonFolder(paths);
-    const r = await runCodex({ n: p.n, title: p.title, task, folder, files: folder ? paths.map((x) => relative(folder, x)) : paths, effort: p.effort, search: p.kind === "search" }, signal);
+    const r = await runCodex({ n: p.n, title: p.title, task, folder, files: folder ? paths.map((x) => relative(folder, x)) : paths, effort: p.effort, search: p.kind === "search", ...(ok.own ? { light: true } : {}) }, signal);
     const bytes = p.files.reduce((n, f) => n + (known.get(f)?.size ?? 0), 0);
     notePart({ kind: p.patch ? "write" : p.kind, effort: p.effort, model: CODEX_ID, cost: 0, files: paths.length, fileTokens: Math.ceil(bytes / 4), task, answer: r.answer, plan: `${plan.id}:${p.n}`, ...appOf(plan), ms: Math.round(r.seconds * 1000) });
     return { status: "done", answer: r.answer, receipt: `${CODEX_LABEL}, read only, ${secondsText(r.seconds)}. It counts in your ChatGPT plan's Codex use; nothing to pay here.${r.note ? ` ${r.note}` : ""}`, model: CODEX_LABEL, modelId: CODEX_ID, cost: 0, seconds: r.seconds };
