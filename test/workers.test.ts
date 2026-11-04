@@ -123,14 +123,14 @@ describe("Codex and Gemini CLI plan by themselves", () => {
     expect(readFileSync(join(process.env.HOME!, ".gemini", "GEMINI.md"), "utf8")).toContain(START);
     expect(setAuto("codex", false).on).toBe(false);
     expect(readFileSync(join(process.env.CODEX_HOME!, "AGENTS.md"), "utf8")).toBe("");
-    expect(() => setAuto("cursor", true)).toThrow("cannot plan by itself");
+    expect(() => setAuto("nowhere", true)).toThrow("cannot plan by itself");
   });
 
   test("the screen's address: In your apps shows it per app and turns it on and off", async () => {
     const r = await ui(url, "/api/apps", { id: "codex", auto: true });
     expect(r.status).toBe(200);
     expect(r.json.apps.find((a: any) => a.id === "codex").auto).toMatchObject({ on: true });
-    expect(r.json.apps.find((a: any) => a.id === "cursor").auto).toBeNull();
+    expect(r.json.apps.find((a: any) => a.id === "cursor").auto).toMatchObject({ on: false }); // 0.14.1: Cursor's hooks
     const off = await ui(url, "/api/apps", { id: "codex", auto: false });
     expect(off.json.apps.find((a: any) => a.id === "codex").auto.on).toBe(false);
   });

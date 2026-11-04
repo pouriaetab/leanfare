@@ -6,7 +6,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BIG, readReminder, readsFile, remindersLately } from "../src/readhook";
-import { END, START, autoView, hookCommand, readHookCommand, refreshAuto, setAuto } from "../src/workers";
+import { END, START, autoView, hookCommand, readHookCommand, refreshAuto, setAuto, firstHookCommand } from "../src/workers";
+import { FIRST_MATCHER } from "../src/firsthook";
 import { setSwitch } from "../src/switch";
 import { boot, reset } from "./app";
 
@@ -73,7 +74,8 @@ describe("Plan by itself in Claude Code", () => {
     expect(v.on).toBe(true);
     const j = JSON.parse(readFileSync(settingsFile, "utf8"));
     expect(j.hooks.UserPromptSubmit).toEqual([{ hooks: [{ type: "command", command: hookCommand(), timeout: 5 }] }]);
-    expect(j.hooks.PreToolUse).toEqual([{ matcher: "Read", hooks: [{ type: "command", command: readHookCommand(), timeout: 5 }] }]);
+    expect(j.hooks.PreToolUse).toEqual([{ matcher: "Read", hooks: [{ type: "command", command: readHookCommand(), timeout: 5 }] },
+      { matcher: FIRST_MATCHER, hooks: [{ type: "command", command: firstHookCommand(), timeout: 5 }] }]); // 0.14.1: plan first
     const md = readFileSync(join(claudeDir(), "CLAUDE.md"), "utf8");
     expect(md).toContain("Before you read a file you will not change that is big (a log, data, docs or notes of about 40 KB or more, any other file over about 200 KB)");
     expect(setAuto("claude-code", false).on).toBe(false);
