@@ -41,7 +41,7 @@ import { notNowWhy } from "./allowance";
 import { FREE_LIST, afterFreeKey, freeView } from "./freelist";
 import { LASTING, hideNotice, keepKeysFresh, keyChanged, keyNotices, keyState, keyUnusable, noCredit, providerAway, recheckKey } from "./keystate";
 import { TASK_OF, shareView } from "./share";
-import { checkPlan, gradePart, keptPlan, makePlan, nextStarted, recordChecks, runView, startRun, stopAllRuns, stopRun, tookAnswers } from "./planner";
+import { checkPlan, gradePart, keptPlan, makePlan, nextStarted, recordChecks, runView, sendAgain, startRun, stopAllRuns, stopRun, tookAnswers, yoursDone } from "./planner";
 import { allChecks, removeChecks } from "./checks";
 import { setAuto } from "./workers";
 import { setUp, setupView } from "./setup";
@@ -623,7 +623,15 @@ async function api(req: Request, url: URL): Promise<Response> {
     };
     if (typeof b.id === "string" && Number.isInteger(b.part)) {
       const g = gradePart(b.id, b.part, b.verdict, source);
-      return json(fix && !(g as any).error ? { ...g, fix: await fixed(planRow(b.id, b.part)) } : g);
+      // The loop (0.14): a part graded partly or wrong by the app goes out again within the plan, one step up (at level
+      // 4 and up by itself; below, with fix leanfare), unless the app fixed it itself.
+      const level = keptPlan(b.id)?.level ?? 2;
+      if (b.verdict !== "good" && fix !== "myself" && (fix === "leanfare" || (source === "manager" && level >= 4))) {
+        if (!switchedOn()) return json({ ...g, again: { error: "Leanfare is switched off, so it did not send the part out again. Fix it yourself." } });
+        return json({ ...g, again: sendAgain(b.id, b.part, b.verdict, typeof b.why === "string" ? b.why : null) });
+      }
+      if (fix === "myself") { const row = planRow(b.id, b.part); if (row !== null) markFixed(row, "myself"); }
+      return json(g);
     }
     // A hand off named only by its number: its model and kind from its row.
     if (Number.isInteger(b.handoff) && typeof b.model !== "string") {
@@ -868,6 +876,8 @@ async function api(req: Request, url: URL): Promise<Response> {
   if (p === "/api/plan/stop" && m === "POST") { const b = await readBody(req); const v = stopRun(String(b?.id ?? "")); return v ? json(v) : fail(404, "No run of that plan."); }
   // The project's checks (checks.ts, 0.14): what the app reported once a plan's parts were back; every project's list;
   // one project's list taken away (Settings, Project checks).
+  // The app's own parts, done (0.14): the parts that waited for them run now.
+  if (p === "/api/plan/yours" && m === "POST") { if (offForApps(req)) return fail(409, OFF_TEXT); const b = await readBody(req); if (!Array.isArray(b?.done) || !b.done.length || b.done.some((x: any) => !Number.isInteger(x?.part))) return fail(400, "done is a list of your parts: each with its number (part) and what the next parts need from it (answer)."); return json({ ...yoursDone(String(b?.id ?? ""), b.done, typeof b?.label === "string" ? b.label.slice(0, 60) : null), whoWrote: settings().whoWrote, review: settings().review }); }
   if (p === "/api/plan/checks" && m === "POST") { const b = await readBody(req); return json({ checked: recordChecks(String(b?.id ?? ""), b) }); }
   if (p === "/api/checks" && m === "GET") return json({ projects: allChecks() });
   if (p === "/api/checks" && m === "DELETE") { const folder = url.searchParams.get("folder") ?? ""; return removeChecks(folder) ? json({ ok: true, projects: allChecks() }) : fail(404, "No checks for that folder."); }

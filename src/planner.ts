@@ -92,13 +92,14 @@ export interface Part {
   patch?: boolean; // 0.14: a change to the project drafted outside as a patch, at level 4 and up; the app reads it and applies it
 }
 type Split = Omit<Part, "where" | "model" | "use" | "seconds" | "tokens" | "cost" | "why" | "risk" | "guess">;
+export type GivenPart = Split; // a part of the app's own split (0.14)
 export interface PlanResult {
   id: string; // kept here (the last 20), so it can run
   task: string;
   manager: string; // the app the person works in, as said ("Claude Code"), or "you"
   parts: Part[];
   totals: { parts: number; out: number; later: number; kept: number; used: number; seconds: number | null; after: number | null; cost: number | null; guessed?: boolean }; // later: Leanfare's parts that wait for yours; seconds: the time of the others, after: of the ones after yours; guessed: a size is a guess
-  split: { by: "model" | "rules"; model: { id: string; label: string } | null; cost: number | null; note: string | null };
+  split: { by: "model" | "rules" | "you"; model: { id: string; label: string } | null; cost: number | null; note: string | null }; // you: the app's own split (0.14)
   limits: { five: number | null; week: number | null } | null; // the person's plan windows, when known (percent used)
   local?: { name: string; size: number; like: string; rating: number; fit: string } | null; // a local model to download that would run reading and drafting free
   codex?: string | null; // why Codex took no part, when it is turned on in Settings and could not
@@ -500,6 +501,8 @@ export function tableOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
   ].join("\n");
 }
 
+// At level 4 the split is the app's (0.14): said in the next steps of a plan Leanfare split.
+export const OWN_SPLIT = "At level 4 your own split comes first: next time give plan your parts (title, kind, effort, needs, files, task), and Leanfare places each.";
 // A project with no checks yet (0.14): set once, they go with every plan made in its folder.
 export const NO_CHECKS = "This project has no checks yet: give plan a short list in checks once (the command that runs its tests, a scan, words to keep out, what to look at); Leanfare keeps it for this folder and shows it with every plan here.";
 // A local model that would take the reading and drafting free: to download, on a yes.
@@ -548,7 +551,7 @@ function nextOf(r: Omit<PlanResult, "table" | "next" | "id">, started: Set<numbe
 
 // ---- the plan ------------------------------------------------------------------------------------
 
-export interface PlanInput { task: string; files: PlanFile[]; manager: string | null; split?: "auto" | "rules"; private?: boolean; yourModel?: string | null; level?: Level; folder?: string | null; checks?: Check[]; signal: AbortSignal }
+export interface PlanInput { task: string; files: PlanFile[]; manager: string | null; split?: "auto" | "rules"; private?: boolean; yourModel?: string | null; level?: Level; folder?: string | null; checks?: Check[]; parts?: GivenPart[]; signal: AbortSignal }
 
 // The name of a model an app says it runs on: the price list's when it has the model, else made from the id
 // (claude-opus-5-5: Claude Opus 5.5; gpt-5.4: GPT-5.4; a date at the end is dropped).
@@ -607,6 +610,14 @@ export function checkPlan(b: any, trusted = false): Omit<PlanInput, "signal"> | 
   // 0.14: the project's folder (the door gives the one it works in) and, once per project, its checks.
   if (b.folder !== undefined && b.folder !== null && (typeof b.folder !== "string" || !FULL_PATH.test(b.folder.trim()) || b.folder.length > 1000)) return "folder must be the project's full path.";
   const folder = typeof b.folder === "string" && b.folder.trim() ? b.folder.trim() : null;
+  // 0.14: the app's own split (his levels: at 1 to 4 the app's model makes it; at 5 Leanfare's does).
+  let parts: GivenPart[] | undefined;
+  if (b.parts !== undefined && b.parts !== null) {
+    if (!Array.isArray(b.parts) || !b.parts.length || b.parts.length > MAX_PARTS) return `parts must be a list of 1 to ${MAX_PARTS} parts, each with a title, a kind (read, write, reason, code, search or act), an effort, the parts it needs, its files and its task.`;
+    const got = readSplit(JSON.stringify({ parts: b.parts }), files.map((f) => f.name));
+    if (!got) return "parts must each have a title or a task.";
+    parts = got;
+  }
   let checks: Check[] | undefined;
   if (b.checks !== undefined && b.checks !== null) {
     const got = parseChecks(b.checks);
@@ -614,7 +625,7 @@ export function checkPlan(b: any, trusted = false): Omit<PlanInput, "signal"> | 
     if (!folder) return "checks are kept for a project's folder: give plan the folder too.";
     checks = got;
   }
-  return { task: b.task.trim(), files, manager, split, ...(b.private ? { private: true } : {}), ...(yourModel ? { yourModel } : {}), ...(isLevel(b.level) ? { level: b.level } : {}), ...(folder ? { folder } : {}), ...(checks ? { checks } : {}) };
+  return { task: b.task.trim(), files, manager, split, ...(b.private ? { private: true } : {}), ...(yourModel ? { yourModel } : {}), ...(isLevel(b.level) ? { level: b.level } : {}), ...(folder ? { folder } : {}), ...(checks ? { checks } : {}), ...(parts ? { parts } : {}) };
 }
 
 // The plan whose limits count: Codex spends a ChatGPT plan, the others a Claude plan when they are Claude's.
@@ -629,9 +640,15 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
   const shown = splitView(input.files);
   let parts: Split[] | null = null;
   const split: PlanResult["split"] = { by: "rules", model: null, cost: null, note: null };
-  const tiny = isTiny(input.task, input.files);
+  // The level decides who splits (0.14): at 1 to 4 the app's own split comes first, when it gives one; at 5 Leanfare's
+  // model makes it.
+  const mode0 = CLAUDE_APPS.test(manager) || /^you$/i.test(manager) ? planMode() : null;
+  const level0 = levelFor(settings(), manager === "you" ? null : manager, input.level ?? null, mode0).level;
+  if (input.parts?.length && level0 < 5) { parts = input.parts; split.by = "you"; }
+  const aside = !parts && input.parts?.length ? "At level 5 Leanfare makes the split, so the parts you gave were set aside." : null;
+  const tiny = !parts && isTiny(input.task, input.files);
   if (tiny) parts = [{ n: 1, title: "Answer it", kind: "write", effort: "low", needs: [], size: "none", files: [], task: input.task.trim(), keep: true }];
-  if (input.split !== "rules" && !tiny) {
+  if (input.split !== "rules" && !tiny && !parts) {
     const fileList = shown.length ? `\n\nFiles (${input.files.length.toLocaleString("en-US")}${shown.length < input.files.length ? `, shown by folder` : ""}):\n${shown.map((f) => `- ${f.name} (${tokText(Math.ceil(f.size / 4))} tokens)`).join("\n")}` : "";
     const ask: Msg[] = [{ role: "user", content: `The task: ${input.task}${fileList}\n\nThe person works in ${manager === "you" ? "their own AI app" : manager}.` }];
     const wait = splitSeconds();
@@ -652,7 +669,10 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
       else split.note = `${split.model?.label ?? "The model"}'s answer did not read as parts, so Leanfare split it by rules.`;
     } else split.note = `No model could split it (${String(r.meta?.error ?? "it failed").replace(/\.$/, "")}), so Leanfare split it by rules.`;
   }
+  if (aside) split.note = [aside, split.note].filter(Boolean).join(" ");
   parts = expand(parts ?? rulesSplit(input.task, shown), shown).map((p) => ({ ...p, files: byRelevance(p.files, `${input.task} ${p.task}`) }));
+  // Split by Leanfare at 4: the next plan can carry the app's own (said once in the next steps).
+  const ownSplit = split.by !== "you" && level0 === 4 && !tiny;
 
   const limits = await limitsFor(manager);
   const codex = await codexFor(manager);
@@ -700,7 +720,7 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
   if (folder && input.checks?.length) setChecks(folder, input.checks);
   const checks = checksFor(folder);
   const base = { task: input.task, manager, parts: placed, totals, split, limits: known ? limits : null, local, codex: codex.why, ...(input.private ? { private: true } : {}), you, level: lv.level, folder, checks };
-  const result: PlanResult = { id: randomId(), ...base, table: tableOf(base), next: nextOf(base) };
+  const result: PlanResult = { id: randomId(), ...base, table: tableOf(base), next: `${nextOf(base)}${ownSplit ? ` ${OWN_SPLIT}` : ""}` };
   keep(result, new Map(input.files.filter((f) => f.path).map((f) => [f.name, { path: f.path!, size: f.size }])));
   return result;
 }
@@ -717,7 +737,7 @@ const appOf = (plan: PlanResult) => ({ app: plan.manager === "you" ? null : plan
 
 // after_yours: it waits for one of the person's parts (directly or through others), so it is theirs to hand over once theirs is done.
 export type RunStatus = "waiting" | "running" | "done" | "failed" | "stopped" | "yours" | "after_yours" | "blocked" | "asks";
-export interface RunPart { n: number; title: string; status: RunStatus; answer: string | null; receipt: string | null; model: string | null; modelId?: string | null; cost: number | null; seconds: number | null; error: string | null; verdict?: Verdict | null; gradedBy?: "you" | "manager" | null; took?: boolean; words?: string[] } // took: the app has had its answer (plan or plan_status); words: the project's words checks it fails (0.14)
+export interface RunPart { n: number; title: string; status: RunStatus; answer: string | null; receipt: string | null; model: string | null; modelId?: string | null; cost: number | null; seconds: number | null; error: string | null; verdict?: Verdict | null; gradedBy?: "you" | "manager" | null; took?: boolean; words?: string[]; round?: number; mine?: boolean; note?: string | null } // took: the app has had its answer (plan or plan_status); words: the project's words checks it fails; round: its try, once sent out again (the loop); mine: done by the app (0.14)
 export interface RunView { id: string; started: string; running: boolean; parts: RunPart[]; cost: number | null; asks: { parts: number[]; estimate: number | null; cap: number } | null; checks?: Check[]; checked?: CheckResult | null } // checks: the project's (0.14); checked: what the app reported
 
 // What a plan's paid parts would cost.
@@ -733,7 +753,7 @@ const wherePaths = new Map<string, Map<string, { path: string; size: number }>>(
 // grades: part n -> its grade's row, so grading a part again replaces its grade
 const runs = new Map<string, { view: RunView; ac: AbortController; tick: () => void; yes: { on: boolean }; grades: Map<number, number> }>();
 export const keptPlan = (id: string) => kept.get(id) ?? null;
-export const forgetPlans = () => { for (const r of runs.values()) r.ac.abort(); kept.clear(); runs.clear(); wherePaths.clear(); checkedLater.clear(); };
+export const forgetPlans = () => { for (const r of runs.values()) r.ac.abort(); kept.clear(); runs.clear(); wherePaths.clear(); checkedLater.clear(); redos.clear(); gaveUp.clear(); };
 const HANDED = 20_000; // characters of an earlier part's answer handed on
 const running = (id: string) => !!runs.get(id)?.view.running;
 
@@ -782,7 +802,7 @@ export function startRun(id: string, opts: { paid?: boolean } = {}): RunView {
   const yes = { on: !!opts.paid };
   const cap = settings().planAuto;
   const view: RunView = { id, started: now().toISOString(), running: true, cost: 0, asks: null, checks: plan.checks ?? [], checked: had?.view.checked ?? null,
-    parts: plan.parts.map((p) => before.get(p.n) ?? ({ n: p.n, title: p.title, status: p.where === "you" ? "yours" : "waiting", answer: null, receipt: null, model: null, cost: null, seconds: null, error: null })) };
+    parts: plan.parts.map((p) => before.get(p.n) ?? ({ n: p.n, title: p.title, status: p.where === "you" || gaveUp.has(`${id}:${p.n}`) ? "yours" : "waiting", answer: null, receipt: null, model: null, cost: null, seconds: null, error: null, ...(redoOf(id, p.n) ? { round: redoOf(id, p.n)!.round } : {}) })) };
   const ac = new AbortController();
   const at = (n: number) => view.parts.find((x) => x.n === n)!;
   const partOf = (n: number) => plan.parts.find((x) => x.n === n)!;
@@ -841,6 +861,62 @@ export function startRun(id: string, opts: { paid?: boolean } = {}): RunView {
   return view;
 }
 
+// ---- the loop (0.14, his design: a part that comes back wrong goes out again, one step up, until it is right) --------
+// Graded partly or wrong by the app (at level 4 and up by itself, below with fix leanfare), a part Leanfare ran is sent
+// out again: one tier up in effort, to another model than the ones that answered it, with what was wrong. The last
+// round may go to a paid model (within your cap for paid work a hand off, and the monthly budget); missed in all three
+// rounds, the part is the app's. The app fixes small things itself (fix myself) instead.
+export const MAX_ROUNDS = 3;
+const UP_EFFORT: Record<Effort, Effort> = { low: "medium", medium: "high", high: "high" };
+interface Redo { round: number; effort: Effort; note: string; not: string[]; paid: boolean }
+const redos = new Map<string, Redo>(); // id:n
+const gaveUp = new Set<string>(); // id:n: missed in every round, now the app's
+const redoOf = (id: string, n: number) => redos.get(`${id}:${n}`) ?? null;
+export interface Again { part: number; round: number; status: RunStatus; effort: Effort | null; paid: boolean }
+export function sendAgain(id: string, n: number, verdict: Verdict, why: string | null): Again {
+  const plan = kept.get(id);
+  if (!plan) throw new UserError(404, "This plan is no longer in Leanfare (it was restarted, or 20 newer plans were made).", "plan_gone");
+  const p = plan.parts.find((x) => x.n === n);
+  const held = runs.get(id);
+  const r = held?.view.parts.find((x) => x.n === n);
+  if (!p || !r || !held) throw new UserError(404, `Part ${n} of this plan has not run in Leanfare.`, "no_part");
+  if (p.where === "you" || r.mine) throw new UserError(400, `Part ${n} is yours: fix it yourself.`, "yours");
+  const prev = redoOf(id, n);
+  const round = (prev?.round ?? 1) + 1;
+  if (round > MAX_ROUNDS) {
+    gaveUp.add(`${id}:${n}`);
+    Object.assign(r, { status: "yours", note: `Leanfare's models missed it in ${MAX_ROUNDS} rounds: it is yours now.` });
+    return { part: n, round: MAX_ROUNDS, status: "yours", effort: null, paid: false };
+  }
+  const said = (why ?? "").replace(/\s+/g, " ").trim().slice(0, 2000);
+  const effort = UP_EFFORT[prev?.effort ?? p.effort];
+  const not = [...new Set([...(prev?.not ?? []), ...(r.modelId ? [r.modelId] : [])])];
+  const paid = round >= MAX_ROUNDS;
+  redos.set(`${id}:${n}`, { round, effort, not, paid, note: `\n\nAn earlier answer to this part was graded ${verdict}${said ? `: ${said.replace(/[.!?]?$/, ".")}` : "."} Answer it again, and avoid that.` });
+  Object.assign(r, { status: "waiting", round, answer: null, receipt: null, model: null, modelId: null, cost: null, seconds: null, error: null, verdict: null, gradedBy: null, took: false, words: undefined, note: null });
+  if (held.view.running) held.tick(); else startRun(id, { paid: held.yes.on });
+  return { part: n, round, status: "waiting", effort, paid };
+}
+
+// The app's own parts, done (plan_run, yours_done; 0.14): kept as rows with what the next parts need, and the parts
+// that waited for them run now, with those answers in their tasks.
+export function yoursDone(id: string, list: { part: number; answer?: string | null }[], label: string | null): RunView {
+  const plan = kept.get(id);
+  if (!plan) throw new UserError(404, "This plan is no longer in Leanfare (it was restarted, or 20 newer plans were made). Make the plan again.", "plan_gone");
+  if (!runs.get(id)) startRun(id, {});
+  const held = runs.get(id)!;
+  for (const x of list) {
+    const p = plan.parts.find((q) => q.n === x.part), r = held.view.parts.find((q) => q.n === x.part);
+    if (!p || !r) throw new UserError(404, `Part ${x.part} is not in this plan.`, "no_part");
+    if (r.status !== "yours") throw new UserError(400, `Part ${x.part} is not yours (it is ${r.status}).`, "not_yours");
+    const said = typeof x.answer === "string" ? x.answer.trim().slice(0, HANDED) : "";
+    Object.assign(r, { status: "done", mine: true, answer: said || "(Done by the app.)", model: label ?? "your app", modelId: null, receipt: "Done by your app, in your plan.", cost: null, seconds: null, error: null });
+  }
+  for (const r of held.view.parts) if (r.status === "after_yours") r.status = "waiting";
+  if (held.view.running) held.tick(); else startRun(id, { paid: held.yes.on });
+  return runs.get(id)!.view;
+}
+
 // What the app reported of the project's checks once a plan's parts were back (grade, checks; 0.14).
 export function recordChecks(id: string, b: unknown): CheckResult {
   const plan = kept.get(id);
@@ -873,7 +949,10 @@ export function stopRun(id: string): RunView | null {
 
 // What a part drafted as a patch is asked first (0.14): a diff the app can read and apply, nothing applied.
 export const PATCH_ASK = "Draft this change as a patch: a unified diff, as git diff prints it, with paths relative to the project, against the files given. Change nothing else. After the diff, one line for each file on why. The app you work for reads the patch and applies it itself.";
-async function runPart(p: Part, plan: PlanResult, at: (n: number) => RunPart, signal: AbortSignal, yes: boolean): Promise<Partial<RunPart>> {
+async function runPart(p0: Part, plan: PlanResult, at: (n: number) => RunPart, signal: AbortSignal, yes: boolean): Promise<Partial<RunPart>> {
+  // Sent out again (the loop): one tier up, another model, what was wrong said; on Leanfare's models, not Codex.
+  const again = redoOf(plan.id, p0.n);
+  const p: Part = again ? { ...p0, effort: again.effort, model: p0.kind === "search" ? p0.model : null, where: p0.where === "codex" ? "free" : p0.where, task: p0.task + again.note } : p0;
   const before = p.needs.map((n) => { const x = at(n); return `Part ${n} (${x.title}):\n${(x.answer ?? "").slice(0, HANDED)}`; });
   const context = p.task.includes(CONTEXT) ? "" : `\n\n${CONTEXT} ${plan.task.slice(0, 4000)}`; // a part split by rules carries it already
   const task = `${p.patch ? `${PATCH_ASK}\n\n` : ""}${p.task}${before.length ? `\n\nWhat the earlier parts found:\n\n${before.join("\n\n")}` : ""}${context}`;
@@ -909,8 +988,10 @@ async function runPart(p: Part, plan: PlanResult, at: (n: number) => RunPart, si
   }
   if (mine.length && !files.length) throw Object.assign(new UserError(400, `None of its files could be handed over${skipped.length ? `: ${skipped.slice(0, 3).join("; ")}` : ""}.`, "plan_files"), { spent: 0 });
   // A free part stays on free models, its check too; a paid part within the cap goes unchecked (the estimate holds no check).
-  const free = p.where === "local" || p.where === "free";
-  const d = await runDelegate({ task, files, kind: DELEGATE_KIND[p.patch ? "write" : p.kind] ?? null, effort: p.effort, check: free || yes ? "auto" : "never", maxOut: DEFAULT_MAX_OUT, ...(free ? { only: isFree } : {}), ...(p.model ? { model: p.model.id } : {}), plan: `${plan.id}:${p.n}`, ...(plan.private ? { private: true } : {}), ...appOf(plan), ...(isLevel(plan.level) ? { level: plan.level } : {}) }, signal);
+  const free = (p.where === "local" || p.where === "free") && !again?.paid; // the last round may go to a paid model
+  const not = new Set(again?.not ?? []);
+  const only = free ? (m: Model) => isFree(m) && !not.has(m.id) : not.size ? (m: Model) => !not.has(m.id) : undefined;
+  const d = await runDelegate({ task, files, kind: DELEGATE_KIND[p.patch ? "write" : p.kind] ?? null, effort: p.effort, check: free || yes || again ? "auto" : "never", maxOut: DEFAULT_MAX_OUT, ...(only ? { only } : {}), ...(p.model ? { model: p.model.id } : {}), plan: `${plan.id}:${p.n}`, ...(plan.private ? { private: true } : {}), ...appOf(plan), ...(isLevel(plan.level) ? { level: plan.level } : {}) }, signal);
   const notes = [
     mine.length > files.length + skipped.length ? `Handed over ${files.length} of its ${mine.length} files (the most one hand off takes is ${DELEGATE_LIMITS.count} files, ${DELEGATE_LIMITS.total / 1048576} MB).` : "",
     skipped.length ? `Left out: ${skipped.slice(0, 3).join("; ")}${skipped.length > 3 ? `, and ${skipped.length - 3} more` : ""}.` : "",
