@@ -123,6 +123,9 @@ CREATE TABLE IF NOT EXISTS noquota(id INTEGER PRIMARY KEY, model TEXT NOT NULL, 
 CREATE INDEX IF NOT EXISTS noquota_model ON noquota(model);
 -- The apps that opened Leanfare's tools (silentapp.ts, 0.13.8): the app's name, when it first and last did, how often.
 CREATE TABLE IF NOT EXISTS doors(app TEXT PRIMARY KEY, first TEXT NOT NULL, last TEXT NOT NULL, opens INTEGER NOT NULL);
+-- Checks set once per project (checks.ts, 0.14): the folder, its list as JSON (the kind and the words of each check: a
+-- command to run, words to keep out, or something to look at), and when it was set.
+CREATE TABLE IF NOT EXISTS checks(folder TEXT PRIMARY KEY, list TEXT NOT NULL, set_at TEXT NOT NULL);
 `;
 
 // Columns added after 0.1: an older file gets them on its first start.

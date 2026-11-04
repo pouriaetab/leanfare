@@ -67,6 +67,7 @@ export const TOOLS = [
         your_model: { type: "string", description: "The model you run on, as your own instructions name it (for example claude-opus-5-5). Leanfare names it for the work that stays with you, and the report shows it as the prompt's main model." },
         level: { type: "integer", minimum: 1, maximum: 5, description: "The Leanfare level for this chat or session, as the level tool or Leanfare's prompt line gave it. Leave it out when none was given." },
         run: { type: "boolean", description: "false: only split the task; Leanfare runs nothing. By default Leanfare starts its parts at once." },
+        checks: { type: "array", items: { type: "string", maxLength: 300 }, minItems: 1, maxItems: 12, description: "Once per project: the short list of cheap checks its work must pass, kept for the folder and shown with every plan made there. Each a line: \"run: bun test\" (a command you run yourself at the end), \"words: utilize, leverage\" (words Leanfare keeps out of what comes back, checked by itself) or anything to look at (\"the Savings page fits one screen\"). Giving it again replaces the list. Needs the project's folder." },
       },
       required: ["task"],
       additionalProperties: false,
@@ -130,6 +131,7 @@ export const TOOLS = [
         fix: { type: "string", enum: ["myself", "leanfare"], description: "With partly or wrong. myself: you fixed it yourself before answering. leanfare: Leanfare asks again one tier up, with why, by another model, and returns the new answer." },
         why: { type: "string", maxLength: 2000, description: "With fix leanfare: what was wrong or missing, in a line or two. It goes to the model asked again, and is not kept." },
         whole: { type: "boolean", description: "true: grade the final result of the prompt you are on, your own work and Leanfare's parts together (once, at the end of a prompt that handed work off). Only the verdict is needed with it." },
+        checks: { type: "object", properties: { passed: { type: "array", items: { type: "integer", minimum: 1 } }, failed: { type: "array", items: { type: "integer", minimum: 1 } }, why: { type: "string", maxLength: 500 } }, additionalProperties: false, description: "With id: the project's checks you ran once the plan's parts were back, by their numbers in the plan (passed and failed), and why in a line for a failure." },
       },
       required: ["verdict"],
       additionalProperties: false,
@@ -467,11 +469,18 @@ export function planReview(v: any): string {
   return `Once you have used ${done.length === 1 ? "this answer" : "these answers"}, grade ${done.length === 1 ? "it" : "each"} with grade (good, partly or wrong, with the plan's id and the part): models graded below good too often are moved down.`;
 }
 // A run's parts as the tools give them; took: the app has had the answer, verdict: its grade.
-const runParts = (v: any) => v.parts.map((r: any) => ({ n: r.n, title: r.title, status: r.status, model: r.model, cost_usd: r.cost, seconds: r.seconds, answer: r.answer, receipt: r.receipt, error: r.error, took: !!r.took, verdict: r.verdict ?? null }));
+const runParts = (v: any) => v.parts.map((r: any) => ({ n: r.n, title: r.title, status: r.status, model: r.model, cost_usd: r.cost, seconds: r.seconds, answer: r.answer, receipt: r.receipt, error: r.error, took: !!r.took, verdict: r.verdict ?? null, ...(r.words?.length ? { words: r.words } : {}) }));
 // Nothing of Leanfare's left running in a run: every part is done, failed, stopped, waiting for a yes or for yours.
 const ENDED = new Set(["done", "failed", "stopped", "asks", "blocked", "yours", "after_yours"]);
 export const settled = (v: any) => !v.running || v.parts.every((r: any) => ENDED.has(r.status));
 export const PLAN_WAIT = 25; // seconds the plan tool waits for Leanfare's quick parts before answering (0.13)
+// The project's checks once Leanfare's parts have ended (0.14): what to run and how to report it, or what was reported.
+export function checksNext(v: any): string | null {
+  if (!v.checks?.length) return null;
+  if (v.checked) return `The project's checks: ${v.checked.passed.length} passed${v.checked.failed.length ? `, ${v.checked.failed.length} failed (${v.checked.failed.join(", ")})` : ""}.`;
+  if (!settled(v)) return null;
+  return `Once you have applied what came back, run the project's checks: ${v.checks.map((c: any) => `${c.n}. ${c.kind === "run" ? `run ${c.what}` : c.kind === "words" ? `none of these in the work: ${c.what}` : c.what}`).join("; ")}. Then report them with grade: the plan's id, whole true, and checks with the numbers that passed and failed.`;
+}
 export function statusText(v: any, saved: string | null): string {
   const rows = v.parts.map((r: any) => `| ${r.n} | ${String(r.title).replace(/\|/g, "/")} | ${STATUS[r.status] ?? r.status} | ${r.model ?? ""} | ${r.cost === null || r.cost === undefined ? "" : usd(r.cost)} |`);
   const done = v.parts.filter((r: any) => r.answer);
@@ -481,6 +490,9 @@ export function statusText(v: any, saved: string | null): string {
   const shown = (r: any) => (v.whoWrote ? markedBy(r.answer, r.model ?? "Leanfare") : r.answer);
   for (const r of done) lines.push("", `## Part ${r.n}: ${r.title}`, "", r.answer.length > SHOWN ? `${shown({ ...r, answer: r.answer.slice(0, SHOWN) })}\n\n(cut here: the whole answer is in ${saved ?? "Leanfare"}${saved ? `/part-${r.n}.md` : ""})` : shown(r), "", `(${r.receipt})`);
   for (const r of v.parts.filter((x: any) => x.error)) lines.push("", `Part ${r.n} failed: ${r.error}`);
+  for (const r of v.parts.filter((x: any) => x.words?.length)) lines.push("", `Part ${r.n} holds words the project's checks keep out: ${r.words.join(", ")}. Fix it, or grade it partly or wrong.`);
+  const cn = checksNext(v);
+  if (cn) lines.push("", cn);
   const review = planReview(v);
   if (review) lines.push("", review);
   if (saved) lines.push("", `Saved in ${saved}/ in the project.`);
@@ -602,9 +614,18 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
   }
   if (name === "grade") {
     if (!["good", "partly", "wrong"].includes(args?.verdict)) return failure("grade needs a verdict: good, partly or wrong.");
+    // The project's checks, run once the plan's parts were back (0.14): kept with the plan, then the grade as asked.
+    let checked = "";
+    if (args.checks !== undefined) {
+      if (typeof args.id !== "string" || !PLAN_ID.test(args.id)) return failure("checks go with the plan's id.");
+      const { j } = await call("/api/plan/checks", { method: "POST", json: { id: args.id, ...args.checks } }, signal);
+      const c = j.checked;
+      checked = `Checks kept: ${c.passed.length} passed${c.failed.length ? `, ${c.failed.length} failed (${c.failed.join(", ")})` : ""}. `;
+      if (args.whole !== true && !Number.isInteger(args.part)) return text(checked.trim(), { checked: c });
+    }
     if (args.whole === true) { // the prompt's whole result: kept with this app's last hand off, so the report shows it on that prompt
       const { j } = await call("/api/grades/together", { method: "POST", json: { verdict: args.verdict, app: ctx.client } }, signal);
-      return text(j.ok ? `Graded the whole result ${args.verdict}. The report shows it as the prompt's "together" grade.` : "No hand off from this app in the last 6 hours to keep that grade with.", j);
+      return text(`${checked}${j.ok ? `Graded the whole result ${args.verdict}. The report shows it as the prompt's "together" grade.` : "No hand off from this app in the last 6 hours to keep that grade with."}`, j);
     }
     const fix = args.fix === "myself" || args.fix === "leanfare" ? args.fix : null;
     if (args.fix !== undefined && !fix) return failure('fix is "myself" (you fixed it yourself) or "leanfare" (Leanfare asks again one tier up).');
@@ -686,14 +707,15 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
     if (args.peek !== true) v = await look(true); // the app has the answers now: the plan card says so
     const folder = sharedFolder(args.folder, ctx.cwd);
     const saved = folder ? writeShared(folder, args.id, sharedFiles(v)) : null;
-    return text(statusText(v, saved), { id: v.id, running: v.running, cost_usd: v.cost, asks: v.asks, saved_in: saved, review: planReview(v) || null, parts: runParts(v) });
+    return text(statusText(v, saved), { id: v.id, running: v.running, cost_usd: v.cost, asks: v.asks, saved_in: saved, review: planReview(v) || null, parts: runParts(v), checks: v.checks ?? [], checks_next: checksNext(v) });
   }
   if (name === "plan") {
     if (typeof args?.task !== "string" || !args.task.trim()) return failure("plan needs a task.");
     const files = sizesForPlan(args.files, args.folder, ctx.cwd);
     if (typeof files === "string") return failure(files);
     const t0 = Date.now();
-    const { j } = await call("/api/plan", { method: "POST", json: { task: args.task, files, manager: ctx.client, split: args.split === "rules" ? "rules" : "auto", ...(args.run !== false ? { run: true } : {}), ...(args.private === true ? { private: true } : {}), ...(isLevel(args.level) ? { level: args.level } : {}), ...(typeof args.your_model === "string" ? { your_model: args.your_model } : {}) } }, signal);
+    const project = sharedFolder(args.folder, ctx.cwd); // the project's checks are kept for it (0.14)
+    const { j } = await call("/api/plan", { method: "POST", json: { task: args.task, files, manager: ctx.client, split: args.split === "rules" ? "rules" : "auto", ...(args.run !== false ? { run: true } : {}), ...(args.private === true ? { private: true } : {}), ...(isLevel(args.level) ? { level: args.level } : {}), ...(typeof args.your_model === "string" ? { your_model: args.your_model } : {}), ...(project ? { folder: project } : {}), ...(args.checks !== undefined ? { checks: args.checks } : {}) } }, signal);
     const note = j.split?.note ? `\n\n(${j.split.note})` : j.split?.model ? `\n\n(Split by ${j.split.model.label}${typeof j.split.cost === "number" ? `, ${usd(j.split.cost)}` : ""}.)` : "";
     const folder = sharedFolder(args.folder, ctx.cwd);
     const saved = folder ? writeShared(folder, j.id, { "plan.md": `# Plan ${j.id}\n\n${args.task.trim()}\n\n${j.table}\n\n${j.next}\n` }) : null;
@@ -704,6 +726,8 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
         seconds: p.seconds, tokens: p.tokens, cost_usd: p.cost,
         files: p.files.slice(0, 50), more_files: Math.max(0, p.files.length - 50), task: p.task })),
       totals: j.totals, split: j.split, limits: j.limits, local: j.local ?? null, you: j.you ?? null,
+      checks: j.checks ?? [], // 0.14: the project's checks, and the next steps (apps such as Cowork read only this part)
+      next: j.next,
     };
     if (!j.run) {
       const runNote = j.totals.out - (j.totals.later ?? 0) > 0 ? `\n\nOr call plan_run with id ${j.id} to run Leanfare's parts in the background, then plan_status for their answers.${saved ? ` The plan is saved in ${saved}/plan.md.` : ""}` : "";
@@ -720,7 +744,7 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
     for (let s = 0; s < wait && !settled(v) && !signal.aborted; s++) { await Bun.sleep(1000); v = await look(); }
     v = await look(true);
     const savedRun = folder ? writeShared(folder, j.id, sharedFiles(v)) : null;
-    return text(`${j.table}\n\n${next}${note}\n\n${statusText(v, savedRun)}`, { ...shape, saved_in: savedRun ?? saved, review: planReview(v) || null, run: { running: v.running, cost_usd: v.cost, asks: v.asks, parts: runParts(v) } });
+    return text(`${j.table}\n\n${next}${note}\n\n${statusText(v, savedRun)}`, { ...shape, next, saved_in: savedRun ?? saved, review: planReview(v) || null, run: { running: v.running, cost_usd: v.cost, asks: v.asks, parts: runParts(v), checks_next: checksNext(v) } });
   }
   if (name === "ask") {
     if (typeof args?.prompt !== "string" || !args.prompt.trim()) return failure("ask needs a prompt.");

@@ -1012,3 +1012,12 @@ tr.wd td { background: var(--panel-2); }
 .prow .pinfo .note, .mode-line .note { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .mode-line { display: flex; gap: 8px; align-items: center; min-width: 0; }
 .mode-line .note { flex: 1 1 auto; }
+
+/* Project checks (0.14): one line a check, the folder on the title line. */
+.chk-proj { margin-top: 6px; }
+.chk-head { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.chk-folder { font-size: var(--fs-small); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.chk-list { margin: 4px 0 0; padding-left: 18px; font-size: var(--fs-small); }
+.chk-list li { display: flex; gap: 6px; align-items: center; min-width: 0; padding: 1px 0; }
+.chk-list .chip { padding: 0 6px; line-height: 16px; font-size: var(--fs-tiny); flex: none; }
+.chk-what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
