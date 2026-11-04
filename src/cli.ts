@@ -23,6 +23,8 @@ const HELP = `Leanfare ${VERSION}: every top AI model in one app on your own com
   leanfare            start it and open http://127.0.0.1:${PORT}
   leanfare stop       stop it
   leanfare status     is it running, where, and how old are its prices
+  leanfare service    always on: "leanfare service install" starts it with this computer and again if it stops
+                      (macOS and Linux); "remove" takes that away; "status" says if it is on
   leanfare mcp        Leanfare as an MCP server (stdio), for Claude Desktop and other MCP clients
   leanfare statusline the line for Claude Code's status line: your plan's 5 hour and weekly use (Settings adds it)
   leanfare hook prompt the line Claude Code's prompt hook adds: your plan's use, and that plan can split a task
@@ -349,4 +351,12 @@ else if (command === "apps") await apps();
 else if (command === "level") await level();
 else if (command === "meter") await meter();
 else if (command === "trial") await trial();
+else if (command === "service") {
+  const { installService, removeService, serviceStatus } = await import("./service");
+  const what = args[args.indexOf("service") + 1] ?? "status";
+  const r = what === "install" ? installService() : what === "remove" ? removeService() : what === "status" ? serviceStatus() : null;
+  if (!r) { console.error('leanfare service takes install, remove or status.'); process.exit(2); }
+  console.log(r.text);
+  process.exit(r.ok || what === "status" ? 0 : 1);
+}
 else { console.error(`Unknown command "${command}".\n\n${HELP}`); process.exit(2); }
