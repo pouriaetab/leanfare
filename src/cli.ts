@@ -336,7 +336,13 @@ else if (command === "hook") {
   // From the Leanfare plugin (plugin/scripts/leanfare.sh): quiet when the app's own hooks are in Claude Code's settings.
   if (process.env.LEANFARE_HOOK_FROM === "plugin") { const { appHooksOn } = await import("./workers"); if (appHooksOn()) process.exit(0); }
   try {
-    if (args.includes("read")) { const { runReadHook } = await import("./readhook"); await runReadHook(); }
+    // 0.14.1: the plan first reminder, and the prompt line for apps other than Claude Code (--app codex, gemini-cli, cursor).
+    const appArg = args[args.indexOf("--app") + 1];
+    const { isHookApp } = await import("./firsthook");
+    const hookApp = args.includes("--app") && isHookApp(appArg) ? appArg : "claude-code";
+    if (args.includes("first")) { const { runFirstHook } = await import("./firsthook"); await runFirstHook(hookApp); }
+    else if (args.includes("prompt") && hookApp !== "claude-code") { const { runPromptHook } = await import("./firsthook"); await runPromptHook(hookApp); }
+    else if (args.includes("read")) { const { runReadHook } = await import("./readhook"); await runReadHook(); }
     else if (args.includes("handoff")) { const { runHandoffHook } = await import("./reviewhook"); await runHandoffHook(); }
     else if (args.includes("stop")) { const { runStopHook } = await import("./reviewhook"); await runStopHook(); }
     else if (args.includes("prompt")) { // the JSON Claude Code sends: only its session_id is read (statusline.ts)

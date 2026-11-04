@@ -21,7 +21,7 @@ test("the manifest: a name of our own, the app's version, a licence, and nothing
   expect(m.version).toBe(JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version); // raised with every release
   expect(m.description.length).toBeGreaterThan(40);
   const market = JSON.parse(readFileSync(join(ROOT, ".claude-plugin/marketplace.json"), "utf8"));
-  expect(market.plugins).toEqual([expect.objectContaining({ name: "leanfare", source: "./plugin" })]);
+  expect(market.plugins).toEqual([expect.objectContaining({ name: "leanfare", source: "./plugin" }), expect.objectContaining({ name: "leanfare-level", source: "./mods/leanfare-level" })]); // 0.14.1: the Cowork mod
   expect(market.metadata.description.length).toBeGreaterThan(40); // the directory asks for one
   // A privacy policy the directory finds (0.13.2): PRIVACY.md in the repository, from plugin.json and from the README.
   expect(m.privacyPolicyUrl).toBe("https://github.com/pouriaetab/leanfare/blob/main/PRIVACY.md");
@@ -29,14 +29,14 @@ test("the manifest: a name of our own, the app's version, a licence, and nothing
   expect(readFileSync(join(P, "README.md"), "utf8")).toContain("[Privacy policy](https://github.com/pouriaetab/leanfare/blob/main/PRIVACY.md)");
 });
 
-test("the MCP server and the hooks run the launcher inside the plugin; the hooks are the app's own four", () => {
+test("the MCP server and the hooks run the launcher inside the plugin; the hooks are the app's own five", () => {
   // sh runs the launcher, so it works where an install loses the file's run bit
   expect(json(".mcp.json")).toEqual({ mcpServers: { leanfare: { command: "sh", args: ["${CLAUDE_PLUGIN_ROOT}/scripts/leanfare.sh", "mcp"] } } });
   const hooks = json("hooks/hooks.json").hooks;
-  expect(Object.keys(hooks).sort()).toEqual(CLAUDE_HOOKS.map((h) => h.event).sort());
+  const groups = Object.entries(hooks).flatMap(([event, list]: [string, any]) => list.map((g: any) => ({ event, matcher: g.matcher ?? null, hooks: g.hooks })));
+  expect(groups.map((g) => g.event).sort()).toEqual(CLAUDE_HOOKS.map((h) => h.event).sort());
   for (const h of CLAUDE_HOOKS) {
-    const [group] = hooks[h.event];
-    expect(group.matcher ?? null).toBe(h.matcher);
+    const group = groups.find((g) => g.event === h.event && g.matcher === h.matcher)!;
     expect(group.hooks).toEqual([{ type: "command", command: `sh "\${CLAUDE_PLUGIN_ROOT}/scripts/leanfare.sh" hook ${h.what}`, timeout: h.timeout }]);
   }
   expect((statSync(join(P, "scripts/leanfare.sh")).mode & 0o111) !== 0).toBe(true);

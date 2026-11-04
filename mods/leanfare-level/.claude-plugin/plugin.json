@@ -1,0 +1,8 @@
+{
+  "name": "leanfare-level",
+  "version": "0.14.1",
+  "description": "Leanfare's level in every Cowork and Claude Desktop chat: the level in the system prompt, and at levels 4 and 5 a reminder to plan with Leanfare first.",
+  "author": { "name": "pouriaetab" },
+  "homepage": "https://github.com/pouriaetab/leanfare",
+  "license": "MIT"
+}
