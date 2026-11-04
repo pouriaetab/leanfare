@@ -34,6 +34,7 @@ export const paths = {
   pid: join(DATA_DIR, "leanfare.pid"),
   token: join(DATA_DIR, "control.token"),
   off: join(DATA_DIR, "off"), // there while Leanfare is switched off (switch.ts): its tools in your apps hand nothing over
+  startLog: join(DATA_DIR, "start.log"), // 0.14.1: what a Leanfare an app's door started said, so a failed start says why
 };
 
 // Built-in providers, the model apps Leanfare finds running on this computer, and providers

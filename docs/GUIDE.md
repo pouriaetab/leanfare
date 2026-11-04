@@ -93,6 +93,14 @@ Run `bun link` once to have the `leanfare` command everywhere.
 
 **The Mac app.** With Apple's Command Line Tools (`xcode-select --install`) and Bun, from the same folder: `bash mac/build.sh --install`. Today's spend is in the menu bar, and Open Leanfare shows the chat.
 
+### Always on
+
+Your apps reach Leanfare only while it runs, so it can start with your computer and come back if it stops:
+
+1. **The Mac app:** Open at Login is on from 0.14.1 (its menu turns it off), and when Leanfare stops by itself the app starts it again, up to 3 times in 10 minutes.
+2. **Without the app** (macOS or Linux): `leanfare service install` adds a LaunchAgent (macOS) or a systemd user unit (Linux) that starts Leanfare at login and again after a crash, never after `leanfare stop`. `leanfare service status` says if it is on; `leanfare service remove` takes it away. Windows: not yet.
+3. **When an app finds it off,** its door starts Leanfare and waits up to 20 seconds. A start that fails says what Leanfare said (it keeps that in `~/.leanfare/start.log`).
+
 ## Use it in your apps
 
 Settings, **In your apps**, lists the AI apps on this computer. **Add** puts Leanfare's tools in one; **Remove** takes them out. Leanfare changes only its own entry in each app's settings file, keeps a copy of the file as it was, and leaves a file it cannot read alone. In Terminal: `leanfare apps`, `leanfare apps add claude-desktop`, `leanfare apps remove cursor`.
