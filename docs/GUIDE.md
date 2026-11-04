@@ -175,6 +175,14 @@ Settings, **How much Leanfare takes first**, is a knob from 1 to 5, with what ea
 
 Each app can keep its own level (Claude Code; Claude Desktop and Cowork; Codex; Gemini CLI; Cursor), and one chat can have its own: say "Leanfare 4" in it. When your Claude plan runs low, the level goes up to 4 by itself, and to 5 when it is very low (a switch turns this off). The level changes the reminder before big reads, which parts of a plan go out, and how often a stronger model checks an answer (every answer at 4 and 5). The report shows quality by level. In Claude Code the prompt hook says the level with each prompt, with the reason (so your Claude plan lasts longer), the first step in plain words (at 4 and 5, Leanfare's plan tool is the first tool call) and the tools by name, since Claude Code may load an app's tools only when it looks for them.
 
+**Plan first, in every app that lets Leanfare in.** A line on the page is not enough: at level 4 Claude Code heard "make Leanfare's plan tool your first tool call" on 63 prompts in a week and called it on none. So at levels 4 and 5 the first tool call of a prompt that is not Leanfare's plan is turned back once, with the reason, and the next one goes through: one nudge a prompt, never a wall. A quick question uses no tool and meets nothing.
+
+1. **Claude Code:** a PreToolUse hook next to the read hook (Settings, In your apps, Plan by itself, or the Leanfare plugin).
+2. **Codex:** Plan by itself also writes `~/.codex/hooks.json`: the level with each prompt, and plan first before its first command. An older Codex reads hooks only with `codex_hooks = true` under `[features]` in its `config.toml`.
+3. **Gemini CLI:** the level with each prompt (BeforeAgent) and plan first (BeforeTool), in `~/.gemini/settings.json`.
+4. **Cursor:** plan first before its first command or tool (`~/.cursor/hooks.json`); Cursor has no hook that adds to a prompt.
+5. **Cowork and Claude Desktop:** the `leanfare-level` mod puts the level in the system prompt of every chat and asks for the plan first at 4 and 5. Install it once from this repository: `/plugin install leanfare-level --marketplace pouriaetab/leanfare`. Without it, the Leanfare skill is what tells a chat.
+
 **When Claude Code hands nothing off.** Claude Code's own files show its prompts, so when it runs 10 prompts or more in a week and hands nothing to Leanfare, a notice says why: Leanfare's line never reached it (turn Claude Code on in Settings, In your apps, or the Leanfare plugin in Claude Code), it heard the level but never opened Leanfare's tools (type `/mcp` in Claude Code to see), or it had both and still handed nothing off. For this, Leanfare notes each prompt its line reaches and each app that opens its tools: names and numbers only. The **×** hides the notice until what it says changes.
 
 ### Review every answer
