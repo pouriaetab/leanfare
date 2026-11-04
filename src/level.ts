@@ -88,8 +88,8 @@ export function levelAdvice(v: LevelView, where: "session" | "chat"): string {
     1: "Use Leanfare only when the user asks for it.",
     2: `Hand big reads you will not change (about 40 KB of logs or docs, 200 KB of anything else, or more than 5 files) to ${delegate}, and plan tasks with several parts with ${plan}.`,
     3: `Before you read a file over about 10 KB that you will not change, search the whole project, summarize, review or write a first draft, hand it to ${delegate} instead; for a task with several parts, use ${plan}. Keep decisions, changes to files and the final answer.`,
-    4: `Unless this prompt is a quick question, make ${plan} your first tool call and follow its table; hand reading, searching, summaries, reviews and drafts to Leanfare.`,
-    5: `Make ${plan} your first tool call for each prompt, and hand every part a model can do to Leanfare; keep only decisions, changes to files and your final answer, and tell the user before any big job.`,
+    4: `Unless this prompt is a quick question, make ${plan} your first tool call, with your own split in parts, and follow its table; hand reading, searching, summaries, reviews and drafts to Leanfare.`,
+    5: `Make ${plan} your first tool call for each prompt (Leanfare makes the split), and hand every part a model can do to Leanfare; keep only decisions, changes to files and your final answer, and tell the user before any big job.`,
   };
   return `${head}${why} ${what[v.level]}${tail}`;
 }

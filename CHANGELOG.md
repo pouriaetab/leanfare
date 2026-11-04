@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.14.0
+
+- Level 4 sends more out. Working things out below high effort goes to Leanfare's models like drafting does, and a change to files is drafted outside as a patch (a unified diff) that your app reads, applies and grades. At level 4 the hardest working out still stays with your app's strongest model; at 5 it goes out too. Free models take working things out at medium effort from level 4, where every answer is checked by a second model. Jobs you set by hand stay as you set them.
+- Claude Desktop and Cowork hear which of Claude's own models (Opus, Sonnet or Haiku) a part that stays should run on, as Claude Code does: Cowork can start a helper on that model; the Desktop app's chat does the part itself.
+- Checks set once per project: your app gives a plan a short list (the tests to run, a scan, words to keep out of what comes back, what to look at). Leanfare keeps it for the folder, shows it with every plan made there, scans each answer for the words itself, and your app reports the rest with grade. Settings, Jobs and plans, Project checks, lists them.
+- The loop: at levels 1 to 4 your app's own split comes first, and Leanfare places each part; at 5 Leanfare's model splits. A part your app grades partly or wrong goes out again inside the plan, one tier up, to another model, with what was wrong; the last of three rounds may go to a paid model within your caps, and a part missed in all three is your app's. Your app's own parts are rows: once done, the parts that waited for them run with their answers.
+- In Cowork, a plan's next steps and checks are in the part of the result Cowork shows the model.
+
 ## 0.13.12
 
 - Text follows the sizes Claude Desktop uses, everywhere: a screen's one title, section titles, text, secondary text and small labels (22, 15, 14, 13 and 12 px), chat messages a size up (16 px), and buttons 32 px high. The cards Leanfare shows in your apps' chats use the same sizes.

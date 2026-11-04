@@ -67,6 +67,10 @@ export const TOOLS = [
         your_model: { type: "string", description: "The model you run on, as your own instructions name it (for example claude-opus-5-5). Leanfare names it for the work that stays with you, and the report shows it as the prompt's main model." },
         level: { type: "integer", minimum: 1, maximum: 5, description: "The Leanfare level for this chat or session, as the level tool or Leanfare's prompt line gave it. Leave it out when none was given." },
         run: { type: "boolean", description: "false: only split the task; Leanfare runs nothing. By default Leanfare starts its parts at once." },
+        parts: { type: "array", minItems: 1, maxItems: 8, items: { type: "object", properties: {
+          title: { type: "string" }, kind: { type: "string", enum: ["read", "write", "reason", "code", "search", "act"] }, effort: { type: "string", enum: ["low", "medium", "high"] },
+          needs: { type: "array", items: { type: "integer", minimum: 1 } }, files: { type: "array", items: { type: "string" } }, task: { type: "string", description: "What the part does, for a model that has not seen this conversation." } }, required: ["task"], additionalProperties: false },
+          description: "At levels 1 to 4, your own split: the task in parts, each with its kind (code changes the project; act needs your own tools), effort, the parts it needs and the files it reads (named as in files). Leanfare places each part. At level 5 leave it out: Leanfare's model makes the split." },
         checks: { type: "array", items: { type: "string", maxLength: 300 }, minItems: 1, maxItems: 12, description: "Once per project: the short list of cheap checks its work must pass, kept for the folder and shown with every plan made there. Each a line: \"run: bun test\" (a command you run yourself at the end), \"words: utilize, leverage\" (words Leanfare keeps out of what comes back, checked by itself) or anything to look at (\"the Savings page fits one screen\"). Giving it again replaces the list. Needs the project's folder." },
       },
       required: ["task"],
@@ -85,6 +89,7 @@ export const TOOLS = [
       properties: {
         id: { type: "string", description: "The plan's id, from plan." },
         paid: { type: "string", enum: ["yes", "no"], description: "yes: the user agreed to the paid parts. Default no." },
+        yours_done: { type: "array", maxItems: 8, items: { type: "object", properties: { part: { type: "integer", minimum: 1 }, answer: { type: "string", maxLength: 20000, description: "What the parts after it need from it, in short." } }, required: ["part"], additionalProperties: false }, description: "Your parts that are done: Leanfare keeps them as rows, and the parts that waited for them run now, with these answers in their tasks." },
       },
       required: ["id"],
       additionalProperties: false,
@@ -463,13 +468,13 @@ const STATUS: Record<string, string> = { waiting: "waiting", running: "running",
 const SHOWN = 3000; // characters of an answer in the tool's result (the whole answer is in its file)
 // What the app is asked to do with a plan's answers: review, grade and fix them (0.12), or only grade them.
 export function planReview(v: any): string {
-  const done = v.parts.filter((r: any) => r.answer);
+  const done = v.parts.filter((r: any) => r.answer && !r.mine); // the app's own parts are not reviewed here
   if (!done.length) return "";
   if (v.review !== false) return `Review ${done.length === 1 ? "this answer" : "each answer"} before you use it, then grade ${done.length === 1 ? "it" : "each"} with grade (good, partly or wrong, with the plan's id and the part). If one is partly or wrong, fix it before you answer: yourself (fix "myself"), or with fix "leanfare" and why, and Leanfare asks again one tier up and sends back a new answer to review.`;
   return `Once you have used ${done.length === 1 ? "this answer" : "these answers"}, grade ${done.length === 1 ? "it" : "each"} with grade (good, partly or wrong, with the plan's id and the part): models graded below good too often are moved down.`;
 }
 // A run's parts as the tools give them; took: the app has had the answer, verdict: its grade.
-const runParts = (v: any) => v.parts.map((r: any) => ({ n: r.n, title: r.title, status: r.status, model: r.model, cost_usd: r.cost, seconds: r.seconds, answer: r.answer, receipt: r.receipt, error: r.error, took: !!r.took, verdict: r.verdict ?? null, ...(r.words?.length ? { words: r.words } : {}) }));
+const runParts = (v: any) => v.parts.map((r: any) => ({ n: r.n, title: r.title, status: r.status, model: r.model, cost_usd: r.cost, seconds: r.seconds, answer: r.answer, receipt: r.receipt, error: r.error, took: !!r.took, verdict: r.verdict ?? null, ...(r.words?.length ? { words: r.words } : {}), ...(r.round > 1 ? { round: r.round } : {}), ...(r.mine ? { mine: true } : {}), ...(r.note ? { note: r.note } : {}) }));
 // Nothing of Leanfare's left running in a run: every part is done, failed, stopped, waiting for a yes or for yours.
 const ENDED = new Set(["done", "failed", "stopped", "asks", "blocked", "yours", "after_yours"]);
 export const settled = (v: any) => !v.running || v.parts.every((r: any) => ENDED.has(r.status));
@@ -482,14 +487,16 @@ export function checksNext(v: any): string | null {
   return `Once you have applied what came back, run the project's checks: ${v.checks.map((c: any) => `${c.n}. ${c.kind === "run" ? `run ${c.what}` : c.kind === "words" ? `none of these in the work: ${c.what}` : c.what}`).join("; ")}. Then report them with grade: the plan's id, whole true, and checks with the numbers that passed and failed.`;
 }
 export function statusText(v: any, saved: string | null): string {
-  const rows = v.parts.map((r: any) => `| ${r.n} | ${String(r.title).replace(/\|/g, "/")} | ${STATUS[r.status] ?? r.status} | ${r.model ?? ""} | ${r.cost === null || r.cost === undefined ? "" : usd(r.cost)} |`);
+  const now = (r: any) => (r.mine ? "done by you" : `${STATUS[r.status] ?? r.status}${r.round > 1 ? ` (round ${r.round})` : ""}`);
+  const rows = v.parts.map((r: any) => `| ${r.n} | ${String(r.title).replace(/\|/g, "/")} | ${now(r)} | ${r.model ?? ""} | ${r.cost === null || r.cost === undefined ? "" : usd(r.cost)} |`);
   const done = v.parts.filter((r: any) => r.answer);
   const lines = ["| # | Part | Now | Model | Cost |", "|---|---|---|---|---|", ...rows, ""];
   lines.push(v.running ? "Still running: ask plan_status again (wait up to 50 seconds)." : "Leanfare's parts have ended.");
   if (v.asks) lines.push(`Parts ${v.asks.parts.join(", ")} are paid (about ${usd(v.asks.estimate)}, over the cap of ${usd(v.asks.cap)} set in Leanfare) and wait for the user's yes: ask them, then call plan_run with paid yes.`);
   const shown = (r: any) => (v.whoWrote ? markedBy(r.answer, r.model ?? "Leanfare") : r.answer);
-  for (const r of done) lines.push("", `## Part ${r.n}: ${r.title}`, "", r.answer.length > SHOWN ? `${shown({ ...r, answer: r.answer.slice(0, SHOWN) })}\n\n(cut here: the whole answer is in ${saved ?? "Leanfare"}${saved ? `/part-${r.n}.md` : ""})` : shown(r), "", `(${r.receipt})`);
+  for (const r of done.filter((x: any) => !x.mine)) lines.push("", `## Part ${r.n}: ${r.title}`, "", r.answer.length > SHOWN ? `${shown({ ...r, answer: r.answer.slice(0, SHOWN) })}\n\n(cut here: the whole answer is in ${saved ?? "Leanfare"}${saved ? `/part-${r.n}.md` : ""})` : shown(r), "", `(${r.receipt})`);
   for (const r of v.parts.filter((x: any) => x.error)) lines.push("", `Part ${r.n} failed: ${r.error}`);
+  for (const r of v.parts.filter((x: any) => x.note)) lines.push("", `Part ${r.n}: ${r.note}`);
   for (const r of v.parts.filter((x: any) => x.words?.length)) lines.push("", `Part ${r.n} holds words the project's checks keep out: ${r.words.join(", ")}. Fix it, or grade it partly or wrong.`);
   const cn = checksNext(v);
   if (cn) lines.push("", cn);
@@ -637,7 +644,14 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
     if (!body) return failure("grade needs the hand off's number (from its receipt), or the plan's id and the part's number.");
     const wait = Number(process.env.LEANFARE_DELEGATE_WAIT) > 0 ? Number(process.env.LEANFARE_DELEGATE_WAIT) : 40;
     const { j } = await call("/api/grades", { method: "POST", json: { ...body, ...(fix ? { fix, wait } : {}), ...(fix === "leanfare" && typeof args.why === "string" ? { why: args.why } : {}) } }, signal);
-    const graded = `Graded ${args.verdict}. ${j.text}`;
+    const graded = `${checked}Graded ${args.verdict}. ${j.text}`;
+    const a = j.again; // the loop (0.14): the part goes out again within the plan
+    if (a?.error) return text(`${graded}\n\n${a.error}`, { ...j.standing, said: graded, again: a });
+    if (a) {
+      const said = a.status === "yours" ? `${graded}\n\nLeanfare's models missed part ${a.part} in ${a.round} rounds: do it yourself.`
+        : `${graded}\n\nSent part ${a.part} out again: round ${a.round} of 3, at ${a.effort} effort, on another model${a.paid ? " (a paid one may take it, within the cap for paid work)" : ""}. Collect it with plan_status (wait 50), review it and grade it.`;
+      return text(said, { ...j.standing, said, again: a });
+    }
     const f = j.fix;
     if (!f) { const said = fix === "myself" ? `${graded} Kept as fixed by you before you answered.` : graded; return text(said, { ...j.standing, said }); }
     if (f.error) return text(`${graded}\n\n${f.error}`, { ...j.standing, said: graded, fix: { error: f.error } });
@@ -689,6 +703,10 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
   if (name === "plan_run") {
     if (typeof args?.id !== "string" || !PLAN_ID.test(args.id)) return failure("plan_run needs the plan's id, from plan.");
     const yes = args.paid === "yes";
+    if (Array.isArray(args.yours_done) && args.yours_done.length) {
+      const { j: d } = await call("/api/plan/yours", { method: "POST", json: { id: args.id, done: args.yours_done, label: null } }, signal);
+      return text(statusText(d, null), { id: d.id, running: d.running, parts: runParts(d), checks_next: checksNext(d) });
+    }
     let { j: v } = await call("/api/plan/run", { method: "POST", json: { id: args.id, paid: yes } }, signal);
     if (!yes) { v = await askPaid(ctx, args.id, v, signal); if (v.off) return text(OFF_TEXT, { off: true }); }
     return text(statusText(v, null), { id: v.id, running: v.running, parts: v.parts.map((r: any) => ({ n: r.n, status: r.status })), asks: v.asks });
@@ -715,7 +733,7 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
     if (typeof files === "string") return failure(files);
     const t0 = Date.now();
     const project = sharedFolder(args.folder, ctx.cwd); // the project's checks are kept for it (0.14)
-    const { j } = await call("/api/plan", { method: "POST", json: { task: args.task, files, manager: ctx.client, split: args.split === "rules" ? "rules" : "auto", ...(args.run !== false ? { run: true } : {}), ...(args.private === true ? { private: true } : {}), ...(isLevel(args.level) ? { level: args.level } : {}), ...(typeof args.your_model === "string" ? { your_model: args.your_model } : {}), ...(project ? { folder: project } : {}), ...(args.checks !== undefined ? { checks: args.checks } : {}) } }, signal);
+    const { j } = await call("/api/plan", { method: "POST", json: { task: args.task, files, manager: ctx.client, split: args.split === "rules" ? "rules" : "auto", ...(args.run !== false ? { run: true } : {}), ...(args.private === true ? { private: true } : {}), ...(isLevel(args.level) ? { level: args.level } : {}), ...(typeof args.your_model === "string" ? { your_model: args.your_model } : {}), ...(project ? { folder: project } : {}), ...(args.checks !== undefined ? { checks: args.checks } : {}), ...(args.parts !== undefined ? { parts: args.parts } : {}) } }, signal);
     const note = j.split?.note ? `\n\n(${j.split.note})` : j.split?.model ? `\n\n(Split by ${j.split.model.label}${typeof j.split.cost === "number" ? `, ${usd(j.split.cost)}` : ""}.)` : "";
     const folder = sharedFolder(args.folder, ctx.cwd);
     const saved = folder ? writeShared(folder, j.id, { "plan.md": `# Plan ${j.id}\n\n${args.task.trim()}\n\n${j.table}\n\n${j.next}\n` }) : null;
