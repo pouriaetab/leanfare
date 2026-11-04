@@ -51,7 +51,7 @@ describe("the Savings plans card", () => {
     await waitFor(() => toasts(doc).includes("also shows what your plan use would cost"));
     await goSavings(doc);
     await waitFor(() => doc.querySelector("#plansCard").textContent.includes("If this were pay per use"));
-    const card = doc.querySelector("#plansCard").textContent;
+    const card = doc.querySelector("#plansCard h3").title; // the card's note: on its title's hover (0.13.12)
     const server = (await ui(url, "/api/plans")).json.note;
     expect(card).toContain("an estimate at the providers' list prices");
   }, 30000);

@@ -950,9 +950,11 @@ describe("The plan meter", () => {
     expect(t).toContain("60% used");
     expect(t).toContain("This week");
     expect(t).toContain("90% used");
-    expect(t).toContain("tokens left at your recent mix");
-    expect(t).not.toContain("of work"); // dollars of work only when Settings shows them
-    expect(t).toContain("a starting estimate");
+    // What is left of a window: on hover of its line (0.13.12), so a window is one line.
+    const left = [...doc.querySelectorAll("#plansCard .mt-row")].map((r: any) => r.title).join(" | ");
+    expect(left).toContain("tokens left at your recent mix");
+    expect(left).not.toContain("of work"); // dollars of work only when Settings shows them
+    expect(left).toContain("a starting estimate");
     expect(t).toContain("What still fits");
     expect(t).toContain("llmledger: about");
     expect(t).toMatch(/a session is (about [\d.]+%|under 0\.1%) of the week/);
@@ -966,7 +968,7 @@ describe("The plan meter", () => {
     await ui(url, "/api/settings", { plans: { claude: { name: "Claude Max", price: 200 } }, showValue: true });
     const doc = await openApp();
     await goSavings(doc);
-    const t = doc.querySelector("#plansCard").textContent;
+    const t = [...doc.querySelectorAll("#plansCard .mt-row")].map((r: any) => r.title).join(" | ");
     expect(t).toContain("tokens left at your recent mix");
     expect(t).toMatch(/about \$[\d,.]+ of work at API prices/);
     expect(bad(doc)).toBe(false);
@@ -975,7 +977,8 @@ describe("The plan meter", () => {
   test("Add to the status line writes Claude Code's settings, is its own Stop while it works, and can be undone", async () => {
     const doc = await openApp();
     await goSavings(doc);
-    expect(doc.querySelector("#plansCard").textContent).toContain("never your words");
+    expect(doc.querySelector("#plansCard .mt-sl .grow").title).toContain("never your words"); // on hover: the line itself is short
+    expect(doc.querySelector("#plansCard .mt-sl").textContent).toContain("add Leanfare to Claude Code's status line");
     press(doc, "Add to the status line", "#plansCard");
     await waitFor(() => toasts(doc).includes("Added."));
     expect(JSON.parse(readFileSync(process.env.LEANFARE_CLAUDE_SETTINGS!, "utf8")).statusLine.command).toContain("statusline");
@@ -1008,18 +1011,21 @@ describe("What Leanfare did for your apps (Savings)", () => {
     doc = await openApp();
     await goSavings(doc);
     const card = doc.querySelector("#workCard");
-    // At the top of Savings, before the subscriptions.
-    expect(card.previousElementSibling.className).toBe("sv-head");
-    const t = card.textContent;
+    // The first card of Monthly overview, the month and Refresh on its title line (0.13.12), before the subscriptions.
+    expect(card.previousElementSibling).toBeNull();
+    expect(card.nextElementSibling.id).toBe("plansCard");
+    expect(card.querySelector("h3 select[aria-label='Month']")).not.toBeNull();
+    expect([...card.querySelectorAll("h3 button")].map((b: any) => b.textContent)).toEqual(["Refresh"]);
+    const t = card.textContent, tip = card.querySelector("h3").title;
     expect(t).toContain("What Leanfare did for your apps");
-    expect(t).toContain("2 tasks this month, through plan and delegate");
+    expect(tip).toContain("2 tasks this month, through plan and delegate");
     expect(t).toMatch(/Kept out of your plans\S*18 tokensread by Leanfare's models, not your apps · \d+ came back/);
     expect(t).toContain("Cost of that work");
     expect(t).toContain("2 paid");
     expect(t).toContain("QualityiNot graded yet");
     expect(t).toContain("1 of 2 passed1 was asked again one tier up");
-    expect(t).toMatch(/Checks: 2 run, 1 passed \(50%, 90% range 12% to 88%\), 1 failed and was asked again one tier up\./);
-    expect(t).not.toContain("Weighted"); // shown from five checks on
+    expect(tip).toMatch(/Checks: 2 run, 1 passed \(50%, 90% range 12% to 88%\), 1 failed and was asked again one tier up\./);
+    expect(tip).not.toContain("Weighted"); // shown from five checks on
     const rows = [...card.querySelectorAll(".work-table tbody tr")].map((r: any) => [...r.querySelectorAll("td")].map((c: any) => c.textContent));
     expect(rows).toHaveLength(2);
     expect(rows[0][0]).toMatch(/^(Today \d|Yesterday \d|[A-Z][a-z]{2} \d{1,2}$|\d{1,2} [A-Z][a-z]{2}$)/); // the tests' clock is not the page's

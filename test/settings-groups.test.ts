@@ -18,7 +18,7 @@ describe("Settings in groups", () => {
     await waitFor(() => doc.querySelectorAll("#tab-settings details.group").length > 5);
     expect(groups(doc)).toEqual([
       "Models and keys (open)", "Models on this computer",
-      "Your apps and AI plans (open)", "How much Leanfare does (open)", "Budget and plans", "How models are picked", "Quality checks", "What is kept", "More",
+      "Your apps and AI plans (open)", "How much Leanfare does (open)", "Where work may go", "Jobs and plans", "Budget", "Your subscriptions", "How models are picked", "Quality checks", "What is kept", "Look and new chats", "More",
     ]);
     const all = doc.querySelectorAll("#tab-settings .setting").length;
     const inside = doc.querySelectorAll("#tab-settings details.group .setting").length;
