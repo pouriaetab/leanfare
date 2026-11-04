@@ -45,4 +45,19 @@ describe("Leanfare's own writes are not use of an app", () => {
     expect(statSync(join(HOME(), ".gemini")).mtimeMs).toBe(june.getTime());
     expect(after.last).toBe(before.last); // what found.ts reads: Leanfare's own GEMINI.md and the folder's time do not count
   });
+
+  test("Plan first's hooks.json does not count as using Cursor", async () => {
+    mkdirSync(join(HOME(), "Applications", "Cursor.app"), { recursive: true });
+    hooks.spotlight = () => ({ added: Date.parse("2026-03-02T10:00:00Z"), used: june.getTime() }); // last opened in June
+    mkdirSync(join(HOME(), ".cursor"), { recursive: true });
+    writeFileSync(join(HOME(), ".cursor", "argv.json"), "{}");
+    utimesSync(join(HOME(), ".cursor", "argv.json"), june, june);
+    utimesSync(join(HOME(), ".cursor"), june, june);
+    const before = (await lookForApps(true)).find((a) => a.id === "cursor")!;
+    setAuto("cursor", true); // Settings, Plan by itself, for Cursor: its hooks in ~/.cursor/hooks.json
+    expect(statSync(join(HOME(), ".cursor")).mtimeMs).toBe(june.getTime());
+    const after = (await lookForApps(true)).find((a) => a.id === "cursor")!;
+    setAuto("cursor", false);
+    expect(after.last).toBe(before.last);
+  });
 });

@@ -46,7 +46,7 @@ export const FOUND_APPS: AppDef[] = [
   { id: "perplexity-app", name: "Perplexity app", provider: "perplexity", bundles: ["Perplexity.app"],
     support: () => [lib("Containers", "ai.perplexity.mac"), lib("Application Support", "ai.perplexity.macv3"), lib("Application Support", "Perplexity")] },
   { id: "cursor", name: "Cursor", provider: "cursor", bundles: ["Cursor.app"], support: () => [lib("Application Support", "Cursor")],
-    dirs: () => [join(home(), ".cursor"), ...(process.platform === "win32" ? [join(localAppData(), "Programs", "cursor")] : [])], ours: ["mcp.json"] },
+    dirs: () => [join(home(), ".cursor"), ...(process.platform === "win32" ? [join(localAppData(), "Programs", "cursor")] : [])], ours: ["mcp.json", "hooks.json"] }, // hooks.json: plan first (workers.ts)
   { id: "gemini-cli", name: "Gemini CLI", provider: "google", dirs: () => [join(home(), ".gemini")], ours: ["settings.json", "GEMINI.md"] },
   { id: "copilot", name: "GitHub Copilot in VS Code", provider: "copilot", prefix: () => ({ dir: join(home(), ".vscode", "extensions"), starts: ["github.copilot-"] }) },
   { id: "grok-build", name: "Grok Build", provider: "grok", dirs: () => [join(home(), ".grok")] },

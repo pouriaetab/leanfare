@@ -2,7 +2,7 @@
 // prompt that is not Leanfare's plan is turned back once with the reason, and the next goes through; Codex and Gemini
 // CLI hear the level with each prompt; each app's hook file holds Leanfare's entries next to the user's own.
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { denyOutput, FIRST_WORDS, firstReminder, lineOutput, promptLine } from "../src/firsthook";
 import { noteSession } from "../src/sessionlog";
@@ -10,9 +10,17 @@ import { autoView, firstHookCommand, promptHookCommand, setAuto } from "../src/w
 import { boot, reset } from "./app";
 
 beforeAll(async () => { await boot(); });
-beforeEach(async () => { await reset(); });
-// What these tests turn on in the apps' own files is taken out again, so no other test file finds it.
-afterEach(() => { for (const id of ["codex", "gemini-cli", "cursor"]) { try { writeFileSync(join(process.env.HOME!, ".cursor", "hooks.json"), "{}"); setAuto(id, false); } catch {} } });
+// No plan numbers from another test file: a plan read as low raises the level these tests set (modes.ts).
+beforeEach(async () => {
+  for (const f of ["limits-last.json", "limits.jsonl"]) rmSync(join(process.env.LEANFARE_DATA_DIR!, f), { force: true });
+  await reset();
+});
+// What these tests turn on in the apps' own files is taken out again, and the apps' folders they made go too, so no
+// other test file finds Gemini CLI or Cursor.
+afterEach(() => {
+  for (const id of ["codex", "gemini-cli", "cursor"]) { try { setAuto(id, false); } catch {} }
+  for (const d of [".gemini", ".cursor"]) rmSync(join(process.env.HOME!, d), { recursive: true, force: true });
+});
 const T = Date.parse("2026-10-21T12:00:00Z");
 let n = 0;
 const sid = () => `s-first-${++n}`;

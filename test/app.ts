@@ -20,6 +20,7 @@ import { stopTrial } from "../src/trial";
 import { forgetRequests } from "../src/delegate";
 import { forgetTests } from "../src/localtest";
 import { forgetLogs } from "../src/plans";
+import { forgetFound } from "../src/found";
 import { setNow } from "../src/util";
 import { KEYS, type startFake } from "./fake";
 import * as connect from "../src/connect";
@@ -46,12 +47,17 @@ export async function boot() {
 // folders only: a test writes the ones it needs after reset. A file another test file left would count in this one,
 // and GitHub runs the test files in a different order on each machine: on 3 Nov a hand off at noon was counted with a
 // prompt another file had left at 10:30, outside the span its test asked for, and its report came back empty.
+// The same for the folders of the apps found.ts finds in the tests' own home: GitHub ran plans.test.ts after
+// plan-first.test.ts, whose Gemini CLI and Cursor files made both apps count as used in Your plans.
 const REPO = join(import.meta.dir, "..");
+const APP_FOLDERS = [".gemini", ".cursor"];
 function forgetAppLogs() {
   const claude = (process.env.CLAUDE_CONFIG_DIR ?? "").split(",").map((s) => s.trim()).filter(Boolean).map((r) => join(r, "projects"));
   const codex = process.env.CODEX_HOME?.trim() ? ["sessions", "archived_sessions"].map((d) => join(process.env.CODEX_HOME!.trim(), d)) : [];
-  for (const d of [...claude, ...codex]) if (d.startsWith(tmpdir()) && !d.startsWith(REPO)) rmSync(d, { recursive: true, force: true });
+  const home = process.env.HOME?.trim() ? APP_FOLDERS.map((d) => join(process.env.HOME!.trim(), d)) : [];
+  for (const d of [...claude, ...codex, ...home]) if (d.startsWith(tmpdir()) && !d.startsWith(REPO)) rmSync(d, { recursive: true, force: true });
   forgetLogs();
+  forgetFound(); // the apps found a moment ago, with those folders
 }
 
 export async function reset(patch: Partial<Settings> = {}) {
