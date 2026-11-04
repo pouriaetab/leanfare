@@ -3251,6 +3251,25 @@
       h("p", { text: `When Claude Code or another app runs Leanfare's parts of a plan (plan_run), parts on local and free models run at once. Paid parts run without asking while they come to at most ${money(s.planAuto || 0)} a plan; above that, Leanfare asks you first (in Claude Code, a question in Claude Code). Your monthly budget holds either way.` }));
   }
 
+  // ---- Project checks (Settings, 0.14): the cheap checks set once per project, shown with every plan made there ----
+  async function loadChecks() { try { S.checks = (await api("/api/checks")).projects; } catch { S.checks = []; } renderSettings(); }
+  const CHECK_WORD = { run: "Run", words: "Keep out", look: "Look" };
+  function checksSettingEl() {
+    if (S.checks === undefined) { S.checks = null; loadChecks(); }
+    const card = h("div", { class: "setting", id: "checksCard" },
+      h("h3", { text: "Project checks", title: "Set once per project by your app (plan, checks), or by you in a chat: the tests to run, words to keep out of what comes back, what to look at. Every plan made in that folder shows them, and your app reports which passed." }));
+    if (!S.checks) { card.append(h("p", { class: "note", text: "Reading…" })); return card; }
+    if (!S.checks.length) { card.append(h("p", { class: "note", text: "None yet: your app sets a project's checks with its first plan there." })); return card; }
+    for (const pr of S.checks) {
+      const short = pr.folder.replace(/^\/Users\/[^/]+/, "~").replace(/^\/home\/[^/]+/, "~");
+      card.append(h("div", { class: "chk-proj" },
+        h("div", { class: "chk-head" }, h("span", { class: "chk-folder", text: short, title: pr.folder }),
+          h("button", { class: "btn small", type: "button", text: "Remove", onclick: async () => { try { S.checks = (await api(`/api/checks?folder=${encodeURIComponent(pr.folder)}`, { method: "DELETE" })).projects; toast("Checks removed."); } catch (e) { toast(e.message); } renderSettings(); } })),
+        h("ol", { class: "chk-list" }, ...pr.checks.map((c) => h("li", {}, h("span", { class: "chip", text: CHECK_WORD[c.kind] ?? c.kind }), h("span", { class: "chk-what", text: c.what, title: c.what }))))));
+    }
+    return card;
+  }
+
   // ---- Jobs (Settings, 0.11): where each kind of job goes in plans, and a cap for paid work ----------------------
   const JOB_ROWS = [["read", "Reading"], ["search", "Searching"], ["write", "Drafting"], ["reason", "Working things out"]];
   const JOB_CHOICES = [["leanfare", "Leanfare"], ["low", "When low"], ["app", "Your app"]];
@@ -3689,7 +3708,7 @@
     // Each group, open, fits one screen (0.13.12): the level, where work goes, jobs, money and subscriptions apart.
     { key: "level", title: "How much Leanfare does", open: true, has: ["How much Leanfare takes first"] },
     { key: "where", title: "Where work may go", open: false, has: ["Where Leanfare may send work"] },
-    { key: "jobs", title: "Jobs and plans", open: false, has: ["Jobs", "Plans in your apps"] },
+    { key: "jobs", title: "Jobs and plans", open: false, has: ["Jobs", "Plans in your apps", "Project checks"] },
     { key: "money", title: "Budget", open: false, has: ["Monthly budget", "Compare with a subscription", "Your usual model"] },
     { key: "subs", title: "Your subscriptions", open: false, has: ["Your subscriptions"] },
     { key: "picks", title: "How models are picked", open: false, has: ["How Auto picks", "Speed", "Thinking effort", "Answers in the chat"] },
@@ -3785,7 +3804,7 @@
         h("div", { class: "seg", role: "group", "aria-label": "Thinking effort" }, ...[["auto", "Model's default"], ["low", "Low"], ["medium", "Medium"], ["high", "High"]].map(([k, label]) =>
           h("button", { type: "button", "aria-pressed": String((s.effort ?? "auto") === k), text: label, onclick: () => patchSettings({ effort: k }, k === "auto" ? "Thinking models think as they do by default." : `Thinking effort: ${label.toLowerCase()}.`) }))),
         h("p", { text: "For models that think before they answer, at the levels each one takes. Thinking is billed as output, so a higher effort costs more and takes longer; the estimate learns from your answers at each level." })),
-      planCapSettingEl(s), jobsSettingEl(s), platformsSettingEl(), reviewSettingEl(s), gradesSettingEl(), sideBySideSettingEl(s), whoWroteSettingEl(s),
+      planCapSettingEl(s), jobsSettingEl(s), checksSettingEl(), platformsSettingEl(), reviewSettingEl(s), gradesSettingEl(), sideBySideSettingEl(s), whoWroteSettingEl(s),
       h("div", { class: "setting" }, h("h3", { text: "Your usual model" }), usualSel,
         h("p", { text: "The model you would use without Leanfare. Savings are measured against it." })),
       h("div", { class: "setting", id: "budgetSetting" }, h("h3", { text: "Monthly budget" }),
