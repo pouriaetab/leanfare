@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.12
+
+- Text follows the sizes Claude Desktop uses, everywhere: a screen's one title, section titles, text, secondary text and small labels (22, 15, 14, 13 and 12 px), chat messages a size up (16 px), and buttons 32 px high. The cards Leanfare shows in your apps' chats use the same sizes.
+- Savings is compact: each group, open, fits one screen. The report has four views, one at a time: Overview, Prompts (ten at a time), Models and Quality. Numbers show with one short line; a card's longer words are on hover, or under its title after one press of its i. Monthly overview has the month and Refresh on its first card's title line, and a subscription's windows on one line each.
+- Settings is compact too: each group, open, fits one screen (How much Leanfare does, Where work may go, Jobs and plans, Budget and Your subscriptions are now apart, and Look sits with Instructions for new chats). A switch's line and a card's description wait behind its i; the levels show what the picked one does; each platform is one line.
+
 ## 0.13.11
 
 - Savings' groups have clear names: Live activity, Free capacity, Usage report, Monthly overview, API spend and Model trial. Free capacity opens and closes on its own, and its title line says how many models are in use today.
