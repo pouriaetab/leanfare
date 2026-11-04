@@ -1,7 +1,8 @@
 // Reaching the running Leanfare from another process (leanfare mcp, leanfare trial): its address
 // and control token from the files it writes at start, and a start in the background when it is
 // not running (as `leanfare --no-open` would).
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync } from "node:fs";
+import { dirname } from "node:path";
 import { PORT, paths } from "./config";
 import { selfCommand } from "./self";
 
@@ -34,6 +35,19 @@ export async function healthy(base: string): Promise<boolean> {
   } catch { return false; }
 }
 
+// 0.14.1, always on: an app's door waits up to 20 seconds for a Leanfare it started (it was 10, and his Mac took longer
+// while it was busy), keeps what that Leanfare said in start.log, and a start that fails says why from it.
+export const startWait = () => { const n = Number(process.env.LEANFARE_START_WAIT); return n > 0 ? n : 20; };
+const LOG_MAX = 1_000_000; // bytes: past it, the log starts again
+export function lastSaid(file = paths.startLog): string | null {
+  try {
+    const lines = readFileSync(file, "utf8").split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+    const last = lines.filter((x) => /error|failed|cannot|could not|in use|denied|refused|not found|EADDRINUSE|EACCES/i.test(x)).at(-1) ?? lines.at(-1);
+    return last ? last.replace(/\s+/g, " ").slice(0, 300) : null;
+  } catch { return null; }
+}
+export const notStarted = (said: string | null) => `Leanfare did not start${said ? ` (it said: ${said.replace(/[.]$/, "")})` : ""}. Open it once from Terminal with: leanfare${process.platform === "darwin" ? ", or open the Leanfare app and turn on Open at Login in its menu" : ""}.`;
+
 let starting: Promise<App> | null = null;
 export async function app(): Promise<App> {
   let a = where();
@@ -41,14 +55,21 @@ export async function app(): Promise<App> {
   if (process.env.LEANFARE_URL) throw new Error(`Leanfare is not answering at ${a.base}.`);
   starting ??= (async () => {
     const self = selfCommand("--no-open");
-    const child = Bun.spawn([self.command, ...self.args], { stdin: "ignore", stdout: "ignore", stderr: "ignore", env: { ...process.env, LEANFARE_NO_OPEN: "1" } });
+    let out: number | "ignore" = "ignore";
+    try {
+      mkdirSync(dirname(paths.startLog), { recursive: true });
+      const big = existsSync(paths.startLog) && statSync(paths.startLog).size > LOG_MAX;
+      out = openSync(paths.startLog, big ? "w" : "a");
+    } catch {}
+    const child = Bun.spawn([self.command, ...self.args], { stdin: "ignore", stdout: out, stderr: out, env: { ...process.env, LEANFARE_NO_OPEN: "1" } });
     child.unref();
-    for (let i = 0; i < 100; i++) {
+    if (typeof out === "number") try { closeSync(out); } catch {}
+    for (let i = 0; i < startWait() * 10; i++) {
       await Bun.sleep(100);
       a = where();
-      if (a.token && (await healthy(a.base))) return a;
+      if (a.token && (await healthy(a.base))) return a; // this one, or another that started meanwhile (the Mac app)
     }
-    throw new Error("Leanfare did not start. Open it once from Terminal with: leanfare");
+    throw new Error(notStarted(lastSaid()));
   })().finally(() => { starting = null; });
   return starting;
 }
