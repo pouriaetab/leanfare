@@ -127,9 +127,10 @@ describe("in the report", () => {
       ["Gemini 3.8 Flashfree · Google Gemini", "6", "2 failed1 busy · 1 timed out", "2.1 s · 2.1 s", "9 s · 9 s", "217 /s", "$0", "100 / 100", "ready"],
       ["DeepSeek V4 Flashpaid · DeepSeek", "1", "none", "1.8 s · 1.8 s", "11 s · 11 s", "22 /s", "$0.00040", "not graded", "ready"],
     ]);
-    const dots = [...doc.querySelectorAll("#reportCard .sp-chart circle.spd")];
-    expect(dots.map((c: any) => c.getAttribute("class"))).toEqual(["spd ready", "spd none"]); // most calls first; not graded: hollow
-    expect([...doc.querySelectorAll("#reportCard .sp-chart text.lab")].map((t: any) => t.textContent)).toEqual(["Gemini 3.8 Flash", "DeepSeek V4 Flash, not graded yet"]);
+    // 0.14.2: one table across the card, speed and score as thin bars in their cells, no small chart beside it
+    expect(doc.querySelector("#reportCard .sp-chart")).toBeNull();
+    const bars = [...doc.querySelectorAll("#reportCard .sp-table tbody tr")].map((tr: any) => [...tr.querySelectorAll(".ibar")].map((b: any) => [b.className, b.querySelector("i").style.width]));
+    expect(bars).toEqual([[["ibar speed", "100%"], ["ibar good", "100%"]], [["ibar speed", expect.stringMatching(/^10\.1\d*%$/)]]]); // not graded: no score bar
     expect(/\bnull\b|\bundefined\b|NaN/.test(doc.querySelector("#reportCard").textContent)).toBe(false);
     void win;
   });

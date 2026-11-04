@@ -24,7 +24,7 @@ const read = (...p: string[]) => readFileSync(join(import.meta.dir, "..", ...p),
 describe("type as Claude Desktop sets it", () => {
   test("the scale: one title a screen, section titles, text, secondary text, small labels, and chat messages", () => {
     const css = read("ui", "app.css");
-    expect(css).toContain("--fs-title: 22px; --fs-head: 15px; --fs-body: 14px; --fs-small: 13px; --fs-tiny: 12px; --fs-chat: 16px;");
+    expect(css).toContain("--fs-title: 20px; --fs-head: 14px; --fs-body: 13px; --fs-small: 12px; --fs-tiny: 11px; --fs-chat: 16px;"); // 0.14.2: a size smaller
     expect(css).toContain("--fw-head: 520; --fw-label: 450;");
     expect(css).toMatch(/body \{[^}]*font: var\(--fs-body\)\/1\.43 var\(--font\);/);
   });
@@ -97,4 +97,19 @@ describe("Settings, compact", () => {
     const says = [...level.querySelectorAll(".lv-defs li")].map((li: any) => [li.classList.contains("on"), !!li.querySelector(".say"), li.querySelector(".d").title.length > 0]);
     expect(says.every(([, s, t]) => s && t)).toBe(true);
   }, 20000);
+});
+
+describe("compact, a size smaller (0.14.2)", () => {
+  test("the bars are thin: work by model, quality by kind and by level, the tiles, Live, the meters and Models' cells", () => {
+    const css = read("ui", "app.css");
+    for (const rule of [".rp-bar .track { height: 4px; }", ".rp-kind .stack, .rp-level .stack { height: 4px; }", ".rp-tile .q3 .bar { height: 4px; }", ".lv-bar { height: 5px; }", ".meter .mt-row .track { height: 4px; }", ".barrow .track { height: 4px; }"]) expect(css).toContain(rule);
+    expect(css).toMatch(/\.ibar \{[^}]*height: 4px;/);
+  });
+  test("the ask box is one line: the title, the question, three short samples with the whole question on hover, the model and Ask", async () => {
+    const doc = await openApp(url, { screen: "savings" });
+    await waitFor(() => !!doc.querySelector("#rpAsk .rp-ask-row .chip-btn"));
+    const row = doc.querySelector("#rpAsk .rp-ask-row")!;
+    expect([...row.children].map((c: any) => c.tagName + (c.className ? "." + c.className.split(" ")[0] : ""))).toEqual(["B.rp-ask-t", "INPUT.rp-ask-q", "SPAN.rp-ask-chips", "SELECT", "BUTTON.btn"]);
+    expect([...row.querySelectorAll(".chip-btn")].map((b: any) => [b.textContent, b.title])).toEqual([["Cost the most", "Which prompts cost the most, and why?"], ["Partly or wrong", "Which hand offs were graded partly or wrong?"], ["Saved the most", "Where did Leanfare save the most?"]]);
+  }, 30000);
 });

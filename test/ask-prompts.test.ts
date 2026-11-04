@@ -96,8 +96,10 @@ test("Savings: the ask box, its sample questions, and the answer with who answer
   await waitFor(() => !!doc.querySelector("#rpAsk"));
   await waitFor(() => doc.querySelector("#rpAsk select")?.textContent.includes("A model on this computer"));
   expect(doc.querySelector("#rpAsk").textContent).toContain("Ask about these prompts");
-  expect(doc.querySelector("#rpAsk").textContent).toMatch(/\d+ prompts? in this span/); // Savings opens on 7 days, which can hold other tests' Claude Code prompts
-  [...doc.querySelectorAll("#rpAsk .chip-btn")].find((b: any) => b.textContent === "Where did Leanfare save the most?")!.click();
+  expect(doc.querySelector("#rpAsk .rp-ask-t").title).toMatch(/\d+ prompts? in this span/); // on hover (0.14.2: one line); Savings opens on 7 days, which can hold other tests' Claude Code prompts
+  const chip = [...doc.querySelectorAll("#rpAsk .chip-btn")].find((b: any) => b.textContent === "Saved the most") as any;
+  expect(chip.title).toBe("Where did Leanfare save the most?"); // the whole question on hover
+  chip.click();
   await waitFor(() => !!doc.querySelector("#rpAsk .rp-ask-text"));
   expect(doc.querySelector("#rpAsk .rp-ask-text").textContent).toBe("One prompt, PRM-1, read app.log.");
   expect(doc.querySelector("#rpAsk").textContent).toContain("on this computer");

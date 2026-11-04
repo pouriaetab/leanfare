@@ -144,13 +144,13 @@ describe("said where you look", () => {
       text: "OpenAI blocks requests from your network (403), so Leanfare uses your other models and checks OpenAI again every 30 minutes by itself. Your key is fine." });
     expect(st.providers.find((p: any) => p.id === "openai").keyTrouble.away).toMatchObject({ status: 403, place: true });
     const doc = await openApp(url, { screen: "settings" });
-    for (let i = 0; i < 100 && !doc.querySelector(".prov-head"); i++) await Bun.sleep(50);
+    for (let i = 0; i < 300 && !doc.querySelector(".prov-head"); i++) await Bun.sleep(50); // Settings has more cards since 0.14: up to 15 s in a loaded full run
     const notice = [...doc.querySelectorAll("#notices .notice")].find((x: any) => x.textContent.includes("OpenAI blocks requests from your network")) as any;
     expect([...notice.querySelectorAll("a, button")].map((b: any) => b.textContent)).toEqual(["Check again", "×"]);
     const head = [...doc.querySelectorAll(".prov-head")].find((x: any) => x.querySelector(".name")?.textContent === "OpenAI") as any;
     expect(head.querySelector(".chip").textContent).toBe("Turned away");
     head.click();
-    await waitFor(() => doc.body.textContent.includes("OpenAI has blocked requests from your network since"));
+    await waitFor(() => doc.body.textContent.includes("OpenAI has blocked requests from your network since"), 12000); // a loaded full run draws Settings slower
     expect(doc.body.textContent).toContain("OpenAI has blocked requests from your network since Oct 21, 2026 (403), so its models are left out. Leanfare checks again every 30 minutes by itself; your key is fine.");
   }, 20000);
 });
