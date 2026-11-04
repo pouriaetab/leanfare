@@ -1,16 +1,17 @@
 {
   "hooks": {
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/leanfare.sh\" hook prompt", "timeout": 5 }] }
+      {"hooks": [{"type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/leanfare.sh\" hook prompt", "timeout": 5}]}
     ],
     "PreToolUse": [
-      { "matcher": "Read", "hooks": [{ "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/leanfare.sh\" hook read", "timeout": 5 }] }
+      {"matcher": "Read", "hooks": [{"type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/leanfare.sh\" hook read", "timeout": 5}]},
+      {"matcher": "^(Read|Grep|Glob|Bash|Edit|Write|MultiEdit|NotebookEdit|Task|Agent|WebFetch|WebSearch|LS)$|leanfare__plan$", "hooks": [{"type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/leanfare.sh\" hook first", "timeout": 5}]}
     ],
     "PostToolUse": [
-      { "matcher": "mcp__.*leanfare.*__(delegate|plan|plan_run|plan_status|grade|level)", "hooks": [{ "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/leanfare.sh\" hook handoff", "timeout": 5 }] }
+      {"matcher": "mcp__.*leanfare.*__(delegate|plan|plan_run|plan_status|grade|level)", "hooks": [{"type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/leanfare.sh\" hook handoff", "timeout": 5}]}
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/leanfare.sh\" hook stop", "timeout": 10 }] }
+      {"hooks": [{"type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/leanfare.sh\" hook stop", "timeout": 10}]}
     ]
   }
 }

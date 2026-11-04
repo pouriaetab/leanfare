@@ -17,6 +17,7 @@ import { claudeSettingsFile, readClaudeSettings, writeClaudeSettings } from "./m
 import { selfCommand } from "./self";
 import { quote } from "./statusline";
 import { remindersLately } from "./readhook";
+import { FIRST_MATCHER } from "./firsthook";
 
 const home = () => (process.platform === "win32" ? homedir() : process.env.HOME || homedir());
 const claudeDir = () => process.env.CLAUDE_CONFIG_DIR?.split(",")[0]?.trim() || join(home(), ".claude");
@@ -147,12 +148,16 @@ export const readHookCommand = () => { const c = selfCommand(); return [c.comman
 // The review hooks (reviewhook.ts): which hand offs a session got, and a grade asked for once before Claude finishes.
 export const handoffHookCommand = () => { const c = selfCommand(); return [c.command, ...c.args].map(quote).join(" ") + " hook handoff"; };
 export const stopHookCommand = () => { const c = selfCommand(); return [c.command, ...c.args].map(quote).join(" ") + " hook stop"; };
+// 0.14.1: plan first (firsthook.ts), and the hooks of the other apps, each with the app it is for.
+export const firstHookCommand = (app?: string) => { const c = selfCommand(); return [c.command, ...c.args].map(quote).join(" ") + ` hook first${app ? ` --app ${app}` : ""}`; };
+export const promptHookCommand = (app: string) => { const c = selfCommand(); return [c.command, ...c.args].map(quote).join(" ") + ` hook prompt --app ${app}`; };
 export const HANDOFF_MATCHER = "mcp__.*leanfare.*__(delegate|plan|plan_run|plan_status|grade|level)";
-const ourHook = (what: "prompt" | "read" | "handoff" | "stop") => (cmd: unknown) => typeof cmd === "string" && new RegExp(`(^|[\\s'"/\\\\])(leanfare(\\.exe)?|cli\\.ts)['"]?\\s+hook\\s+${what}\\b`, "i").test(cmd);
-const isOurHook = ourHook("prompt"), isOurReadHook = ourHook("read"), isOurHandoffHook = ourHook("handoff"), isOurStopHook = ourHook("stop");
+const ourHook = (what: "prompt" | "read" | "handoff" | "stop" | "first") => (cmd: unknown) => typeof cmd === "string" && new RegExp(`(^|[\\s'"/\\\\])(leanfare(\\.exe)?|cli\\.ts)['"]?\\s+hook\\s+${what}\\b`, "i").test(cmd);
+const isOurHook = ourHook("prompt"), isOurReadHook = ourHook("read"), isOurHandoffHook = ourHook("handoff"), isOurStopHook = ourHook("stop"), isOurFirstHook = ourHook("first");
 const HOOKS = [
   { event: "UserPromptSubmit", ours: isOurHook, entry: () => ({ hooks: [{ type: "command", command: hookCommand(), timeout: 5 }] }), command: hookCommand },
   { event: "PreToolUse", ours: isOurReadHook, entry: () => ({ matcher: "Read", hooks: [{ type: "command", command: readHookCommand(), timeout: 5 }] }), command: readHookCommand },
+  { event: "PreToolUse", ours: isOurFirstHook, entry: () => ({ matcher: FIRST_MATCHER, hooks: [{ type: "command", command: firstHookCommand(), timeout: 5 }] }), command: () => firstHookCommand() },
   { event: "PostToolUse", ours: isOurHandoffHook, entry: () => ({ matcher: HANDOFF_MATCHER, hooks: [{ type: "command", command: handoffHookCommand(), timeout: 5 }] }), command: handoffHookCommand },
   { event: "Stop", ours: isOurStopHook, entry: () => ({ hooks: [{ type: "command", command: stopHookCommand(), timeout: 10 }] }), command: stopHookCommand },
 ];
@@ -187,15 +192,73 @@ function setHook(on: boolean) {
 
 export { hookLine } from "./statusline"; // the line itself lives with the status line's, so the hook starts as fast
 
+// ---- the other apps' hooks (0.14.1): Codex, Gemini CLI and Cursor ----------------------------------------
+// Each app's own hook file, read as JSON (one that does not read as JSON is left alone, and nothing changes), with
+// Leanfare's entries found by their command and replaced, kept or taken out; everything else in the file stays.
+interface AppHook { event: string; matcher?: string; command: () => string; timeout?: number }
+interface AppHooks { file: () => string; cursor?: boolean; list: AppHook[] }
+const ourAny = (cmd: unknown) => typeof cmd === "string" && /(^|[\s'"/\\])(leanfare(\.exe)?|cli\.ts)['"]?\s+hook\s+(prompt|first)\b/i.test(cmd);
+export const APP_HOOKS: Record<string, AppHooks> = {
+  // Codex: Claude Code's shape in ~/.codex/hooks.json; its tool hook sees its shell.
+  codex: { file: () => join(codexDir(), "hooks.json"), list: [
+    { event: "UserPromptSubmit", command: () => promptHookCommand("codex"), timeout: 5 },
+    { event: "PreToolUse", matcher: "^Bash$", command: () => firstHookCommand("codex"), timeout: 5 },
+  ] },
+  // Gemini CLI: in ~/.gemini/settings.json, timeouts in milliseconds.
+  "gemini-cli": { file: () => join(home(), ".gemini", "settings.json"), list: [
+    { event: "BeforeAgent", command: () => promptHookCommand("gemini-cli"), timeout: 5000 },
+    { event: "BeforeTool", matcher: ".*", command: () => firstHookCommand("gemini-cli"), timeout: 5000 },
+  ] },
+  // Cursor: ~/.cursor/hooks.json (version 1); it has no hook that adds to a prompt.
+  cursor: { file: () => join(home(), ".cursor", "hooks.json"), cursor: true, list: [
+    { event: "beforeShellExecution", command: () => firstHookCommand("cursor") },
+    { event: "beforeMCPExecution", command: () => firstHookCommand("cursor") },
+  ] },
+};
+function readJson(file: string): any {
+  if (!existsSync(file)) return {};
+  const text = readFileSync(file, "utf8");
+  if (!text.trim()) return {};
+  try { const j = JSON.parse(text); if (j && typeof j === "object" && !Array.isArray(j)) return j; } catch {}
+  throw new Error(`${file} does not read as JSON, so Leanfare changed nothing in it.`);
+}
+const entriesOf = (j: any, event: string): any[] => (Array.isArray(j?.hooks?.[event]) ? j.hooks[event] : []);
+const commandsOf = (g: any): unknown[] => (Array.isArray(g?.hooks) ? g.hooks.map((x: any) => x?.command) : [g?.command]);
+function appHooksState(d: AppHooks): { all: boolean; any: boolean; current: boolean } {
+  let j: any = {};
+  try { j = readJson(d.file()); } catch { return { all: false, any: false, current: false }; }
+  const found = d.list.map((h) => entriesOf(j, h.event).some((g) => commandsOf(g).some(ourAny)));
+  const current = d.list.every((h) => entriesOf(j, h.event).some((g) => commandsOf(g).includes(h.command()) && (g?.matcher ?? undefined) === h.matcher));
+  return { all: found.every(Boolean), any: found.some(Boolean), current };
+}
+function setAppHooks(d: AppHooks, on: boolean) {
+  const file = d.file();
+  const j = readJson(file);
+  const st = appHooksState(d);
+  if (on ? st.all && st.current : !st.any) return;
+  const hooks = j.hooks && typeof j.hooks === "object" && !Array.isArray(j.hooks) ? j.hooks : {};
+  for (const event of new Set(d.list.map((h) => h.event))) {
+    const kept = entriesOf(j, event).map((g: any) => (Array.isArray(g?.hooks) ? { ...g, hooks: g.hooks.filter((x: any) => !ourAny(x?.command)) } : g))
+      .filter((g: any) => (Array.isArray(g?.hooks) ? g.hooks.length : !ourAny(g?.command)));
+    if (on) for (const h of d.list.filter((x) => x.event === event))
+      kept.push(d.cursor ? { command: h.command() } : { ...(h.matcher ? { matcher: h.matcher } : {}), hooks: [{ type: "command", command: h.command(), ...(h.timeout ? { timeout: h.timeout } : {}) }] });
+    if (kept.length) hooks[event] = kept; else delete hooks[event];
+  }
+  if (Object.keys(hooks).length) j.hooks = hooks; else delete j.hooks;
+  if (d.cursor && j.hooks) j.version ??= 1;
+  writeAtomic(file, JSON.stringify(j, null, 2) + "\n");
+}
+
 // ---- the apps ---------------------------------------------------------------------------------
 
 export interface AutoView { on: boolean; partly: boolean; what: string; reminders?: { n: number; kb: number } } // partly: some of it is there (Turn off takes it out); reminders: the read hook's last 7 days
-interface AutoDef { files: () => { rule: string; agent?: string }; hook?: boolean; rule: string; what: string }
+interface AutoDef { files: () => { rule: string | null; agent?: string }; hook?: boolean; rule: string; what: string; appHooks?: AppHooks } // rule null: the app has no file for rules (Cursor)
 export const AUTO: Record<string, AutoDef> = {
   "claude-code": { files: () => ({ rule: join(claudeDir(), "CLAUDE.md"), agent: join(claudeDir(), "agents", "leanfare-worker.md") }), hook: true, rule: RULE_CLAUDE,
     what: "Plan by itself: a block in CLAUDE.md (hand off big reads, and plan tasks with several parts), a worker subagent (leanfare-worker, on Haiku) for Leanfare's parts, a prompt hook that says how much of your plan is left, a reminder before Claude Code reads a big file itself, and, before Claude finishes, a request to grade and fix the answers Leanfare brought back" },
-  codex: { files: () => ({ rule: join(codexDir(), "AGENTS.md") }), rule: RULE_OTHER, what: "Plan by itself: a block in AGENTS.md that has Codex hand off big reads and call Leanfare's plan for a task with several parts" },
-  "gemini-cli": { files: () => ({ rule: join(home(), ".gemini", "GEMINI.md") }), rule: RULE_OTHER, what: "Plan by itself: a block in GEMINI.md that has Gemini CLI hand off big reads and call Leanfare's plan for a task with several parts" },
+  codex: { files: () => ({ rule: join(codexDir(), "AGENTS.md") }), rule: RULE_OTHER, appHooks: APP_HOOKS.codex, what: "Plan by itself: a block in AGENTS.md that has Codex hand off big reads and call Leanfare's plan for a task with several parts, a prompt hook that says the level, and at levels 4 and 5 a reminder to plan first before its first command of a prompt (hooks.json)" },
+  "gemini-cli": { files: () => ({ rule: join(home(), ".gemini", "GEMINI.md") }), rule: RULE_OTHER, appHooks: APP_HOOKS["gemini-cli"], what: "Plan by itself: a block in GEMINI.md that has Gemini CLI hand off big reads and call Leanfare's plan for a task with several parts, a hook that says the level with each prompt, and at levels 4 and 5 a reminder to plan first before its first tool of a prompt" },
+  cursor: { files: () => ({ rule: null }), rule: RULE_OTHER, appHooks: APP_HOOKS.cursor, what: "Plan by itself: at levels 4 and 5, Cursor's agent is asked once a prompt to plan with Leanfare first, before its first command or tool (Cursor's hooks.json); Cursor has no file for rules every project reads" },
 };
 
 const ourWorker = (file: string) => { try { return readFileSync(file, "utf8").includes(OWN); } catch { return false; } };
@@ -206,8 +269,9 @@ export function autoView(id: string): AutoView | null {
   const f = d.files();
   let hook = true, some = true;
   if (d.hook) { try { const j = readClaudeSettings(); hook = hookIn(j); some = hookAny(j); } catch { hook = false; some = false; } }
-  const have = [hasBlock(f.rule), ...(f.agent ? [ourWorker(f.agent)] : []), ...(d.hook ? [hook] : [])];
-  const any = have.some(Boolean) || (!!d.hook && some);
+  const ah = d.appHooks ? appHooksState(d.appHooks) : null;
+  const have = [...(f.rule ? [hasBlock(f.rule)] : []), ...(f.agent ? [ourWorker(f.agent)] : []), ...(d.hook ? [hook] : []), ...(ah ? [ah.all] : [])];
+  const any = have.some(Boolean) || (!!d.hook && some) || !!ah?.any;
   return { on: have.every(Boolean), partly: any && !have.every(Boolean), what: d.what, ...(id === "claude-code" ? { reminders: remindersLately() } : {}) };
 }
 
@@ -218,14 +282,19 @@ export function setAuto(id: string, on: boolean): AutoView {
   if (on && f.agent && existsSync(f.agent) && !ourWorker(f.agent)) throw new Error(`${f.agent} is not Leanfare's, so Leanfare left it alone. Rename it, then turn this on again.`);
   // Everything is checked first: the settings file reads as JSON, and every file can be written.
   if (d.hook) readClaudeSettings();
-  for (const file of [f.rule, ...(f.agent ? [f.agent] : []), ...(d.hook ? [claudeSettingsFile()] : [])]) { const why = writable(file); if (why) throw new Error(why); }
+  if (d.appHooks) readJson(d.appHooks.file()); // a hook file that does not read as JSON: nothing changes
+  for (const file of [...(f.rule ? [f.rule] : []), ...(f.agent ? [f.agent] : []), ...(d.hook ? [claudeSettingsFile()] : []), ...(d.appHooks ? [d.appHooks.file()] : [])]) { const why = writable(file); if (why) throw new Error(why); }
   // Then each change, undone if a later one fails, so nothing is left half done.
   const undo: (() => void)[] = [];
   try {
     if (d.hook) { const was = hookIn(readClaudeSettings()); setHook(on); undo.push(() => setHook(was)); }
-    const before = existsSync(f.rule) ? readFileSync(f.rule, "utf8") : null;
-    setBlock(f.rule, on ? d.rule : null);
-    undo.push(() => { if (before !== null) writeAtomic(f.rule, before); });
+    if (d.appHooks) { const hf = d.appHooks.file(), was = existsSync(hf) ? readFileSync(hf, "utf8") : null; setAppHooks(d.appHooks, on); undo.push(() => { if (was !== null) writeAtomic(hf, was); }); }
+    const rule = f.rule;
+    if (rule) {
+      const before = existsSync(rule) ? readFileSync(rule, "utf8") : null;
+      setBlock(rule, on ? d.rule : null);
+      undo.push(() => { if (before !== null) writeAtomic(rule, before); });
+    }
     if (f.agent) {
       if (on) { if (!existsSync(f.agent) || readFileSync(f.agent, "utf8") !== WORKER) writeAtomic(f.agent, WORKER); }
       else if (ourWorker(f.agent)) { const agent = f.agent; keepingFolderTimes([agent], () => unlinkSync(agent)); }
@@ -242,7 +311,7 @@ export function setAuto(id: string, on: boolean): AutoView {
 export function refreshAuto(): string[] {
   const done: string[] = [];
   for (const id of Object.keys(AUTO)) {
-    try { if (hasBlock(AUTO[id].files().rule)) { setAuto(id, true); done.push(id); } } catch (e) { console.error(`leanfare: could not bring Plan by itself up to date in ${id}: ${String((e as Error)?.message ?? e)}`); }
+    try { const d = AUTO[id], rule = d.files().rule; if (rule ? hasBlock(rule) : !!d.appHooks && appHooksState(d.appHooks).any) { setAuto(id, true); done.push(id); } } catch (e) { console.error(`leanfare: could not bring Plan by itself up to date in ${id}: ${String((e as Error)?.message ?? e)}`); }
   }
   return done;
 }

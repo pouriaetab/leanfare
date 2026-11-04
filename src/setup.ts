@@ -8,6 +8,8 @@ import { keyWhere } from "./keys";
 import { saveSettings, settings } from "./settings";
 import { setSwitch } from "./switch";
 import { autoView, setAuto } from "./workers";
+// Cursor plans by itself with hooks only (0.14.1, workers.ts): Settings turns that on, never Set up by itself.
+const HOOKS_ONLY = new Set(["cursor"]);
 
 const short = (name: string) => name.replace(/ \(and Cowork\)$/, "");
 
@@ -27,7 +29,7 @@ const WHERE: Record<string, string> = { keychain: "your key, in the Keychain", f
 
 export function setupView() {
   const apps = appsView().filter((a) => a.status !== "not installed")
-    .map((a) => ({ id: a.id, name: short(a.name), status: a.status, after: a.after, note: a.note, plansItself: !!a.auto }));
+    .map((a) => ({ id: a.id, name: short(a.name), status: a.status, after: a.after, note: a.note, plansItself: !!a.auto && !HOOKS_ONLY.has(a.id) }));
   const use = toUse();
   const using = new Set(use.models.map((m) => m.provider));
   const models = allProviders().filter((p) => using.has(p.id)).map((p) => ({
@@ -66,7 +68,7 @@ async function setUpApps(signal?: AbortSignal) {
     let note: string | undefined;
     try {
       const auto = autoView(a.id);
-      if (auto && !auto.on) setAuto(a.id, true);
+      if (auto && !auto.on && !HOOKS_ONLY.has(a.id)) setAuto(a.id, true);
     } catch (e: any) { note = `${name} does not plan by itself yet: ${said(e)}`; }
     results.push({ id: a.id, name, ok: true, after: a.after, ...(note ? { note } : {}) });
   }
