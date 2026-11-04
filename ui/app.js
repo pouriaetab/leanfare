@@ -492,7 +492,7 @@
   const planBox = { ta: null, rules: null };
   const PLAN_APPS = [["Claude Code", "Claude Code"], ["Claude", "Claude Desktop or Cowork"], ["Codex", "Codex"], ["Gemini CLI", "Gemini CLI"], ["Cursor", "Cursor"], ["you", "No app (just you)"]];
   let planTimer = null;
-  const RUNS_ON = { you: "you", local: "Leanfare, on this computer", free: "Leanfare, free model", paid: "Leanfare, pay per use", codex: "Leanfare, through Codex" };
+  const RUNS_ON = { you: "you", local: "Leanfare, on this computer", free: "Leanfare, free model", paid: "Leanfare, pay per use", codex: "Leanfare, through Codex", gemini: "Leanfare, through Gemini CLI" };
   // Who a part that stays with you runs on: "you (Claude, on your Claude Max plan)" (planner.ts: youText).
   const youText = (P) => {
     const plan = P.you && P.you.plan ? `on your ${P.you.plan.replace(/ plan$/i, "")} plan` : null;
@@ -558,7 +558,7 @@
         td("Model", { text: p.model?.label ?? ((/claude code/i.test(P.manager) ? p.use?.label : null) ?? P.you?.label ?? p.use?.label ?? "your model") }),
         td("Time", { text: p.seconds === null ? "—" : secsShort(p.seconds) }),
         td("Tokens", { text: p.where === "you" ? `~${tokShort(p.tokens)} of your plan` : `~${tokShort(p.tokens)} kept` }),
-        td("Cost", { text: p.where === "you" ? "in your plan" : p.where === "codex" ? "in your ChatGPT plan" : p.cost === null ? "not known" : money(p.cost) }),
+        td("Cost", { text: p.where === "you" ? "in your plan" : p.where === "codex" ? "in your ChatGPT plan" : p.where === "gemini" ? "in your Google account" : p.cost === null ? "not known" : money(p.cost) }),
         td("When", { text: p.needs.length ? `after ${p.needs.join(", ")}` : "now" }),
         run ? td("Now", { class: "st " + (r?.status ?? ""), text: STATUS[r?.status] ?? "" }) : null);
     });
@@ -1756,7 +1756,7 @@
   const RP_KIND = { read: "Reading", write: "Drafting", reason: "Working out", search: "Search", other: "Other" };
   const RP_WHERE = { local: "this computer", free: "free", plan: "ChatGPT plan", paid: "paid" };
   const RP_GRADE = { good: "✓ good", partly: "~ partly", wrong: "× wrong" };
-  const rpProvider = (id) => (id === "local" ? "This computer" : id === "codex" ? "ChatGPT plan (Codex)" : S.st?.providers?.find((p) => p.id === id)?.name ?? id);
+  const rpProvider = (id) => (id === "local" ? "This computer" : id === "codex" ? "ChatGPT plan (Codex)" : id === "gemini-cli" ? "Google account (Gemini CLI)" : S.st?.providers?.find((p) => p.id === id)?.name ?? id);
   const shortPlan = (name) => (name ? name.replace(/^(Claude|ChatGPT)\s+/i, "") : null);
   const RP_PAGE = 10; // prompts at a time: the Prompts view fits a screen
   S.report = S.report ?? { q: { range: "7d" }, data: null, open: {}, seq: 0, shown: RP_PAGE };
@@ -3368,6 +3368,22 @@
     catch (err) { toast(err.message, "error"); }
     clearTimeout(S.codexTimer); S.codexTimer = setTimeout(() => loadCodex(true), 2000);
   }
+  // Gemini CLI on your Google account (0.14.1): found and signed in, then one switch.
+  async function loadGeminiCli() { try { S.geminiCli = await api("/api/gemini-cli"); } catch { S.geminiCli = { installed: false, signedIn: false }; } renderSettings(); }
+  function geminiCliSettingEl(s) {
+    if (S.geminiCli === undefined) { S.geminiCli = null; loadGeminiCli(); }
+    const g = S.geminiCli, on = !!s.geminiCliPlan && !!g?.signedIn;
+    const line = !g ? "Looking for Gemini CLI…" : on ? "Hand offs can run on your Google account through Gemini CLI, before any paid model."
+      : g.signedIn ? "Gemini CLI is signed in with Google: turn it on to hand work to your Google account."
+      : g.installed ? "Gemini CLI is here but not signed in: run gemini once in Terminal and choose Sign in with Google."
+      : "Hand reading and drafting to your Google account's Gemini. Install Gemini CLI in Terminal: npm install -g @google/gemini-cli";
+    const btn = on ? h("button", { class: "btn small", type: "button", text: "Turn off", onclick: () => patchSettings({ geminiCliPlan: false }, "Gemini CLI is no longer used for hand offs.") })
+      : g?.signedIn ? h("button", { class: "btn small primary", type: "button", text: "Turn on", onclick: () => patchSettings({ geminiCliPlan: true }, "Hand offs can run on your Google account now.") })
+      : runButton("Look again", async () => { await loadGeminiCli(); }, "btn small");
+    return h("div", { class: "app-row", id: "geminiCliCard" },
+      h("div", { class: "row" }, h("span", { class: "grow" }, h("b", { text: "Gemini" }), h("span", { class: "note", text: !g ? " · looking" : on ? " · connected" : g.signedIn ? " · signed in" : g.installed ? " · not signed in" : " · not here" })), btn),
+      h("div", { class: "note", text: line }));
+  }
   function codexSettingEl(s) {
     if (S.codex === undefined) { S.codex = null; loadCodex(false); }
     const c = S.codex, k = (c && c.connect) || { step: "idle" };
@@ -3791,7 +3807,7 @@
     const right = h("div", { class: "colR" },
       h("div", { class: "section-title", text: "In your apps" }),
       appsSettingEl(),
-      h("div", { class: "setting workers", id: "workersSetting" }, h("h3", { text: "Hand work to your other AI plans" }), codexSettingEl(s), freeRowsEl()),
+      h("div", { class: "setting workers", id: "workersSetting" }, h("h3", { text: "Hand work to your other AI plans" }), codexSettingEl(s), geminiCliSettingEl(s), freeRowsEl()),
       h("div", { class: "section-title", text: "Choices" }),
       levelSettingEl(s), keepSettingEl(s),
       h("div", { class: "setting" }, h("h3", { text: "How Auto picks" }), modeSeg,
