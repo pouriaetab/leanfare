@@ -17,10 +17,10 @@ export const LIVE_APP_HTML = `<!doctype html>
   :root[data-theme="dark"] { --bg: var(--color-background-primary, #1b1d1e); --fg: var(--color-text-primary, #eceeef); --muted: var(--color-text-secondary, #a3a8ab);
     --line: var(--color-border-primary, #33373a); --soft: var(--color-background-secondary, #24272a); --accent: #2dd4bf;
     --k1: #3987e5; --k2: #d95926; --k3: #199e70; --k4: #c98500; }
-  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.43 system-ui, -apple-system, "Segoe UI", sans-serif; }
   #app { padding: 10px 12px; display: grid; gap: 8px; }
   .head { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; }
-  h1 { font-size: 15px; margin: 0; display: flex; align-items: center; gap: 7px; }
+  h1 { font-size: 15px; font-weight: 520; margin: 0; display: flex; align-items: center; gap: 7px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
   .dot.on { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: 0.35; } }
@@ -32,7 +32,7 @@ export const LIVE_APP_HTML = `<!doctype html>
   .row { display: grid; grid-template-columns: minmax(0, 13em) minmax(0, 1fr) auto; gap: 8px; align-items: center; }
   .row.ended { opacity: 0.55; }
   .who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .who b { font-weight: 600; }
+  .who b { font-weight: 520; }
   .bar { display: flex; gap: 2px; height: 12px; min-width: 0; }
   .bar span { height: 100%; border-radius: 3px; background: var(--c); transition: width 0.45s ease; min-width: 0; }
   .tot { font-size: 12px; text-align: right; min-width: 4.5em; }
