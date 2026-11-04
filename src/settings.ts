@@ -62,15 +62,22 @@ export interface Settings {
   keepDays: number; // 0.12: how many days kept words stay
   planMeter: boolean; // 0.12: read the Claude plan's use through Claude Code's usage view while the app runs (usageprobe.ts)
   jobs: Jobs; // where each kind of job goes in plans (0.11): to Leanfare, to Leanfare when your plan runs low (modes.ts), or your app
+  jobsSet?: boolean; // 0.14: the Jobs were set in Settings (so old defaults saved by hand are kept)
   paidCap: number; // US dollars a hand off may spend on a paid model (0.11); a cheaper or free one first, or it stays with your app
 }
 export type JobKind = "read" | "search" | "write" | "reason";
 export type JobRule = "leanfare" | "low" | "app";
 export type Jobs = Record<JobKind, JobRule>;
 export const JOB_KINDS: JobKind[] = ["read", "search", "write", "reason"];
-// From his grades (0.11): reading did best on the free models, working things out worst, so working things out stays with
-// your app and drafting goes out when your plan runs low; change them in Settings, Jobs. Changes to files always stay.
-export const JOB_DEFAULTS: Jobs = { read: "leanfare", search: "leanfare", write: "low", reason: "app" };
+// From his grades (0.11): reading did best on the free models, working things out worst, so drafting and working things
+// out go out when your plan runs low, or at level 4 and up (0.14: his levels, "4 means more to the outside models");
+// change them in Settings, Jobs. At level 4 the hardest judgement still stays with your app, and changes to files come
+// back as patches your app applies (planner.ts).
+export const JOB_DEFAULTS: Jobs = { read: "leanfare", search: "leanfare", write: "low", reason: "low" };
+// The defaults before 0.14. Saving any setting saved them all, so Jobs saved exactly as these, and never set in Settings
+// (jobsSet), were never changed by hand: they follow the new defaults.
+export const OLD_JOB_DEFAULTS: Jobs = { read: "leanfare", search: "leanfare", write: "low", reason: "app" };
+const sameJobs = (a: unknown, b: Jobs) => !!a && typeof a === "object" && JOB_KINDS.every((k) => (a as Record<string, unknown>)[k] === b[k]);
 
 export const DEFAULTS: Settings = {
   mode: "balanced",
@@ -128,7 +135,11 @@ export const MODES: Record<Mode, { label: string; margin: number; blurb: string 
 let cache: Settings | null = null;
 
 export function settings(): Settings {
-  if (!cache) cache = { ...DEFAULTS, ...getSetting<Partial<Settings>>("settings", {}) };
+  if (!cache) {
+    const saved = getSetting<Partial<Settings>>("settings", {});
+    cache = { ...DEFAULTS, ...saved };
+    if (!saved.jobsSet && sameJobs(saved.jobs, OLD_JOB_DEFAULTS)) cache.jobs = { ...JOB_DEFAULTS };
+  }
   return cache;
 }
 
@@ -215,6 +226,7 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
       jobs[k as JobKind] = v as JobRule;
     }
     out.jobs = jobs;
+    out.jobsSet = true;
   }
   if ("paidCap" in p) {
     const v = typeof p.paidCap === "number" || (typeof p.paidCap === "string" && p.paidCap.trim() !== "") ? Number(p.paidCap) : NaN;

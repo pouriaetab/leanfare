@@ -88,6 +88,7 @@ export interface Part {
   guess?: boolean; // its size is a guess: a reading part with no files named (the sources a search finds, say)
   keep?: boolean; // the whole task is small enough to answer yourself: it is not split
   keepWhy?: string; // why a part stays with you when it is not for its size: questions are answered where the context is
+  patch?: boolean; // 0.14: a change to the project drafted outside as a patch, at level 4 and up; the app reads it and applies it
 }
 type Split = Omit<Part, "where" | "model" | "use" | "seconds" | "tokens" | "cost" | "why" | "risk" | "guess">;
 export interface PlanResult {
@@ -318,6 +319,13 @@ const onCodex = (part: Split, r: { tokens: number }, why: string): Part => ({ ..
 // Why more goes out: the plan near its limit, or the level (0.12) set to 4 or 5.
 const nearWords = (near: string, join: ": " | " (") => (near.startsWith("your Leanfare level") ? near : `your plan is near its limit${join}${near}${join === " (" ? ")" : ""}`);
 async function place(part: Split, files: PlanFile[], near: string | null, manager: string, signal: AbortSignal, codex = false, priv = false, level: Level = 2): Promise<Part> {
+  // 0.14: at level 4 and up a change to the project is drafted outside, as a patch: placed as drafting is (your Jobs rule
+  // for drafting holds), and the app reads it and applies it with its own tools. Below 4 it stays, as before.
+  if (part.kind === "code" && level >= 4 && !part.keep) {
+    const p = await place({ ...part, kind: "write" }, files, near, manager, signal, codex, priv, level);
+    if (p.where === "you") return { ...p, kind: "code", use: modelInYourApp(part, manager) };
+    return { ...p, kind: "code", patch: true, why: `your Leanfare level is ${levelText(level)}: a model drafts the change as a patch, and you read it and apply it (${p.why})` };
+  }
   const r = reading(part, files);
   // A private plan stays on this computer; a part's files go where Settings says (platforms.ts: mayTake).
   const work = { private: priv, files: r.named > 0 };
@@ -338,6 +346,8 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
   if (job && rule === "low" && !near) return stay(`your rules send ${JOB_WORD[job]} out only when your plan runs low (Settings, Jobs)`);
   const big = (part.effort === "high" && (part.kind === "reason" || part.kind === "write"));
   if (big && !near) return stay(`high effort judgement: your strongest model, in your plan`);
+  // At level 4 the hardest working out stays with your strongest model; at 5, or with your plan low, it goes out too.
+  if (big && part.kind === "reason" && level < 5 && near?.startsWith("your Leanfare level")) return stay(`high effort working out stays with your strongest model below level 5`);
   const need = Math.ceil((r.tokens * 4) / 3) + DEFAULT_MAX_OUT; // as delegate counts it: three characters a token, and the answer
   const fits = (m: Model) => fitsText(m, r.tokens * 4, DEFAULT_MAX_OUT) && fitsFree(m, r.tokens * 4, DEFAULT_MAX_OUT); // a free plan's tokens a minute too
   const kindOk = part.kind === "search" ? (m: Model) => m.provider === "perplexity" && fits(m) && modelOn(m) && mayTake(m, work) : (m: Model) => fits(m) && modelOn(m) && mayTake(m, work); // a search goes to a model that searches the web; a platform turned off takes nothing
@@ -459,7 +469,9 @@ export function timeLine(t: { seconds: number | null; after: number | null }): s
 
 // The model a part that stays with you runs on. Claude Code can run a part on another of its models in a
 // subagent, so its plan names the one to use; the other apps run one model a chat, the one they said.
-export const picksPerPart = (manager: string) => /claude code/i.test(manager);
+// Claude Code, and Claude (Desktop and Cowork; 0.14): Cowork starts helpers on another model too (its Agent tool takes
+// model: opus, sonnet, haiku or fable); the Desktop app's chat cannot, and is told to do the part itself then.
+export const picksPerPart = (manager: string) => /claude code/i.test(manager) || /^(claude|cowork)$/i.test(manager.trim());
 const yourModelFor = (p: Pick<Part, "use">, r: Pick<PlanResult, "manager" | "you">) =>
   (picksPerPart(r.manager) ? p.use?.label : null) ?? r.you?.label ?? p.use?.label ?? "your model";
 // Who a part that stays with you runs on: "you (Claude, on your Claude Max plan)".
@@ -470,7 +482,7 @@ const youText = (r: Pick<PlanResult, "manager" | "you">) => {
 };
 export function tableOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
   const rows = r.parts.map((p) => [
-    String(p.n), p.title, `${LABEL_KIND[p.kind]}, ${p.effort}`, p.where === "you" ? youText(r) : `${RUNS[p.where]}${p.risk ? ` (${p.risk})` : ""}`,
+    String(p.n), p.title, `${LABEL_KIND[p.kind]}${p.patch ? " (patch)" : ""}, ${p.effort}`, p.where === "you" ? youText(r) : `${RUNS[p.where]}${p.risk ? ` (${p.risk})` : ""}`,
     p.model?.label ?? yourModelFor(p, r), p.seconds === null ? "" : secondsText(p.seconds).replace(/^about /, "~"),
     p.where === "you" ? `~${tokText(p.tokens)} of your plan` : `~${tokText(p.tokens)} kept`, p.where === "you" ? "in your plan" : p.where === "codex" ? "in your ChatGPT plan" : usd(p.cost),
     p.needs.length ? `after ${p.needs.join(", ")}` : "now",
@@ -517,9 +529,13 @@ function nextOf(r: Omit<PlanResult, "table" | "next" | "id">, started: Set<numbe
   else if (mine.length) {
     const on = mine.map((p) => `part ${p.n}${picksPerPart(r.manager) || !r.you?.label ? ` on ${p.use?.label ?? "your strongest model"}` : ""}`);
     // Claude Code runs a part on another model with a subagent (its Agent tool takes model: opus, sonnet, haiku or fable).
-    const how = mine.some((p) => p.use?.alias) && picksPerPart(r.manager) ? " For a part on another model than the one you run on, use a subagent with that model (model: opus, sonnet or haiku)." : "";
+    const how = !(mine.some((p) => p.use?.alias) && picksPerPart(r.manager)) ? ""
+      : /claude code/i.test(r.manager) ? " For a part on another model than the one you run on, use a subagent with that model (model: opus, sonnet or haiku)."
+      : " For a part on another model than the one you run on, start a helper (a subagent) with that model if your app can (model: opus, sonnet or haiku); if it cannot, do the part yourself.";
     s.push(`Do these yourself: ${on.join(", ")}.${how}`);
   }
+  const patches = r.parts.filter((p) => p.patch).map((p) => p.n);
+  if (patches.length) s.push(`${list(patches).replace(/^p/, "P")} come${patches.length === 1 ? "s" : ""} back as ${patches.length === 1 ? "a patch" : "patches"}: read ${patches.length === 1 ? "it" : "each"}, apply what is right with your own tools, and grade ${patches.length === 1 ? "it" : "each"}.`);
   if (yoursFirst.size) s.push(`${list([...yoursFirst]).replace(/^p/, "P")} wait${yoursFirst.size === 1 ? "s" : ""} for yours: once yours are done, run ${yoursFirst.size === 1 ? "it" : "them"} with delegate, with the answers ${yoursFirst.size === 1 ? "it needs" : "they need"} in the task (plan_run does not run ${yoursFirst.size === 1 ? "it" : "them"}).`);
   return s.join(" ");
 }
@@ -816,10 +832,12 @@ export function stopRun(id: string): RunView | null {
   return r.view;
 }
 
+// What a part drafted as a patch is asked first (0.14): a diff the app can read and apply, nothing applied.
+export const PATCH_ASK = "Draft this change as a patch: a unified diff, as git diff prints it, with paths relative to the project, against the files given. Change nothing else. After the diff, one line for each file on why. The app you work for reads the patch and applies it itself.";
 async function runPart(p: Part, plan: PlanResult, at: (n: number) => RunPart, signal: AbortSignal, yes: boolean): Promise<Partial<RunPart>> {
   const before = p.needs.map((n) => { const x = at(n); return `Part ${n} (${x.title}):\n${(x.answer ?? "").slice(0, HANDED)}`; });
   const context = p.task.includes(CONTEXT) ? "" : `\n\n${CONTEXT} ${plan.task.slice(0, 4000)}`; // a part split by rules carries it already
-  const task = `${p.task}${before.length ? `\n\nWhat the earlier parts found:\n\n${before.join("\n\n")}` : ""}${context}`;
+  const task = `${p.patch ? `${PATCH_ASK}\n\n` : ""}${p.task}${before.length ? `\n\nWhat the earlier parts found:\n\n${before.join("\n\n")}` : ""}${context}`;
   if (p.where === "codex") {
     if (!platformOn("chatgpt")) throw Object.assign(new UserError(409, "This part was to run on Codex, but ChatGPT is turned off for plans now (Settings, Where Leanfare may send work). Make the plan again to place it elsewhere.", "codex_off"), { spent: 0 });
     // The switch in Settings and the ChatGPT plan's limits hold when the part runs, not only when the plan was made.
@@ -831,7 +849,7 @@ async function runPart(p: Part, plan: PlanResult, at: (n: number) => RunPart, si
     const folder = commonFolder(paths);
     const r = await runCodex({ n: p.n, title: p.title, task, folder, files: folder ? paths.map((x) => relative(folder, x)) : paths, effort: p.effort, search: p.kind === "search" }, signal);
     const bytes = p.files.reduce((n, f) => n + (known.get(f)?.size ?? 0), 0);
-    notePart({ kind: p.kind, effort: p.effort, model: CODEX_ID, cost: 0, files: paths.length, fileTokens: Math.ceil(bytes / 4), task, answer: r.answer, plan: `${plan.id}:${p.n}`, ...appOf(plan), ms: Math.round(r.seconds * 1000) });
+    notePart({ kind: p.patch ? "write" : p.kind, effort: p.effort, model: CODEX_ID, cost: 0, files: paths.length, fileTokens: Math.ceil(bytes / 4), task, answer: r.answer, plan: `${plan.id}:${p.n}`, ...appOf(plan), ms: Math.round(r.seconds * 1000) });
     return { status: "done", answer: r.answer, receipt: `${CODEX_LABEL}, read only, ${secondsText(r.seconds)}. It counts in your ChatGPT plan's Codex use; nothing to pay here.${r.note ? ` ${r.note}` : ""}`, model: CODEX_LABEL, modelId: CODEX_ID, cost: 0, seconds: r.seconds };
   }
   if (plan.private && p.where !== "local") throw Object.assign(new UserError(409, "This plan is to stay on this computer, and this part was not placed here. Make the plan again.", "private_part"), { spent: 0 });
@@ -853,7 +871,7 @@ async function runPart(p: Part, plan: PlanResult, at: (n: number) => RunPart, si
   if (mine.length && !files.length) throw Object.assign(new UserError(400, `None of its files could be handed over${skipped.length ? `: ${skipped.slice(0, 3).join("; ")}` : ""}.`, "plan_files"), { spent: 0 });
   // A free part stays on free models, its check too; a paid part within the cap goes unchecked (the estimate holds no check).
   const free = p.where === "local" || p.where === "free";
-  const d = await runDelegate({ task, files, kind: DELEGATE_KIND[p.kind] ?? null, effort: p.effort, check: free || yes ? "auto" : "never", maxOut: DEFAULT_MAX_OUT, ...(free ? { only: isFree } : {}), ...(p.model ? { model: p.model.id } : {}), plan: `${plan.id}:${p.n}`, ...(plan.private ? { private: true } : {}), ...appOf(plan), ...(isLevel(plan.level) ? { level: plan.level } : {}) }, signal);
+  const d = await runDelegate({ task, files, kind: DELEGATE_KIND[p.patch ? "write" : p.kind] ?? null, effort: p.effort, check: free || yes ? "auto" : "never", maxOut: DEFAULT_MAX_OUT, ...(free ? { only: isFree } : {}), ...(p.model ? { model: p.model.id } : {}), plan: `${plan.id}:${p.n}`, ...(plan.private ? { private: true } : {}), ...appOf(plan), ...(isLevel(plan.level) ? { level: plan.level } : {}) }, signal);
   const notes = [
     mine.length > files.length + skipped.length ? `Handed over ${files.length} of its ${mine.length} files (the most one hand off takes is ${DELEGATE_LIMITS.count} files, ${DELEGATE_LIMITS.total / 1048576} MB).` : "",
     skipped.length ? `Left out: ${skipped.slice(0, 3).join("; ")}${skipped.length > 3 ? `, and ${skipped.length - 3} more` : ""}.` : "",
@@ -873,11 +891,12 @@ export function gradePart(id: string, n: number, verdict: Verdict, source: strin
   const run = held?.view.parts.find((r) => r.n === n);
   if (!part || !run) throw new UserError(404, `Part ${n} of this plan has not run in Leanfare.`, "no_part");
   if (run.status !== "done" || !run.modelId) throw new UserError(400, `Part ${n} has no answer to grade (${NOT_GRADABLE[run.status]}).`, "nothing_to_grade");
-  if (!(["read", "write", "reason", "search"] as string[]).includes(part.kind)) throw new UserError(400, `Part ${n} is a ${part.kind} part: only reading, drafting, working out and searching are graded.`, "not_graded");
-  held!.grades.set(n, addGrade({ model: run.modelId, kind: part.kind as GradedKind, effort: part.effort, verdict, source }, held!.grades.get(n) ?? null));
+  const kind = part.patch ? "write" : part.kind; // a patch is graded as drafting (0.14)
+  if (!(["read", "write", "reason", "search"] as string[]).includes(kind)) throw new UserError(400, `Part ${n} is a ${part.kind} part: only reading, drafting, working out and searching are graded.`, "not_graded");
+  held!.grades.set(n, addGrade({ model: run.modelId, kind: kind as GradedKind, effort: part.effort, verdict, source }, held!.grades.get(n) ?? null));
   run.verdict = verdict;
   run.gradedBy = source === "you" ? "you" : "manager";
   gradeRow(verdict, { plan: `${id}:${n}` }); // kept with the part's row too: Savings counts the grades of the month
-  const st = standing(run.modelId, part.kind as GradedKind);
+  const st = standing(run.modelId, kind as GradedKind);
   return { text: standingText(st), standing: st };
 }
