@@ -84,11 +84,13 @@ describe("whether Codex is there", () => {
     expect((await ui(url, "/api/codex?fresh=1")).json).toMatchObject({ installed: true, signedIn: true, version: "0.159.0", on: true });
     expect((await ui(url, "/api/settings", { codexPlan: "yes" })).status).toBe(400); // true or false only
   });
-  test("a plan may use it only when it is on, signed in, and you are not working in Codex itself", async () => {
+  test("a plan may use it only when it is on and signed in; working in Codex itself, its parts go to a lighter model of the plan", async () => {
     expect(await codexFor("Claude Code")).toEqual({ ok: false, why: null }); // off by default: nothing to say
     saveSettings({ codexPlan: true });
     expect(await codexFor("Claude Code")).toEqual({ ok: true, why: null });
-    expect(await codexFor("Codex")).toEqual({ ok: false, why: null });
+    expect(await codexFor("Codex")).toEqual({ ok: true, why: null, own: true }); // 0.14.1
+    const { lighter } = await import("../src/codex");
+    expect([lighter(["gpt-6.1", "gpt-6.1-mini"]), lighter(["gpt-6.1", "gpt-6"]), lighter(["gpt-6.1"])]).toEqual(["gpt-6.1-mini", "gpt-6", null]);
     forgetCodex(); knob("signed-out");
     expect(await codexFor("Claude Code")).toEqual({ ok: false, why: "Codex is not signed in (run codex login in Terminal)" });
     forgetCodex(); process.env.LEANFARE_CODEX_BIN = "";
@@ -129,14 +131,14 @@ describe("in a plan", () => {
       expect(r.json.local ?? null).toBeNull(); // nothing goes to pay per use: no local model to suggest
     } finally { rmSync(p, { recursive: true, force: true }); }
   });
-  test("off, or working in Codex: the same part goes to pay per use as before", async () => {
+  test("off: the same part goes to pay per use as before; working in Codex (0.14.1), it goes to a lighter model of the ChatGPT plan", async () => {
     await keys("openai");
     const r = await plan({ task: "Find the errors in these logs and list them", files: [{ name: "logs/app.log", size: 20_000 }] });
     expect(r.json.parts.some((x: any) => x.where === "codex")).toBe(false);
     expect(r.json.parts.some((x: any) => x.where === "paid")).toBe(true);
     saveSettings({ codexPlan: true });
     const inCodex = await plan({ task: "Find the errors in these logs and list them", files: [{ name: "logs/app.log", size: 20_000 }], manager: "Codex" });
-    expect(inCodex.json.parts.some((x: any) => x.where === "codex")).toBe(false);
+    expect(inCodex.json.parts.some((x: any) => x.where === "codex")).toBe(true);
   });
   test("on but signed out: pay per use, and the table says why Codex took no part", async () => {
     await keys("openai");
