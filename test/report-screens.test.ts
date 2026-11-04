@@ -47,20 +47,29 @@ describe("the report", () => {
     const doc = await open(url);
     await goReport(doc);
     const tiles = [...doc.querySelectorAll("#reportCard .rp-tile")].map((t: any) => t.textContent);
+    const tips = [...doc.querySelectorAll("#reportCard .rp-tile")].map((t: any) => t.title);
     // Saved, an estimate: Claude alone (30.5k and 10.9k: the files read, the answers written), less what handing them off
-    // cost it (the tasks and receipts at a typical size before 0.10, and the answers read back: 0.7k and 1.1k).
-    expect(tiles[0]).toBe("Saved for Claude estimate≈ 40kClaude alone ≈ 41k, minus the hand offs' own cost ≈ 2k (the tasks, and the answers read back). Range 27k to 54k.");
-    expect(tiles[1]).toBe("Outside models used not knownNot measured yet$0.0030, 50% of parts free · 2 older parts not measured");
-    expect(tiles[2]).toBe("Claude's own use measured3k new tokensClaude: not known · Claude Code, from its own files · 40k more read again from the cache");
-    expect(tiles[3]).toBe("Quality, three waysOutside answers50 / 100 12 to 88Togethernot gradedClaude alonenot knownScores out of 100 (good 1, partly half, wrong 0), with their 90% range. 2 outside answers graded, 0 prompts graded together, 0 sampled runs of Claude alone");
+    // cost it (the tasks and receipts at a typical size before 0.10, and the answers read back: 0.7k and 1.1k). Each tile
+    // shows its number and one short line; the whole of it is on hover (0.13.12).
+    expect(tiles[0]).toBe("Saved for Claude estimate≈ 40krange 27k to 54k");
+    expect(tips[0]).toBe("Claude alone ≈ 41k, minus the hand offs' own cost ≈ 2k (the tasks, and the answers read back). Range 27k to 54k.");
+    expect(tiles[1]).toBe("Outside models used not knownNot measured yet$0.0030 · 50% free");
+    expect(tips[1]).toBe("$0.0030, 50% of parts free · 2 older parts not measured");
+    expect(tiles[2]).toBe("Claude's own use measured3k new tokens40k more from the cache");
+    expect(tips[2]).toBe("Claude: not known · Claude Code, from its own files · 40k more read again from the cache");
+    expect(tiles[3]).toBe("Quality, three waysOutside answers50 / 100 12 to 88Togethernot gradedClaude alonenot known");
+    expect(tips[3]).toBe("Scores out of 100 (good 1, partly half, wrong 0), with their 90% range. 2 outside answers graded, 0 prompts graded together, 0 sampled runs of Claude alone");
     expect(doc.querySelectorAll("#reportCard .rp-chart path.l1, #reportCard .rp-chart path.l2")).toHaveLength(2);
     expect([...doc.querySelectorAll("#reportCard .rp-bar .nm span")].map((e: any) => e.textContent)).toEqual(["Gemini 3.8 Flash", "DeepSeek V4 Flash"]);
     expect([...doc.querySelectorAll("#reportCard .rp-kind .nm b")].map((e: any) => e.textContent)).toEqual(["Reading", "Drafting"]);
     const rows = [...doc.querySelectorAll("#reportCard tr.pr")].map((r: any) => [...r.querySelectorAll("td")].map((td: any) => td.textContent.trim()));
     expect(rows.map((r) => r.filter((_, i) => i !== 1))).toEqual([
-      ["▸PRM-2", "Claude · Claude Opus 5.5", "not measured", "≈ 11krange 7k to 16k", "≈ 10k", "not known", "× wrong", "not graded", "not known"],
-      ["▸PRM-1", "Claude Code · Claude Opus 5.5", "not measured", "≈ 31krange 21k to 41k", "≈ 30k", "3k newmeasured", "✓ good", "not graded", "not known"],
+      ["▸PRM-2", "Claude · Claude Opus 5.5", "not measured", "≈ 11k", "≈ 10k", "not known", "× wrong", "not graded", "not known"],
+      ["▸PRM-1", "Claude Code · Claude Opus 5.5", "not measured", "≈ 31k", "≈ 30k", "3k new", "✓ good", "not graded", "not known"],
     ]);
+    // A row is one line: a cell's second line is on hover.
+    expect([...doc.querySelectorAll("#reportCard tr.pr")].map((r: any) => [r.querySelectorAll("td")[4].title, r.querySelectorAll("td")[6].title]))
+      .toEqual([["range 7k to 16k", ""], ["range 21k to 41k", "measured"]]);
     expect([...doc.querySelectorAll("#reportCard thead th")].map((th: any) => th.textContent))
       .toEqual(["ID", "When", "App · main model", "Tokens", "Grades", "Outside used", "Claude alone", "Saved", "Claude used, whole prompt", "Outside", "Together", "Claude alone"]);
     expect(bad(doc)).toBe(false);
@@ -73,14 +82,16 @@ describe("the report", () => {
     await waitFor(() => doc.querySelectorAll("#reportCard tr.part").length === 3);
     const parts = [...doc.querySelectorAll("#reportCard tr.part")].map((r: any) => r.textContent);
     expect(doc.querySelector("#reportCard tr.part td.pid").textContent).toBe("PRM-1.1");
-    expect(parts[0]).toBe("PRM-1.1Oct 20, 10:05 AMreading · Gemini 3.8 Flashfree · 6 snot measured (before 0.10)≈ 31kreads what it read, thinks and writes as Gemini 3.8 Flash did (from its numbers)≈ 30kminus 500 read back, 200 for the call✓ goodby Claude Codenot sampled");
+    expect(parts[0]).toBe("PRM-1.1Oct 20, 10:05 AMreading · Gemini 3.8 Flashfree · 6 snot measured (before 0.10)≈ 31k≈ 30k✓ goodby Claude Codenot sampled");
+    const cells = [...doc.querySelectorAll("#reportCard tr.part")][0].querySelectorAll("td");
+    expect([cells[4].title, cells[5].title]).toEqual(["reads what it read, thinks and writes as Gemini 3.8 Flash did (from its numbers)", "minus 500 read back, 200 for the call"]);
     expect(parts[1]).toContain("prompt 100, its own work 3k new tokens (measured), 40k more read again from the cache");
     // The whole result, graded here: kept with the prompt's last part, and shown on the prompt.
     expect(parts[2]).toBe("The whole result, Claude Code and the hand offs together: ✓ good~ partly× wrong");
     ([...doc.querySelectorAll("#reportCard tr.part button")] as any[]).find((b) => b.textContent === "~ partly").click();
     await waitFor(() => doc.querySelector("#reportCard tr.pr:nth-child(2)")?.querySelectorAll("td")[8]?.textContent === "~ partly");
     expect((db.query("SELECT together, together_by FROM delegations WHERE app = 'Claude Code'").get() as any)).toEqual({ together: "partly", together_by: "you" });
-    expect(doc.querySelector("#reportCard .rp-tile:nth-child(4)").textContent).toContain("1 prompt graded together");
+    expect(doc.querySelector("#reportCard .rp-tile:nth-child(4)").title).toContain("1 prompt graded together");
   });
 
   test("a span or a filter is asked again, and the CSV holds the prompts and their parts", async () => {

@@ -19,16 +19,16 @@ export const PLAN_APP_HTML = `<!doctype html>
     --line: var(--color-border-primary, #e3e5e6); --soft: var(--color-background-secondary, #f4f5f5); --accent: #0f766e; --good: #15803d; --warn: #b45309; }
   :root[data-theme="dark"] { --bg: var(--color-background-primary, #1b1d1e); --fg: var(--color-text-primary, #eceeef); --muted: var(--color-text-secondary, #a3a8ab);
     --line: var(--color-border-primary, #33373a); --soft: var(--color-background-secondary, #24272a); --accent: #2dd4bf; --good: #4ade80; --warn: #fbbf24; }
-  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.43 system-ui, -apple-system, "Segoe UI", sans-serif; }
   #app { padding: 10px 12px; }
-  h1 { font-size: 14px; margin: 0 0 6px; display: flex; gap: 8px; align-items: baseline; }
+  h1 { font-size: 15px; font-weight: 520; margin: 0 0 6px; display: flex; gap: 8px; align-items: baseline; }
   h1 small { color: var(--muted); font-weight: 400; font-size: 12px; }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { color: var(--muted); font-weight: 600; font-size: 11.5px; white-space: nowrap; }
+  th { color: var(--muted); font-weight: 520; font-size: 12px; white-space: nowrap; }
   td.n, td.t, td.c, td.s { white-space: nowrap; }
   tr.you td { background: var(--soft); }
-  .why { color: var(--muted); font-size: 11.5px; }
+  .why { color: var(--muted); font-size: 12px; }
   .sum { margin: 8px 0; }
   .muted { color: var(--muted); }
   .state { margin: 0 0 8px; display: flex; gap: 7px; align-items: center; }
@@ -37,7 +37,7 @@ export const PLAN_APP_HTML = `<!doctype html>
   @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
   .done { color: var(--good); } .bad { color: var(--warn); }
   details { border-top: 1px solid var(--line); padding: 5px 0; }
-  summary { cursor: pointer; font-weight: 600; }
+  summary { cursor: pointer; font-weight: 520; }
   pre { white-space: pre-wrap; word-break: break-word; margin: 6px 0; font: 12px/1.45 ui-monospace, Menlo, monospace; background: var(--soft); padding: 8px; border-radius: 6px; }
   @media (max-width: 560px) { thead { display: none; } table, tbody, tr, td { display: block; width: 100%; } tr { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px; padding: 4px 6px; } td { border: none; padding: 1px 0; white-space: normal !important; } td[data-l]::before { content: attr(data-l) ": "; color: var(--muted); } }
 </style></head>

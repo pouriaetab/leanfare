@@ -37,7 +37,25 @@
       if (kid === null || kid === undefined || kid === false) continue;
       el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
     }
+    if (tag === "h3" && el.title) tipMark(el, () => el.title);
     return el;
+  }
+  // The longer words of a heading or a switch (0.13.12): on hover, or under it after one press of its i. A paragraph
+  // given as where stays in the page, hidden until then.
+  function tipMark(head, text, where = null) {
+    const i = document.createElement("span"); // not a button: a card's own buttons stay its buttons
+    i.className = "tip-i"; i.tabIndex = 0; i.setAttribute("role", "button"); i.setAttribute("aria-label", "More about this"); i.setAttribute("aria-expanded", "false");
+    i.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); i.click(); } });
+    i.addEventListener("click", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (where) { where.hidden = !where.hidden; i.setAttribute("aria-expanded", String(!where.hidden)); return; }
+      const next = head.nextElementSibling;
+      if (next?.classList.contains("tip-pop")) { next.remove(); i.setAttribute("aria-expanded", "false"); return; }
+      const pop = document.createElement("div"); pop.className = "tip-pop"; pop.textContent = text(); head.after(pop); i.setAttribute("aria-expanded", "true");
+    });
+    const first = [...head.childNodes].find((n) => (n.nodeType === 3 && n.textContent.trim()) || (n.nodeType === 1 && n.tagName === "SPAN" && !n.className));
+    if (first) first.after(i); else head.append(i);
+    return i;
   }
 
   function money(v) {
@@ -1470,11 +1488,10 @@
   }
   function meterBlock(m) {
     if (!m || !m.windows.length) return null;
-    const rows = m.windows.map((w) => h("div", { class: "mt-row" },
+    const rows = m.windows.map((w) => h("div", { class: "mt-row", title: leftText(w) },
       h("span", { class: "n", text: w.kind === "week" ? "This week" : "5 hours" }),
       h("span", { class: "track" + (w.used >= 90 ? " hot" : "") }, h("i", { style: { width: Math.min(100, w.used) + "%" } })),
-      h("span", { class: "v", text: `${Math.round(w.used)}% used${w.resets ? ` · resets ${whenShort(w.resets)}` : ""}` }),
-      leftText(w) ? h("span", { class: "sub", text: leftText(w) }) : null));
+      h("span", { class: "v", text: `${Math.round(w.used)}% used${w.resets ? ` · resets ${whenShort(w.resets)}` : ""}` })));
     return h("div", { class: "meter" }, h("div", { class: "mt-head", text: `Right now${m.at ? `, as of ${ago(m.at)}` : ""}` }), ...rows);
   }
   // What the meter knows beyond the two bars: which projects still fit, and use the logs do not show.
@@ -1491,7 +1508,7 @@
   function statuslineRow(st) {
     if (st.broken) return h("p", { class: "pl-note", text: `Claude Code's settings file is not a valid settings file (a JSON object), so Leanfare cannot add its line. Fix ${st.file} first.` });
     return h("div", { class: "row mt-sl" },
-      h("span", { class: "grow", text: st.installed ? `Claude's 5 hour and weekly use come from Claude Code's status line${st.keeps ? " (your own line stays first)" : ""}.` : "Add your Claude plan to Claude Code's status line. Leanfare reads the two percentages there, never your words." }),
+      h("span", { class: "grow", title: st.installed ? null : "Leanfare reads the two percentages there, never your words.", text: st.installed ? `Claude's 5 hour and weekly use come from Claude Code's status line${st.keeps ? " (your own line stays first)" : ""}.` : "Show Claude's limits here: add Leanfare to Claude Code's status line." }),
       runButton(st.installed ? "Remove from the status line" : "Add to the status line", async (signal) => {
         const r = await api("/api/meter/statusline", { body: { on: !st.installed }, signal });
         S.meter = { ...(S.meter ?? {}), statusline: r.statusline };
@@ -1559,8 +1576,9 @@
     const codex = bars ? null : codexLine; // the bars say it already: the last message's numbers go in the fold
     if (!v.found) return tile(bars, limits, h("p", { class: "pl-note", text: `No ${v.logs} log files found on this computer.` }));
     if (!v.tokens) return tile(bars, codex, limits, h("p", { class: "pl-note", text: `No ${v.logs} use in this month's log files.` }));
-    const tok = h("div", { class: "pl-tok" }, h("span", { class: "big", text: bigTok(v.tokens) }),
-      h("span", { class: "sub", text: `tokens ${!S.month || S.month === lastMonths(1)[0] ? "this month" : `in ${monthLabel(v.month)}`} in ${v.logs}: ${bigTok(v.cached)} read from the cache, ${bigTok(v.input)} in, ${bigTok(v.output)} out` }));
+    const split = `${bigTok(v.cached)} read from the cache, ${bigTok(v.input)} in, ${bigTok(v.output)} out`;
+    const tok = h("div", { class: "pl-tok", title: split }, h("span", { class: "big", text: bigTok(v.tokens) }),
+      h("span", { class: "sub", text: `tokens ${!S.month || S.month === lastMonths(1)[0] ? "this month" : `in ${monthLabel(v.month)}`} in ${v.logs}` }));
     const value = show ? h("div", { class: "pl-val" }, h("span", { class: "sub", text: `If this were pay per use: ${money(v.value)} at API prices` }),
       v.ratio !== null ? h("span", { class: "chip " + (v.ratio >= 1 ? "good" : ""), text: ratioText(v.ratio) }) : null) : null;
     const models = [...v.models].sort((a, b) => b.tokens - a.tokens);
@@ -1579,7 +1597,7 @@
   function plansCardEl() {
     const P = S.plans;
     const card = h("div", { class: "card plans", id: "plansCard" });
-    card.append(h("h3", {}, "Your subscriptions", h("small", { text: "a fixed price, with limits" }), h("span", { class: "grow" }),
+    card.append(h("h3", { title: P?.note ?? null }, "Your subscriptions", h("small", { text: "a fixed price, with limits" }), h("span", { class: "grow" }),
       P ? runButton("Look again", async (signal) => { await loadPlans(true, signal); toast("Log files read again.", "done"); }, "btn small") : null));
     if (!P) { card.append(h("div", { class: "empty", text: "Reading the Claude Code and Codex log files on this computer…" })); return card; }
     const shown = P.providers.filter((v) => v.plan || v.found || v.apps?.some((a) => a.used));
@@ -1588,7 +1606,6 @@
         h("div", { class: "row" }, h("button", { class: "btn small", type: "button", text: "Enter a plan", onclick: () => setTab("settings") })));
     } else card.append(h("div", { class: "pl-grid" }, ...shown.map(planBlock)));
     if (S.meter?.statusline) card.append(statuslineRow(S.meter.statusline));
-    card.append(h("p", { class: "fine", text: P.note }));
     return card;
   }
 
@@ -1605,7 +1622,7 @@
     if (d.toDateString() === yesterday.toDateString()) return `Yesterday ${time}`;
     return d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
   }
-  function workCardEl(w, d) {
+  function workCardEl(w, d, tools = []) {
     if (!w || !w.tasks) return null;
     const graded = w.grades.good + w.grades.partly + w.grades.wrong;
     const checked = w.checks.passed + w.checks.failed;
@@ -1637,9 +1654,9 @@
       ? `Checks: ${num(d.passed + d.failed + d.unclear)} run, ${num(d.passed)} passed (${pctText(d.passRate)}, 90% range ${pctText(d.passLo)} to ${pctText(d.passHi)})${again}.${d.weighted !== null && d.passed + d.failed >= 5 ? ` Weighted by each answer's chance of being checked, about ${pctText(d.weighted)} of all answers would pass.` : ""}`
       : "";
     return h("div", { class: "card work", id: "workCard" },
-      h("h3", {}, "What Leanfare did for your apps", h("span", { class: "grow" }), h("small", { text: `${plural(w.tasks, "task")} this month, through plan and delegate` })),
-      tiles, table,
-      h("p", { class: "fine", text: `${checks ? checks + " " : ""}Kept out counts what your app did not have to read; the thinking and writing it did not have to do comes on top. No words are kept, only sizes, models and grades.` }));
+      h("h3", { title: `${plural(w.tasks, "task")} this month, through plan and delegate. ${checks ? checks + " " : ""}Kept out counts what your app did not have to read; the thinking and writing it did not have to do comes on top. No words are kept, only sizes, models and grades.` },
+        "What Leanfare did for your apps", h("span", { class: "grow" }), ...tools),
+      tiles, table);
   }
 
   // ---- the delegate trial (trial.ts) ------------------------------------------------------------
@@ -1681,8 +1698,8 @@
     const estText = !e ? "" : !e.models.low ? (e.error ?? "Add a key and tick a model first: the trial asks the models you ticked.")
       : `${e.estimate === 0 ? "$0 on the models you ticked now (free)" : e.estimate === null ? "On the models you ticked now" : `About ${money(e.estimate)} on the models you ticked now`}${typeof e.seconds === "number" ? `, about ${Math.max(1, Math.round(e.seconds / 60))} min` : ""}: ${["low", "medium", "high"].map((k) => `${k} ${labelOf(e.models[k])}`).join(", ")}.`;
     if (!r) {
-      card.append(h("p", { text: `Before Claude hands work to Leanfare on its own, see how your models do. ${about}` }), estText ? h("p", { class: "fine", text: estText }) : null,
-        e?.models.low ? startBtn("Run the trial") : null);
+      card.append(h("p", { title: about, text: "Before Claude hands work to Leanfare on its own, see how your models do on 10 questions with known answers." }),
+        h("div", { class: "row trial-go" }, estText ? h("span", { class: "fine grow", text: estText }) : h("span", { class: "grow" }), e?.models.low ? startBtn("Run the trial") : null));
       return card;
     }
     card.append(h("p", { class: "fine", text: `${r.status === "done" ? "Last run" : `Last run, ${r.status} after ${r.done} of ${r.total} answers`}: ${ago(r.finished ?? r.started)}, Leanfare ${r.version}.` }), trialTable(r));
@@ -1724,9 +1741,9 @@
   function stat(key, label, value, sub, cls = "") {
     const def = S.savings.definitions[key];
     return h("div", { class: "stat" },
-      h("div", { class: "lbl" }, label, h("button", { type: "button", "aria-label": `What "${label}" means`, title: "What this number means", text: "i", onclick: () => { S.defOpen[key] = !S.defOpen[key]; renderSavings(); } })),
+      h("div", { class: "lbl", title: label }, h("span", { class: "lt", text: label }), h("button", { type: "button", "aria-label": `What "${label}" means`, title: "What this number means", text: "i", onclick: () => { S.defOpen[key] = !S.defOpen[key]; renderSavings(); } })),
       h("div", { class: "val " + cls, text: value }),
-      h("div", { class: "sub" }, sub),
+      h("div", { class: "sub", title: typeof sub === "string" ? sub : null }, sub),
       S.defOpen[key] ? h("div", { class: "def", text: def }) : null);
   }
 
@@ -1734,12 +1751,15 @@
   // What Leanfare did for your apps over a span of time, with filters: four tiles, tokens over time, work by model,
   // quality by kind of work, and each prompt with the parts it handed off. Numbers only, as everywhere.
   const RP_RANGES = [["1h", "1 h"], ["6h", "6 h"], ["today", "Today"], ["7d", "7 days"], ["30d", "30 days"], ["year", "Year"], ["custom", "Custom…"]];
+  const RP_VIEWS = [["overview", "Overview", "The totals, tokens over time, work by model and quality by kind"], ["prompts", "Prompts", "Each prompt and its parts, and questions about them"],
+    ["models", "Models", "Each model's speed, failures, cost and quality"], ["quality", "Quality", "Grades by level, and how the app alone is worked out"]];
   const RP_KIND = { read: "Reading", write: "Drafting", reason: "Working out", search: "Search", other: "Other" };
   const RP_WHERE = { local: "this computer", free: "free", plan: "ChatGPT plan", paid: "paid" };
   const RP_GRADE = { good: "✓ good", partly: "~ partly", wrong: "× wrong" };
   const rpProvider = (id) => (id === "local" ? "This computer" : id === "codex" ? "ChatGPT plan (Codex)" : S.st?.providers?.find((p) => p.id === id)?.name ?? id);
   const shortPlan = (name) => (name ? name.replace(/^(Claude|ChatGPT)\s+/i, "") : null);
-  S.report = S.report ?? { q: { range: "7d" }, data: null, open: {}, seq: 0, shown: 20 };
+  const RP_PAGE = 10; // prompts at a time: the Prompts view fits a screen
+  S.report = S.report ?? { q: { range: "7d" }, data: null, open: {}, seq: 0, shown: RP_PAGE };
 
   async function loadReport() {
     const seq = ++S.report.seq;
@@ -1755,7 +1775,7 @@
   }
   function setReport(patch) {
     Object.assign(S.report.q, patch);
-    S.report.loading = true; S.report.shown = 20;
+    S.report.loading = true; S.report.shown = RP_PAGE;
     const old = $("#reportCard");
     if (old) old.replaceWith(reportCardEl());
     loadReport();
@@ -1775,6 +1795,14 @@
         if (!a || !b) { toast("Pick both days first.", "error"); return; }
         setReport({ from: new Date(a + "T00:00:00").toISOString(), to: new Date(new Date(b + "T00:00:00").getTime() + 86_400_000).toISOString() });
       } })) : null;
+    const exportBtns = [
+      d?.prompts?.length ? h("button", { class: "btn small", type: "button", text: "Export CSV", title: "Every prompt and part in this span, numbers only", onclick: () => download(`leanfare-report-${new Date().toISOString().slice(0, 10)}.csv`, reportCsv(d), "text/csv") }) : null,
+      d?.prompts?.some((p) => p.parts.some((x) => x.words)) ? h("button", { class: "btn small", type: "button", text: "Export CSV with the words", onclick: async () => {
+        const ids = d.prompts.flatMap((p) => p.parts.filter((x) => x.words).map((x) => x.id));
+        let words = {};
+        try { words = (await api(`/api/words?handoffs=${ids.join(",")}`)).words; } catch {}
+        download(`leanfare-report-words-${new Date().toISOString().slice(0, 10)}.csv`, reportCsv(d, words), "text/csv");
+      } }) : null];
     const filters = h("div", { class: "rp-filters" },
       h("div", { class: "seg", role: "group", "aria-label": "Time span" }, ...RP_RANGES.map(([v, t]) => h("button", { type: "button", class: q.range === v ? "on" : "", text: t, "aria-pressed": String(q.range === v),
         onclick: () => (v === "custom" ? setReport({ range: "custom", from: q.from ?? new Date(Date.now() - 7 * 86_400_000).toISOString(), to: q.to ?? new Date().toISOString() }) : setReport({ range: v, from: null, to: null })) }))),
@@ -1784,26 +1812,35 @@
       pick("All models", "model", keep(o.models.map((m) => [m.id, m.label]), q.model)),
       pick("All kinds", "kind", keep(o.kinds.map((k) => [k, RP_KIND[k] ?? k]), q.kind)),
       pick("All threads", "thread", keep(o.threads.map((t) => [t.id, `${t.project ?? "Claude Code"} · ${new Date(t.first).toLocaleDateString(undefined, { month: "short", day: "numeric" })} (${t.prompts})`]), q.thread)),
-      h("span", { class: "grow" }),
-      d?.prompts?.length ? h("button", { class: "btn small", type: "button", text: "Export CSV", onclick: () => download(`leanfare-report-${new Date().toISOString().slice(0, 10)}.csv`, reportCsv(d), "text/csv") }) : null,
-      d?.prompts?.some((p) => p.parts.some((x) => x.words)) ? h("button", { class: "btn small", type: "button", text: "Export CSV with the words", onclick: async () => {
-        const ids = d.prompts.flatMap((p) => p.parts.filter((x) => x.words).map((x) => x.id));
-        let words = {};
-        try { words = (await api(`/api/words?handoffs=${ids.join(",")}`)).words; } catch {}
-        download(`leanfare-report-words-${new Date().toISOString().slice(0, 10)}.csv`, reportCsv(d, words), "text/csv");
-      } }) : null);
+      d?.prompts?.length ? null : h("span", { class: "grow" }), d?.prompts?.length ? null : exportBtns);
+    // Four views, one at a time, each fitting a screen (0.13.12): the others stay in the page, hidden.
+    const view = RP_VIEWS.some(([v]) => v === store.get("report:view", "overview")) ? store.get("report:view", "overview") : "overview";
+    const pane = (v, ...kids) => h("div", { class: "rp-view", "data-view": v, hidden: v !== view }, ...kids);
     const body = S.report.error ? h("div", { class: "empty", text: `The report could not be read: ${S.report.error}` })
       : !d ? h("div", { class: "empty", text: "Reading the report…" })
       : !d.prompts.length && !d.speed?.length ? h("div", { class: "empty", text: "Nothing in this span yet. Hand offs and plan parts from your apps, and Claude Code's prompts, show here." })
       : !d.prompts.length ? h("div", { class: "rp-body" }, h("div", { class: "empty", text: "No prompts in this span yet. Hand offs and plan parts from your apps, and Claude Code's prompts, show here. The models' speed so far:" }), reportSpeedEl(d))
-      : h("div", { class: "rp-body" + (S.report.loading ? " busy" : "") }, reportTiles(d), reportChartEl(d),
-          h("div", { class: "rp-two" }, reportModelsEl(d), reportKindsEl(d)), reportLevelsEl(d), reportSpeedEl(d), reportAskEl(d), reportPromptsEl(d), reportHowEl(d));
+      : h("div", { class: "rp-body" + (S.report.loading ? " busy" : "") },
+          pane("overview", reportTiles(d), reportChartEl(d), h("div", { class: "rp-two" }, reportModelsEl(d), reportKindsEl(d))),
+          pane("prompts", reportAskEl(d), reportPromptsEl(d)),
+          pane("models", reportSpeedEl(d)),
+          pane("quality", reportLevelsEl(d), reportHowEl(d)));
+    const pickView = (v) => {
+      store.set("report:view", v);
+      const card = $("#reportCard");
+      if (!card) return;
+      for (const el of card.querySelectorAll(".rp-view")) el.hidden = el.dataset.view !== v;
+      for (const b of card.querySelectorAll(".rp-views button")) { const on = b.dataset.view === v; b.classList.toggle("on", on); b.setAttribute("aria-selected", String(on)); }
+    };
+    const views = h("div", { class: "rp-views", role: "tablist", "aria-label": "Report views" },
+      ...RP_VIEWS.map(([v, t, tip]) => h("button", { type: "button", role: "tab", "data-view": v, class: v === view ? "on" : "", "aria-selected": String(v === view), title: tip, text: t, onclick: () => pickView(v) })),
+      h("span", { class: "grow" }), ...exportBtns);
     return h("section", { class: "rp", id: "reportCard" },
       h("div", { class: "sv-head" }, h("h2", { text: "Report" }), h("span", { class: "muted", text: "what Leanfare did for your apps" })),
-      filters, body);
+      d?.prompts?.length ? views : null, filters, body);
   }
 
-  function rtile(label, value, sub, cls = "") { return h("div", { class: "rp-tile" }, h("div", { class: "lbl" }, label), h("div", { class: "val " + cls, text: value }), h("div", { class: "sub" }, sub)); }
+  function rtile(label, value, sub, cls = "", tip = null) { return h("div", { class: "rp-tile", title: tip }, h("div", { class: "lbl" }, label), h("div", { class: "val " + cls, text: value }), h("div", { class: "sub" }, sub)); }
   // How sure a number is: measured from records, an estimate with its method and range, or not known.
   const BADGE = { m: ["b-m", "measured"], e: ["b-e", "estimate"], n: ["b-n", "not known"] };
   const badge = (k) => h("span", { class: "badge " + BADGE[k][0], text: BADGE[k][1] });
@@ -1818,25 +1855,26 @@
   const scoreRange = (sc) => `${sc.lo} to ${sc.hi}, ${plural(sc.n, "grade")}`;
   function reportTiles(d) {
     const t = d.tiles, app = appWord(d), b = t.both, o = t.outside, q = t.three;
-    const apps = t.own.byApp.map((a) => (a.measured ? `${a.app}, from its own files` : [h("span", { text: `${a.app}: ` }), h("span", { class: "nk", text: "not known" })]));
-    const sep = (xs) => xs.flatMap((x, i) => (i ? [" · ", x] : [x]));
     const qrow = (label, sc, none) => [h("span", { text: label }), h("span", { class: "bar" }, h("i", { style: { width: `${sc ? sc.score : 0}%` } })),
       sc ? h("span", { title: `90% range ${scoreRange(sc)}` }, h("b", { text: scoreShort(sc) }), h("small", { text: ` ${sc.lo} to ${sc.hi}` })) : h("span", { class: "nk", text: none })];
     return h("div", { class: "rp-tiles" },
       rtile([`Saved for ${app} `, badge(b ? "e" : "n")], b ? approx(b.saved.mid) : "Not known",
-        b ? `${app} alone ≈ ${tokShort(b.alone.mid)}, minus the hand offs' own cost ≈ ${tokShort(b.spent)} (the tasks, and the answers read back). Range ${tokShort(Math.max(0, b.saved.low))} to ${tokShort(Math.max(0, b.saved.high))}.` : "Nothing handed off in this span.", b ? "est" : ""),
+        b ? `range ${tokShort(Math.max(0, b.saved.low))} to ${tokShort(Math.max(0, b.saved.high))}` : "nothing handed off", b ? "est" : "",
+        b ? `${app} alone ≈ ${tokShort(b.alone.mid)}, minus the hand offs' own cost ≈ ${tokShort(b.spent)} (the tasks, and the answers read back). Range ${tokShort(Math.max(0, b.saved.low))} to ${tokShort(Math.max(0, b.saved.high))}.` : "Nothing handed off in this span."),
       rtile(["Outside models used ", badge(o.measured ? "m" : "n")], o.measured ? `${tokShort(o.read + (o.thought ?? 0) + o.wrote)} tokens` : "Not measured yet",
+        `${money(t.cost.usd)}${t.cost.freeShare === 1 ? " · all free" : t.cost.freeShare !== null ? ` · ${pctText(t.cost.freeShare)} free` : ""}`, "",
         [o.measured ? `${tokShort(o.read)} read · ${o.thought === null ? "thinking not split" : `${tokShort(o.thought)} thinking`} · ${tokShort(o.wrote)} written · ` : "",
           `${money(t.cost.usd)}${t.cost.freeShare === 1 ? ", all on free models" : t.cost.freeShare !== null ? `, ${pctText(t.cost.freeShare)} of parts free` : ""}`,
-          o.notMeasured ? ` · ${plural(o.notMeasured, "older part")} not measured` : ""]),
+          o.notMeasured ? ` · ${plural(o.notMeasured, "older part")} not measured` : ""].join("")),
       rtile([`${app}'s own use `, badge(t.own.measured ? "m" : "n")], t.own.measured ? `${tokShort(t.own.fresh)} new tokens` : "Not known",
-        [sep(apps), t.own.cached ? ` · ${tokShort(t.own.cached)} more read again from the cache` : ""]),
-      h("div", { class: "rp-tile" }, h("div", { class: "lbl", text: "Quality, three ways" }),
+        t.own.cached ? `${tokShort(t.own.cached)} more from the cache` : t.own.measured ? "from its own files" : "this app does not share it", "",
+        [...t.own.byApp.map((a) => (a.measured ? `${a.app}, from its own files` : `${a.app}: not known`)), t.own.cached ? `${tokShort(t.own.cached)} more read again from the cache` : null].filter(Boolean).join(" · ")),
+      h("div", { class: "rp-tile", title: `Scores out of 100 (good 1, partly half, wrong 0), with their 90% range. ${plural(q.outside.graded, "outside answer")} graded, ${plural(q.together.graded, "prompt")} graded together, ${plural(q.alone.sampled, "sampled run")} of ${app} alone` },
+        h("div", { class: "lbl", text: "Quality, three ways" }),
         h("div", { class: "q3" },
           qrow("Outside answers", q.outside.score, "not graded"),
           qrow("Together", q.together.score, "not graded"),
-          qrow(`${app} alone`, q.alone.score, "not known")),
-        h("div", { class: "sub", text: `Scores out of 100 (good 1, partly half, wrong 0), with their 90% range. ${plural(q.outside.graded, "outside answer")} graded, ${plural(q.together.graded, "prompt")} graded together, ${plural(q.alone.sampled, "sampled run")} of ${app} alone` })));
+          qrow(`${app} alone`, q.alone.score, "not known"))));
   }
 
   // Tokens over time, drawn at the width it gets: kept out by Leanfare against what your apps used (new tokens).
@@ -1861,13 +1899,13 @@
     if (RO) { let w = 0; new RO(() => { if (box.clientWidth && box.clientWidth !== w) { w = box.clientWidth; draw(); } }).observe(box); }
     draw();
     const known = d.tiles.own.measured > 0;
-    return h("div", { class: "card rp-card" }, h("h3", { text: "Tokens over time" }),
-      h("p", { class: "muted", text: known ? "What Leanfare's models read so your apps did not, against what your apps used themselves (new tokens). Hover for both." : "What Leanfare's models read so your apps did not. Your apps here do not say what they used themselves." }),
-      h("div", { class: "rp-legend" }, h("span", { class: "k1" }, "Kept out by Leanfare"), known ? h("span", { class: "k2" }, "Used by your apps (measured)") : null),
+    return h("div", { class: "card rp-card" },
+      h("h3", { title: known ? "What Leanfare's models read so your apps did not, against what your apps used themselves (new tokens). Hover the chart for both." : "What Leanfare's models read so your apps did not. Your apps here do not say what they used themselves." },
+        "Tokens over time", h("span", { class: "rp-legend" }, h("span", { class: "k1" }, "Kept out by Leanfare"), known ? h("span", { class: "k2" }, "Used by your apps (measured)") : null)),
       box);
   }
   function drawLine(box, d, W) {
-    const H = 220, L = 46, R = 54, T = 10, B = 26, pw = W - L - R, ph = H - T - B;
+    const H = 150, L = 46, R = 54, T = 8, B = 22, pw = W - L - R, ph = H - T - B;
     const s = d.series, n = s.length, known = d.tiles.own.measured > 0;
     const max = niceMax(Math.max(...s.map((p) => Math.max(p.kept, known ? p.used : 0)), 0));
     const x = (i) => L + (n <= 1 ? pw / 2 : (i / (n - 1)) * pw), y = (v) => T + ph - (v / max) * ph;
@@ -1906,19 +1944,17 @@
     const max = Math.max(...d.byModel.map((m) => m.read), 1);
     const dot = (g) => (g === null ? "none" : g >= 0.8 ? "good" : g >= 0.5 ? "warn" : "bad");
     const total = d.byModel.reduce((a, m) => a + m.read, 0), parts = d.byModel.reduce((a, m) => a + m.parts, 0);
-    return h("div", { class: "card rp-card" }, h("h3", { text: "Work by model" }), h("p", { class: "muted", text: "Tokens each model read for your apps, its parts, and how good its answers were." }),
+    return h("div", { class: "card rp-card" }, h("h3", { title: `Tokens each model read for your apps, its parts, and how good its answers were. All models: ${tokShort(total)} tokens read · ${plural(parts, "part")}. A model graded below good too often for a kind of work is moved down for it.` }, "Work by model", h("small", { text: `${tokShort(total)} read · ${plural(parts, "part")}` })),
       h("div", { class: "rp-bars" }, ...d.byModel.map((m) => h("div", { class: "rp-bar", title: `${m.label}: ${num(m.read)} tokens read, ${plural(m.parts, "part")}, ${money(m.cost)}` },
         h("span", { class: "nm" }, h("span", { text: m.label }), h("small", { text: m.where === "paid" ? money(m.cost) : RP_WHERE[m.where] })),
         h("span", { class: "track" }, h("i", { style: { width: `${Math.max(1.5, (m.read / max) * 100)}%` } })),
         h("span", { class: "v", text: tokShort(m.read) }),
         h("span", { class: "parts", text: plural(m.parts, "part") }),
-        h("span", { class: "q", title: m.score ? `90% range ${scoreRange(m.score)}` : null }, h("i", { class: "dot " + dot(m.score ? m.score.score / 100 : null) }), m.score ? scoreShort(m.score) : "not graded")))),
-      h("p", { class: "fine", text: `All models: ${tokShort(total)} tokens read for your apps · ${plural(parts, "part")}. A model graded below good too often for a kind of work is moved down for it.` }));
+        h("span", { class: "q", title: m.score ? `90% range ${scoreRange(m.score)}` : null }, h("i", { class: "dot " + dot(m.score ? m.score.score / 100 : null) }), m.score ? scoreShort(m.score) : "not graded")))));
   }
 
   function reportKindsEl(d) {
-    return h("div", { class: "card rp-card" }, h("h3", { text: "Quality by kind of work" }),
-      h("p", { class: "muted", text: "Each answer's grade: your app's, else a blind check's. Not graded answers are left out of the bar." }),
+    return h("div", { class: "card rp-card" }, h("h3", { title: "Each answer's grade: your app's, else a blind check's. Not graded answers are left out of the bar." }, "Quality by kind of work"),
       ...d.byKind.map((k) => {
         const g = k.good + k.partly + k.wrong;
         return h("div", { class: "rp-kind" },
@@ -1944,8 +1980,7 @@
         h("span", { class: "meta" }, h("span", { text: g ? `${Math.round((r.good / g) * 100)}% good · ${r.good} good · ${r.partly} partly · ${r.wrong} wrong` : "not graded yet" }),
           h("span", { class: "best", text: r.bad ? `fixed first: ${r.fixed} of ${r.bad}` : g ? "nothing to fix" : "" })));
     };
-    return h("div", { class: "card rp-card" }, h("h3", { text: "Quality by level" }),
-      h("p", { class: "muted", text: "The grades of the answers Leanfare brought back, for each level they were handed off at: your app's grade, else a blind check's. Fixed first: answers graded partly or wrong that were fixed before your app answered." }),
+    return h("div", { class: "card rp-card" }, h("h3", { title: "The grades of the answers Leanfare brought back, for each level they were handed off at: your app's grade, else a blind check's. Fixed first: answers graded partly or wrong that were fixed before your app answered." }, "Quality by level"),
       ...b.levels.map((r) => row(`${r.level} · ${LV_NAME[r.level]}`, plural(r.parts, "hand off"), r, false)),
       b.before ? row("Before levels", plural(b.before.parts, "hand off"), b.before, false) : null,
       row("All levels", plural(b.all.parts, "hand off"), b.all, true),
@@ -1992,21 +2027,17 @@
     const RO = window.ResizeObserver;
     if (RO) { let w = 0; new RO(() => { if (chart.clientWidth && chart.clientWidth !== w) { w = chart.clientWidth; draw(); } }).observe(chart); }
     draw();
-    const dots = h("div", { class: "card rp-card" }, h("h3", { text: "Models: speed against quality" }),
-      h("p", { class: "muted", text: "Each dot is a model: how long its answers took (the middle answer) and its score out of 100 from your app's grades. Up and left is better. Bigger dots answered more." }),
-      h("div", { class: "sp-top" }, chart,
-        h("dl", { class: "sp-key" },
-          h("dt", { text: "Time" }), h("dd", { text: "From each call's own clock: the first word (time to first token) and the whole answer. The middle one and the slowest 1 in 10." }),
-          h("dt", { text: "Failures" }), h("dd", { text: "Busy (503, 529), rate limited (429), timed out, could not be reached, and other errors. Each try counts, also when Auto passed the work on." }),
-          h("dt", { text: "Quality" }), h("dd", { text: "A score out of 100 from your app's grades of its answers, else the blind checks: good 1, partly half, wrong 0. Not graded yet: on the bottom line, hollow." }),
-          h("dt", { text: "Resting" }), h("dd", { text: "A model that failed or did not start answering in time too often lately rests for a while (amber): Auto picks others while one can take the work, then tries it again." }))));
-    const table = h("div", { class: "card rp-card" }, h("h3", { text: "Models: speed, failures, cost and quality" }),
-      h("p", { class: "muted", text: "Every call in this span: hand offs, checks, side by side, plans and chats. Most calls first." }),
+    const TIME = "From each call's own clock: the first word (time to first token) and the whole answer. The middle one and the slowest 1 in 10.";
+    const dots = h("div", { class: "card rp-card" }, h("h3", { title: "Each dot is a model: how long its answers took (the middle answer) and its score out of 100 from your app's grades. Up and left is better. Bigger dots answered more. Not graded yet: on the bottom line, hollow. Amber: resting." }, "Speed against quality"), chart);
+    const table = h("div", { class: "card rp-card" }, h("h3", { title: "Every call in this span: hand offs, checks, side by side, plans and chats. Most calls first." }, "Speed, failures, cost and quality"),
       h("div", { class: "scroll" }, h("table", { class: "trial-table sp-table" },
-        h("thead", {}, h("tr", {}, h("th", { text: "Model" }), h("th", { class: "num", text: "Calls" }), h("th", { text: "Failed" }),
-          h("th", { class: "num" }, "First word", h("span", { class: "tiny", text: "middle · slowest 1 in 10" })),
-          h("th", { class: "num" }, "Whole answer", h("span", { class: "tiny", text: "middle · slowest 1 in 10" })),
-          h("th", { class: "num", text: "Writes" }), h("th", { class: "num", text: "Cost a call" }), h("th", { class: "num", text: "Score" }), h("th", { text: "Now" }))),
+        h("thead", {}, h("tr", {}, h("th", { text: "Model" }), h("th", { class: "num", text: "Calls" }),
+          h("th", { title: "Busy (503, 529), rate limited (429), timed out, could not be reached, and other errors. Each try counts, also when Auto passed the work on.", text: "Failed" }),
+          h("th", { class: "num", title: TIME, text: "First word" }),
+          h("th", { class: "num", title: TIME, text: "Whole answer" }),
+          h("th", { class: "num", text: "Writes" }), h("th", { class: "num", text: "Cost a call" }),
+          h("th", { class: "num", title: "A score out of 100 from your app's grades of its answers, else the blind checks: good 1, partly half, wrong 0.", text: "Score" }),
+          h("th", { title: "A model that failed or did not start answering in time too often lately rests for a while (amber): Auto picks others while one can take the work, then tries it again.", text: "Now" }))),
         h("tbody", {}, ...rows.map((m) => h("tr", { class: m.rest ? "resting" : m.noQuota ? "resting noquota" : null },
           h("td", { class: "nm" }, h("b", { text: m.label }), h("span", { class: "tiny", text: spWhere(m) })),
           h("td", { class: "num", text: num(m.calls) }),
@@ -2017,10 +2048,10 @@
           h("td", { class: "num", text: m.costPerCall === null ? "—" : money(m.costPerCall) }),
           h("td", { class: "num" + (m.score ? "" : " muted"), title: m.score ? `90% range ${scoreRange(m.score)}` : null, text: m.score ? scoreShort(m.score) : "not graded" }),
           h("td", { class: "now" }, spNow(m))))))));
-    return [dots, table];
+    return h("div", { class: "sp-wrap" }, dots, table);
   }
   function drawSpeed(box, rows, W) {
-    const H = 300, L = 46, R = 12, T = 14, B = 46, pw = W - L - R, ph = H - T - B;
+    const H = 190, L = 40, R = 12, T = 10, B = 34, pw = W - L - R, ph = H - T - B;
     const timed = rows.filter((m) => m.whole);
     const secs = timed.map((m) => Math.max(0.1, m.whole.mid));
     const lo = Math.min(1, 10 ** Math.floor(Math.log10(Math.min(...secs, 1)))), hi = Math.max(10, 10 ** Math.ceil(Math.log10(Math.max(...secs, 1))));
@@ -2090,7 +2121,7 @@
     // library write "Oct 20 at 10:05 AM" and others "Oct 20, 10:05 AM".
     const when = (iso) => { const t = new Date(iso), time = t.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }); return long ? `${t.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${time}` : time; };
     const secs = (ms) => (ms === null || ms === undefined ? "" : ` · ${ms < 1500 ? "1 s" : ms < 90_000 ? Math.round(ms / 1000) + " s" : Math.round(ms / 60_000) + " min"}`);
-    const two = (main, sub, cls = "") => h("td", { class: "num " + cls }, main, sub ? h("span", { class: "tiny", text: sub }) : null);
+    const two = (main, sub, cls = "") => h("td", { class: "num " + cls, title: sub || null }, main);
     const usedCell = (u, none) => (u ? two(`${tokShort(u.read)} read`, u.thought === null ? `${tokShort(u.wrote)} written, thinking not split` : `${tokShort(u.thought)} thinking · ${tokShort(u.wrote)} written`)
       : h("td", { class: "num muted", text: none }));
     const muted = (text) => h("td", { class: "muted", text });
@@ -2138,23 +2169,20 @@
     }
     const left = d.prompts.length - S.report.shown + d.more;
     const th = (t, cls = "") => h("th", { class: cls, text: t });
-    return h("div", { class: "card rp-card" }, h("h3", { text: "Prompts" }),
-      h("p", { class: "muted", text: `Each prompt with both sides: what the outside models used, what ${app} would have used doing it alone (an estimate), and the grades. Open one for its parts (PRM-41.1, PRM-41.2…).` }),
+    return h("div", { class: "card rp-card" }, h("h3", { title: `Each prompt with both sides: what the outside models used, what ${app} would have used doing it alone (an estimate), and the grades. Open one for its parts (PRM-41.1, PRM-41.2…). Claude Code's own tokens come from its own files: numbers only, never your words. New tokens: what it did not read again from its cache. Claude's chats and Cowork do not share theirs, so they show as not known.` }, "Prompts", h("small", { text: "open one for its parts" })),
       h("div", { class: "scroll" }, h("table", { class: "trial-table rp-table both" },
         h("thead", {},
           h("tr", {}, h("th", { rowspan: 2, text: "ID" }), h("th", { rowspan: 2, text: "When" }), h("th", { rowspan: 2, text: "App · main model" }), h("th", { colspan: 4, class: "grp", text: "Tokens" }), h("th", { colspan: 3, class: "grp", text: "Grades" })),
           h("tr", {}, th("Outside used", "num"), th(`${app} alone`, "num"), th("Saved", "num"), th(`${app} used, whole prompt`, "num"), th("Outside"), th("Together"), th(`${app} alone`))),
         h("tbody", {}, ...rows))),
-      left > 0 ? h("button", { class: "btn small", type: "button", text: `Show ${Math.min(20, left)} more`, onclick: () => { S.report.shown += 20; const old = $("#reportCard"); if (old) old.replaceWith(reportCardEl()); } }) : null,
-      h("p", { class: "fine", text: "Claude Code's own tokens come from its own files: numbers only, never your words. New tokens: what it did not read again from its cache. Claude's chats and Cowork do not share theirs, so they show as not known." }));
+      left > 0 ? h("button", { class: "btn small", type: "button", text: `Show ${Math.min(RP_PAGE, left)} more`, onclick: () => { S.report.shown += RP_PAGE; const old = $("#reportCard"); if (old) old.replaceWith(reportCardEl()); } }) : null);
   }
 
   // How the app alone is worked out: the step in use, and the ones to come.
   function reportHowEl(d) {
     const app = appWord(d), sampled = d.tiles.three.alone.sampled;
-    const step = (n, title, when, text, on) => h("div", { class: "step" + (on ? " on" : "") }, h("b", { text: `${n}. ${title}` }), h("span", { class: "when", text: when }), h("span", { text }));
-    return h("div", { class: "card rp-card" }, h("h3", { text: `How "${app} alone" is worked out` }),
-      h("p", { class: "muted", text: "Each number says which step it came from. Estimates show with ≈ and a range." }),
+    const step = (n, title, when, text, on) => h("div", { class: "step" + (on ? " on" : ""), title: text }, h("b", { text: `${n}. ${title}` }), h("span", { class: "when", text: when }));
+    return h("div", { class: "card rp-card" }, h("h3", { title: "Each number says which step it came from. Estimates show with ≈ and a range." }, `How "${app} alone" is worked out`),
       h("div", { class: "rp-how" },
         step(1, "From the outside model's numbers", "in use, from the start", `What it read, thought and wrote, as ${app} would have. Rough: shown with ≈ and a wide range.`, true),
         step(2, `Learned from your own ${app === "Claude" ? "Claude Code" : app}`, "to come (sizes only, never words)", `How much of a file ${app} reads, and how much it thinks and writes for each kind of work, from prompts where it did the reading itself. The range narrows as it learns.`, false),
@@ -2382,11 +2410,11 @@
       : here.length ? `${here[0].label}${here.length > 1 ? " or another model here" : ""} reads them on this computer; nothing leaves it.`
       : "Open Ollama with a model in it to ask on this computer, or pick one of your other models.";
     const total = d.prompts.length + (d.more ?? 0);
+    sel.title = note;
     return h("div", { class: "rp-ask", id: "rpAsk" },
-      h("div", { class: "rp-ask-head" }, h("b", { text: "Ask about these prompts" }), h("span", { class: "muted", text: `${total} ${total === 1 ? "prompt" : "prompts"} in this span, with the filters above` })),
+      h("div", { class: "rp-ask-head" }, h("b", { text: "Ask about these prompts" }), h("span", { class: "muted", title: note, text: `${total} ${total === 1 ? "prompt" : "prompts"} in this span, with the filters above` }),
+        h("span", { class: "rp-ask-chips" }, ...ASK_SAMPLES.map((t) => h("button", { type: "button", class: "chip-btn", text: t, onclick: () => { a.question = t; ask(); } })))),
       h("form", { class: "rp-ask-row", onsubmit: ask }, input, sel, h("button", { class: "btn small primary", type: "submit", text: a.busy ? "Asking…" : "Ask", disabled: a.busy })),
-      h("div", { class: "rp-ask-chips" }, ...ASK_SAMPLES.map((t) => h("button", { type: "button", class: "chip-btn", text: t, onclick: () => { a.question = t; ask(); } }))),
-      h("div", { class: "tiny muted", text: note }),
       a.busy ? h("div", { class: "rp-ask-out busy", text: "Reading the prompts…" })
         : a.error ? h("div", { class: "rp-ask-out err", text: a.error })
         : a.out ? h("div", { class: "rp-ask-out" }, h("div", { class: "rp-ask-text", text: a.out.answer }),
@@ -2498,14 +2526,16 @@
     const SOURCES = { chat: "Chat", openai: "Apps (OpenAI address)", anthropic: "Apps (Anthropic address)", delegate: "Delegated", check: "Checks", trial: "Trial", plan: "Plans", sidebyside: "Side by side", ask: "Asked about prompts" };
     const src = v.bySource.map((s) => `${SOURCES[s.source] ?? s.source}: ${num(s.answers)}`).join(" · ");
     const w = v.work;
+    pickMonth.classList.add("small");
+    const monthTools = [pickMonth, runButton("Refresh", async (signal) => { await loadSavings(); await loadPlans(true, signal); loadReport(); toast("Up to date.", "done"); }, "btn small")];
     const monthGist = [title, ...(w ? [plural(w.tasks, "task"), `${tokShort(w.kept)} tokens kept out`, money(w.cost)] : [])].join(" · ");
     el.replaceChildren(
       fold("live", "Live activity", liveGist(), true, liveCardEl()),
       fold("free", "Free capacity", freeGist(), true, freeTodayEl()),
       fold("report", "Usage report", "every prompt and what it handed off", true, reportCardEl()),
       fold("month", "Monthly overview", monthGist, true,
-        h("div", { class: "sv-head" }, h("span", { class: "grow" }), pickMonth, runButton("Refresh", async (signal) => { await loadSavings(); await loadPlans(true, signal); loadReport(); toast("Up to date.", "done"); })),
-        workCardEl(v.work, v.delegate),
+        // The month and Refresh sit on the first card's title line; with no work this month, on their own line.
+        ...(w?.tasks ? [workCardEl(v.work, v.delegate, monthTools)] : [h("div", { class: "sv-head" }, h("span", { class: "grow" }), ...monthTools)]),
         plansCardEl()),
       fold("pay", "API spend", `${title} · ${money(v.spent)} · ${plural(v.answers, "answer")}`, false,
           cards,
@@ -3260,11 +3290,12 @@
       const lims = r.windows.length ? `${r.windows.map(windowText).join(" · ")}${r.source ? ` (${r.source}${r.asOf ? `, ${ago(r.asOf)}` : ""})` : ""}` : null;
       card.append(h("div", { class: "prow" + (r.ready ? "" : " off") },
         h("div", { class: "pinfo" }, h("div", { class: "pname" }, r.label, r.risk ? h("span", { class: "chip warn", text: r.risk }) : null),
-          lims ? h("div", { class: "note lim", text: lims }) : null,
-          r.stale ? h("div", { class: "note stale", text: r.stale }) : null,
-          r.limit ? h("div", { class: "note", text: r.limit }) : null,
-          r.needs ? h("div", { class: "note", text: r.needs }) : null,
-          r.riskWhy ? h("details", { class: "why" }, h("summary", { text: "Why it says so" }), h("p", { class: "note", text: r.riskWhy })) : null),
+          h("div", { class: "pnotes" },
+            lims ? h("div", { class: "note lim", title: lims, text: lims }) : null,
+            r.stale ? h("div", { class: "note stale", title: r.stale, text: r.stale }) : null,
+            r.limit ? h("div", { class: "note", title: r.limit, text: r.limit }) : null,
+            r.needs ? h("div", { class: "note", title: r.needs, text: r.needs }) : null,
+            r.riskWhy ? h("details", { class: "why" }, h("summary", { text: "Why it says so" }), h("p", { class: "note", text: r.riskWhy })) : null)),
         sw ?? h("span", {})));
     }
     card.append(whereKnobEl());
@@ -3282,16 +3313,17 @@
     const count = (n) => { const c = W.counts[n]; return !c.all ? "no model" : c.files < c.all ? `${plural(c.all, "model")}, ${c.files} with files` : plural(c.all, "model"); };
     const defs = h("ul", { class: "lv-defs" }, ...[1, 2, 3, 4].map((n) => h("li", { class: n === value ? "on" : null },
       h("button", { type: "button", "aria-pressed": String(n === value), "aria-label": `Where work may go ${n}, ${W.names[n]}`, onclick: () => (n === value ? null : pick(n)) },
-        h("b", { class: "n", text: String(n) }), h("span", { class: "d" }, h("b", { text: `${W.names[n]}. ` }), W.says[n],
+        h("b", { class: "n", text: String(n) }), h("span", { class: "d", title: W.says[n] }, h("b", { text: `${W.names[n]}. ` }), h("span", { class: "say", text: W.says[n] }),
           h("span", { class: W.counts[n].all ? "lv-tag count" : "lv-tag warn", text: count(n) }), n === 4 ? h("span", { class: "lv-tag", text: "default" }) : null)))));
     const c = W.counts[value];
     const warn = !c.all ? "No model you have can take work at this stop, so Leanfare hands nothing off and plans keep every part with your app. Open Ollama with a model in it, or turn the knob up."
       : !c.files ? "No model here may take your projects' files, so work with files stays with your app." : null;
-    return h("div", { class: "where-knob" }, h("div", { class: "pname", text: "Where work may go" }),
+    const does = "Plans, the delegate, its checks and side by side send work only where this says; a part no model there can take stays with your app. Paid models that do not train: your paid keys and plans, not Gemini's free key, Mistral's free plan or OpenRouter's free models, whose terms let the company read what is sent or train on it. An app can also ask for one task or plan to stay on this computer (private), whatever this says.";
+    const head = h("div", { class: "pname", title: does }, h("span", { text: "Where work may go" }));
+    tipMark(head, () => does);
+    return h("div", { class: "where-knob" }, head,
       h("div", { class: "lv-row small" }, h("div", { class: "lv-knobbox" }, knobEl(value, short, pick, "Where work may go", 4), h("div", { class: "lv-hint", text: "Turn it, or press 1 to 4" })), defs),
-      warn ? h("p", { class: "note warn", text: warn }) : null,
-      h("details", { class: "why" }, h("summary", { text: "What this does" }),
-        h("p", { class: "note", text: "Plans, the delegate, its checks and side by side send work only where this says; a part no model there can take stays with your app. Paid models that do not train: your paid keys and plans, not Gemini's free key, Mistral's free plan or OpenRouter's free models, whose terms let the company read what is sent or train on it. An app can also ask for one task or plan to stay on this computer (private), whatever this says." })));
+      warn ? h("p", { class: "note warn", text: warn }) : null);
   }
   async function setPlatform(id, on) {
     try { S.platforms = await api("/api/platforms", { body: { id, on } }); renderSettings(); toast(on ? "Plans and the delegate can use it again." : "Plans and the delegate leave it out now.", "done"); } catch (e) { failed(e); }
@@ -3425,7 +3457,10 @@
   // ---- 0.12: the level and the review, set with a knob and switches ----------------------------------
   // A switch on its own row: what it does, a line under it, and the switch (a button that says on or off).
   function switchRow(on, label, small, onChange) {
-    return h("div", { class: "swrow" }, h("div", { class: "sw-text" }, h("span", { text: label }), small ? h("small", { text: small }) : null),
+    const note = small ? h("small", { text: small, hidden: true }) : null;
+    const name = h("span", { class: "sw-name" }, h("span", { text: label, title: small || null }));
+    if (note) tipMark(name, () => small, note);
+    return h("div", { class: "swrow" }, h("div", { class: "sw-text" }, name, note),
       h("button", { type: "button", class: "sw", role: "switch", "aria-checked": String(!!on), "aria-label": label, onclick: () => onChange(!on) },
         h("span", { class: "track", "aria-hidden": "true" }, h("span", { class: "dot" }))));
   }
@@ -3487,7 +3522,7 @@
     const pick = (n) => patchSettings({ level: n }, `Level ${n}: ${L.names[n]}.`);
     const defs = h("ul", { class: "lv-defs" }, ...[1, 2, 3, 4, 5].map((n) => h("li", { class: n === value ? "on" : null },
       h("button", { type: "button", "aria-pressed": String(n === value), "aria-label": `Level ${n}, ${L.names[n]}`, onclick: () => (n === value ? null : pick(n)) },
-        h("b", { class: "n", text: String(n) }), h("span", { class: "d" }, h("b", { text: `${L.names[n]}. ` }), L.says[n], n === 3 ? h("span", { class: "lv-tag", text: "default" }) : null)))));
+        h("b", { class: "n", text: String(n) }), h("span", { class: "d", title: L.says[n] }, h("b", { text: `${L.names[n]}. ` }), h("span", { class: "say", text: L.says[n] }), n === 3 ? h("span", { class: "lv-tag", text: "default" }) : null)))));
     const now = L.now;
     const levels = s.levels ?? {};
     const apps = h("div", { class: "lv-apps" }, h("div", { class: "lv-apps-title", text: "Per app" }),
@@ -3651,12 +3686,17 @@
   // as you leave it. A card's longer explanations fold behind a Details line, so a closed page fits one screen.
   const RIGHT_GROUPS = [
     { key: "apps", title: "Your apps and AI plans", open: true, has: ["Use Leanfare in your apps", "Hand work to your other AI plans"] },
-    { key: "level", title: "How much Leanfare does", open: true, has: ["How much Leanfare takes first", "Plans in your apps", "Jobs", "Where Leanfare may send work"] },
-    { key: "money", title: "Budget and plans", open: false, has: ["Monthly budget", "Compare with a subscription", "Your subscriptions", "Your usual model"] },
+    // Each group, open, fits one screen (0.13.12): the level, where work goes, jobs, money and subscriptions apart.
+    { key: "level", title: "How much Leanfare does", open: true, has: ["How much Leanfare takes first"] },
+    { key: "where", title: "Where work may go", open: false, has: ["Where Leanfare may send work"] },
+    { key: "jobs", title: "Jobs and plans", open: false, has: ["Jobs", "Plans in your apps"] },
+    { key: "money", title: "Budget", open: false, has: ["Monthly budget", "Compare with a subscription", "Your usual model"] },
+    { key: "subs", title: "Your subscriptions", open: false, has: ["Your subscriptions"] },
     { key: "picks", title: "How models are picked", open: false, has: ["How Auto picks", "Speed", "Thinking effort", "Answers in the chat"] },
     { key: "quality", title: "Quality checks", open: false, has: ["Review every answer", "How the models did for you", "Side by side", "Show who wrote what (a test)"] },
-    { key: "data", title: "What is kept", open: false, has: ["What Leanfare keeps on this computer", "Chat history", "Instructions for new chats"] },
-    { key: "more", title: "More", open: false, has: [] }, // everything else: versions, problems, other apps, prices, look
+    { key: "data", title: "What is kept", open: false, has: ["What Leanfare keeps on this computer", "Chat history"] },
+    { key: "look", title: "Look and new chats", open: false, has: ["Look", "Instructions for new chats"] },
+    { key: "more", title: "More", open: false, has: [] }, // everything else: versions, problems, other apps, prices
   ];
   const LEFT_GROUPS = [
     { key: "providers", title: "Models and keys", open: true, has: null }, // the providers, until Local models
@@ -3683,6 +3723,11 @@
   // The longer explanations of a card (paragraphs over 140 characters) go behind one Details line.
   function foldDetails(card) {
     if (!card.classList?.contains("setting") || card.querySelector(":scope > details.more")) return;
+    const head = card.querySelector(":scope > h3"), first = head?.nextElementSibling;
+    if (first && first.tagName === "P" && (!first.className || /^(note|muted)$/.test(first.className)) && !first.querySelector("a, button, input, select") && (first.textContent ?? "").length > 50 && !head.title) {
+      head.title = first.textContent; first.hidden = true; first.classList.add("tip-pop");
+      tipMark(head, () => first.textContent, first);
+    }
     const long = [...card.querySelectorAll(":scope > p")].filter((p) => !p.classList.contains("note") && (p.textContent ?? "").length > 140);
     if (!long.length) return;
     const d = h("details", { class: "more" }, h("summary", { text: "Details" }));

@@ -1113,7 +1113,7 @@ async function connectCallback(url: URL): Promise<Response> {
 function connectPage(ok: boolean, message: string): Response {
   const esc = (t: string) => t.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><title>Leanfare</title>
-<style>body{margin:0;min-height:100vh;display:grid;place-items:center;font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f6f7f7;color:#16191a}main{max-width:26rem;padding:2rem;text-align:center}h1{font-size:1.5rem;margin:0 0 .5rem}p{margin:0;color:#4a5356}@media(prefers-color-scheme:dark){body{background:#16191a;color:#f1f3f3}p{color:#b6bdbf}}</style></head>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;font:14px/1.43 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f6f7f7;color:#16191a}main{max-width:26rem;padding:2rem;text-align:center}h1{font-size:22px;line-height:28px;font-weight:520;margin:0 0 .5rem}p{margin:0;color:#4a5356}@media(prefers-color-scheme:dark){body{background:#16191a;color:#f1f3f3}p{color:#b6bdbf}}</style></head>
 <body><main><h1>${ok ? "Connected." : "Not connected."}</h1><p>${esc(message)}</p></main></body></html>`;
   return new Response(html, { status: ok ? 200 : 400, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": CSP, "x-content-type-options": "nosniff", "referrer-policy": "no-referrer" } });
 }

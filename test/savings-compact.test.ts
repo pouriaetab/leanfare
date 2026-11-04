@@ -58,7 +58,7 @@ describe("Savings, compact", () => {
   test("Free capacity: several models to a row, each on one small line", () => {
     const css = readFileSync(join(import.meta.dir, "..", "ui", "app.css"), "utf8");
     expect(css).toMatch(/\.ft-list \{[^}]*grid-template-columns: repeat\(auto-fill, minmax\(280px, 1fr\)\)[^}]*\}/);
-    expect(css).toMatch(/\.ft-row \{[^}]*grid-template-columns: minmax\(0, 1fr\) 32px auto auto;[^}]*font-size: 12px;[^}]*\}/);
+    expect(css).toMatch(/\.ft-row \{[^}]*grid-template-columns: minmax\(0, 1fr\) 32px auto auto;[^}]*font-size: var\(--fs-tiny\);[^}]*\}/);
     expect(css).not.toMatch(/\.ft-tile/);
   });
 });
