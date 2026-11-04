@@ -29,9 +29,10 @@ describe("the model an app says it runs on", () => {
     expect(p.you).toEqual({ model: "claude-opus-5-5", label: "Claude Opus 5.5", plan: "Claude Max" });
     const mine = p.table.split("\n").filter((l) => l.includes("you ("));
     expect(mine.length).toBeGreaterThan(0);
-    for (const l of mine) { expect(l).toContain("you (Claude, on your Claude Max plan)"); expect(l).toContain("Claude Opus 5.5"); }
+    for (const l of mine) expect(l).toContain("you (Claude, on your Claude Max plan)");
     expect(p.table).not.toContain("your model");
-    expect(p.next).not.toContain("subagent"); // Claude's chats run one model: no other model is suggested for a part
+    // 0.14: Cowork starts helpers on another of Claude's models, the Desktop app's chat cannot: told to do the part itself then
+    expect(p.next).toContain("start a helper (a subagent) with that model if your app can (model: opus, sonnet or haiku); if it cannot, do the part yourself.");
   });
 
   test("Claude Code can run a part on another model in a subagent, so its plan still names the one to use", async () => {

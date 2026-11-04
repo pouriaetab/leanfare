@@ -142,7 +142,7 @@ describe("what a level changes in Leanfare", () => {
     const at2 = await plan(2);
     expect([placeOf(at2, "write"), placeOf(at2, "reason"), at2.level]).toEqual(["you", "you", 2]);
     const at4 = await plan(4);
-    expect([placeOf(at4, "write"), placeOf(at4, "reason")]).toEqual(["out", "you"]);
+    expect([placeOf(at4, "write"), placeOf(at4, "reason")]).toEqual(["out", "out"]); // 0.14: working things out too, below high effort
     expect(at4.parts.find((p: any) => p.kind === "write")!.why).not.toContain("near its limit");
     const at5 = await plan(5);
     expect([placeOf(at5, "write"), placeOf(at5, "reason")]).toEqual(["out", "out"]);

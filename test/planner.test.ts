@@ -109,7 +109,8 @@ describe("where each part runs", () => {
     const design = r.parts.find((p) => p.n === 3)!;
     expect(design.where).not.toBe("you");
     expect(design.why).toContain("the 5 hours at 92%");
-    expect(r.parts.find((p) => p.n === 4)!.where).toBe("you"); // code changes stay, whatever the limits
+    const code = r.parts.find((p) => p.n === 4)!; // 0.14: the plan very low raises the level to 5, so the change comes back as a patch
+    expect([code.where !== "you", code.patch, code.why]).toEqual([true, true, expect.stringContaining("a model drafts the change as a patch, and you read it and apply it")]);
   });
 
   test("no model ready: split by rules, and every part stays with you, saying why", async () => {

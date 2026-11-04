@@ -27,7 +27,9 @@ describe("the free models' record", () => {
     expect([r.n, r.good, r.partly, r.wrong, r.score]).toEqual([3, 1, 1, 1, 0.5]);
   });
   test("working things out at medium or high effort waits until they earn it; low effort, reading and level 5 do not", () => {
-    expect(freeHeld("reason", "medium")).toBe("free models take working things out at medium effort once your grades say they do it well (60 of 100 from 5 grades); so far no grades yet");
+    expect(freeHeld("reason", "medium")).toBe("free models take working things out at medium effort at level 4 and up, or once your grades say they do it well (60 of 100 from 5 grades); so far no grades yet");
+    expect(freeHeld("reason", "medium", 4)).toBe(null); // 0.14: at 4, with every answer checked
+    expect(freeHeld("reason", "high", 4)).toStartWith("free models take working things out at high effort at level 5, or once");
     expect(freeHeld("reason", "low")).toBe(null);
     expect(freeHeld("read", "medium")).toBe(null);
     expect(freeHeld("reason", "medium", 5)).toBe(null);
@@ -45,7 +47,7 @@ describe("the delegate", () => {
   test("a paid model takes what the free models sit out, and the receipt says why", async () => {
     const r = await hand("reason", "medium");
     expect(r.model.id).toBe(DEEPSEEK);
-    expect(r.receipt).toContain("Free models take working things out at medium effort once your grades say they do it well (60 of 100 from 5 grades); so far no grades yet, so DeepSeek V4 Flash took it.");
+    expect(r.receipt).toContain("Free models take working things out at medium effort at level 4 and up, or once your grades say they do it well (60 of 100 from 5 grades); so far no grades yet, so DeepSeek V4 Flash took it.");
   });
   test("low effort still goes to a free model", async () => {
     saveSettings({ ticked: [GEMINI] });
