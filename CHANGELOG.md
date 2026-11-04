@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.2
+
+- Smaller and tighter everywhere: text a size below Claude Desktop's (20, 14, 13, 12 and 11 px; chat messages stay 16), less space around cards, rows and buttons, and thin bars in Work by model, Quality by kind and by level, the tiles, the meters and Live activity.
+- Live activity shows each kind's number (new input, cached, thinking, written) in its own color beside the bar, as it moves.
+- The Usage report: Prompts has its title in the table's header line, Ask about these prompts is one line with three short sample questions (the whole question on hover), Models is one table with speed and score as thin bars in their cells, and Tokens over time is lower.
+
 ## 0.14.1
 
 - Plan first in every app that lets Leanfare in. At levels 4 and 5 the first tool call of a prompt that is not Leanfare's plan is turned back once, with the reason, and the next goes through: in Claude Code (a hook next to the read hook), Codex (its hooks.json, which also says the level with each prompt), Gemini CLI (BeforeAgent and BeforeTool) and Cursor (its hooks.json).

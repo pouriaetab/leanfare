@@ -84,6 +84,8 @@ test("Savings: the Live card's bars while a hand off runs, a call opened into it
   const row = doc.querySelector("#liveCard .lv-bar-row");
   expect(row.textContent).toContain("DeepSeek V4 Flash");
   expect(row.textContent).toContain("Hand off");
+  // 0.14.2: each kind's number beside the bar, in its own color, as it moves
+  expect([...row.querySelectorAll(".lv-nums .lv-n")].map((n: any) => [n.className, n.title])).toEqual([["lv-n lk-1", "New input"], ["lv-n lk-2", "Cached"], ["lv-n lk-3", "Thinking"], ["lv-n lk-4", "Written"]]);
   expect(doc.querySelector("#liveCard .lv-dot.on")).not.toBeNull();
   row.click();
   await waitFor(() => !!doc.querySelector("#liveCard .lv-open"));

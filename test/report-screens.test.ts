@@ -71,7 +71,7 @@ describe("the report", () => {
     expect([...doc.querySelectorAll("#reportCard tr.pr")].map((r: any) => [r.querySelectorAll("td")[4].title, r.querySelectorAll("td")[6].title]))
       .toEqual([["range 7k to 16k", ""], ["range 21k to 41k", "measured"]]);
     expect([...doc.querySelectorAll("#reportCard thead th")].map((th: any) => th.textContent))
-      .toEqual(["ID", "When", "App · main model", "Tokens", "Grades", "Outside used", "Claude alone", "Saved", "Claude used, whole prompt", "Outside", "Together", "Claude alone"]);
+      .toEqual(["Promptsopen one for its parts", "Tokens", "Grades", "ID", "When", "App · main model", "Outside used", "Claude alone", "Saved", "Claude used, whole prompt", "Outside", "Together", "Claude alone"]); // 0.14.2: the title in the first header row
     expect(bad(doc)).toBe(false);
   });
 

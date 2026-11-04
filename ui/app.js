@@ -1905,7 +1905,7 @@
       box);
   }
   function drawLine(box, d, W) {
-    const H = 150, L = 46, R = 54, T = 8, B = 22, pw = W - L - R, ph = H - T - B;
+    const H = 120, L = 46, R = 54, T = 8, B = 22, pw = W - L - R, ph = H - T - B; // 0.14.2: 120 high (was 150)
     const s = d.series, n = s.length, known = d.tiles.own.measured > 0;
     const max = niceMax(Math.max(...s.map((p) => Math.max(p.kept, known ? p.used : 0)), 0));
     const x = (i) => L + (n <= 1 ? pw / 2 : (i / (n - 1)) * pw), y = (v) => T + ph - (v / max) * ph;
@@ -2022,14 +2022,11 @@
   function reportSpeedEl(d) {
     const rows = d.speed ?? [];
     if (!rows.length) return [];
-    const chart = h("div", { class: "rp-chart sp-chart" });
-    const draw = () => drawSpeed(chart, rows, Math.max(280, Math.min(560, chart.clientWidth || 520)));
-    const RO = window.ResizeObserver;
-    if (RO) { let w = 0; new RO(() => { if (chart.clientWidth && chart.clientWidth !== w) { w = chart.clientWidth; draw(); } }).observe(chart); }
-    draw();
+    const fastest = Math.max(1, ...rows.map((m) => m.perSecond ?? 0));
+    const ibar = (frac, cls = "") => h("span", { class: `ibar ${cls}`, "aria-hidden": "true" }, h("i", { style: { width: `${Math.max(0, Math.min(1, frac)) * 100}%` } }));
     const TIME = "From each call's own clock: the first word (time to first token) and the whole answer. The middle one and the slowest 1 in 10.";
-    const dots = h("div", { class: "card rp-card" }, h("h3", { title: "Each dot is a model: how long its answers took (the middle answer) and its score out of 100 from your app's grades. Up and left is better. Bigger dots answered more. Not graded yet: on the bottom line, hollow. Amber: resting." }, "Speed against quality"), chart);
-    const table = h("div", { class: "card rp-card" }, h("h3", { title: "Every call in this span: hand offs, checks, side by side, plans and chats. Most calls first." }, "Speed, failures, cost and quality"),
+    void drawSpeed; // 0.14.2: the dots chart is out; the table shows speed and score as bars
+    const table = h("div", { class: "card rp-card" }, h("h3", { title: "Every call in this span: hand offs, checks, side by side, plans and chats. Most calls first. Writes: how fast each writes, its bar against the fastest here. Score: out of 100 from your app's grades, else the blind checks." }, "Models"),
       h("div", { class: "scroll" }, h("table", { class: "trial-table sp-table" },
         h("thead", {}, h("tr", {}, h("th", { text: "Model" }), h("th", { class: "num", text: "Calls" }),
           h("th", { title: "Busy (503, 529), rate limited (429), timed out, could not be reached, and other errors. Each try counts, also when Auto passed the work on.", text: "Failed" }),
@@ -2044,11 +2041,11 @@
           h("td", {}, m.failed ? [h("span", { class: "fail", text: `${num(m.failed)} failed` }), h("span", { class: "tiny", text: spFails(m) })] : h("span", { class: "muted", text: "none" })),
           h("td", { class: "num", text: m.first ? `${spSec(m.first.mid)} · ${spSec(m.first.slow)}` : "—" }),
           h("td", { class: "num", text: m.whole ? `${spSec(m.whole.mid)} · ${spSec(m.whole.slow)}` : "—" }),
-          h("td", { class: "num", text: m.perSecond ? `${num(m.perSecond)} /s` : "—" }),
+          h("td", { class: "num bar-cell" }, m.perSecond ? ibar(m.perSecond / fastest, "speed") : null, h("span", { text: m.perSecond ? `${num(m.perSecond)} /s` : "—" })),
           h("td", { class: "num", text: m.costPerCall === null ? "—" : money(m.costPerCall) }),
-          h("td", { class: "num" + (m.score ? "" : " muted"), title: m.score ? `90% range ${scoreRange(m.score)}` : null, text: m.score ? scoreShort(m.score) : "not graded" }),
+          h("td", { class: "num bar-cell" + (m.score ? "" : " muted"), title: m.score ? `90% range ${scoreRange(m.score)}` : null }, m.score ? ibar(m.score.score / 100, m.score.score >= 80 ? "good" : m.score.score >= 50 ? "warn" : "bad") : null, h("span", { text: m.score ? scoreShort(m.score) : "not graded" })),
           h("td", { class: "now" }, spNow(m))))))));
-    return h("div", { class: "sp-wrap" }, dots, table);
+    return h("div", { class: "sp-wrap one" }, table);
   }
   function drawSpeed(box, rows, W) {
     const H = 190, L = 40, R = 12, T = 10, B = 34, pw = W - L - R, ph = H - T - B;
@@ -2169,11 +2166,13 @@
     }
     const left = d.prompts.length - S.report.shown + d.more;
     const th = (t, cls = "") => h("th", { class: cls, text: t });
-    return h("div", { class: "card rp-card" }, h("h3", { title: `Each prompt with both sides: what the outside models used, what ${app} would have used doing it alone (an estimate), and the grades. Open one for its parts (PRM-41.1, PRM-41.2…). Claude Code's own tokens come from its own files: numbers only, never your words. New tokens: what it did not read again from its cache. Claude's chats and Cowork do not share theirs, so they show as not known.` }, "Prompts", h("small", { text: "open one for its parts" })),
+    // 0.14.2: the card's title sits in the table's first header row, over ID, When and App, so it takes no line.
+    const ttl = `Each prompt with both sides: what the outside models used, what ${app} would have used doing it alone (an estimate), and the grades. Open one for its parts (PRM-41.1, PRM-41.2…). Claude Code's own tokens come from its own files: numbers only, never your words. New tokens: what it did not read again from its cache. Claude's chats and Cowork do not share theirs, so they show as not known.`;
+    return h("div", { class: "card rp-card rp-prompts" },
       h("div", { class: "scroll" }, h("table", { class: "trial-table rp-table both" },
         h("thead", {},
-          h("tr", {}, h("th", { rowspan: 2, text: "ID" }), h("th", { rowspan: 2, text: "When" }), h("th", { rowspan: 2, text: "App · main model" }), h("th", { colspan: 4, class: "grp", text: "Tokens" }), h("th", { colspan: 3, class: "grp", text: "Grades" })),
-          h("tr", {}, th("Outside used", "num"), th(`${app} alone`, "num"), th("Saved", "num"), th(`${app} used, whole prompt`, "num"), th("Outside"), th("Together"), th(`${app} alone`))),
+          h("tr", {}, h("th", { colspan: 3, class: "rp-ttl", title: ttl }, "Prompts", h("small", { text: "open one for its parts" })), h("th", { colspan: 4, class: "grp", text: "Tokens" }), h("th", { colspan: 3, class: "grp", text: "Grades" })),
+          h("tr", {}, th("ID"), th("When"), th("App · main model"), th("Outside used", "num"), th(`${app} alone`, "num"), th("Saved", "num"), th(`${app} used, whole prompt`, "num"), th("Outside"), th("Together"), th(`${app} alone`))),
         h("tbody", {}, ...rows))),
       left > 0 ? h("button", { class: "btn small", type: "button", text: `Show ${Math.min(RP_PAGE, left)} more`, onclick: () => { S.report.shown += RP_PAGE; const old = $("#reportCard"); if (old) old.replaceWith(reportCardEl()); } }) : null);
   }
@@ -2329,6 +2328,8 @@
       rows.push(h("button", { type: "button", class: "lv-bar-row" + (c.ended ? " ended" : ""), "data-id": c.id, "aria-expanded": String(!!S.tokens.open[c.id]), onclick: () => { S.tokens.open[c.id] = !S.tokens.open[c.id]; redrawLive(); } },
         h("span", { class: "lv-who" }, h("b", { text: c.model?.label ?? "a model" }), h("span", { class: "muted lv-secs", text: `${LIVE_SRC[c.source] ?? c.source} · ${secs} s${c.ended ? " · done" : ""}` })),
         h("span", { class: "lv-bar" }, ...LIVE_KINDS.map(([k], i) => S.tokens.kinds[k] ? h("span", { class: `lv-seg lk-${i + 1}`, "data-k": k, style: { width: `${((c[k] / most) * 100).toFixed(2)}%` } }) : null)),
+        // 0.14.2: each kind's number in its own color, as it moves
+        h("span", { class: "lv-nums" }, ...LIVE_KINDS.map(([k, name], i) => S.tokens.kinds[k] ? h("span", { class: `lv-n lk-${i + 1}`, "data-k": k, title: name, text: tokShort(c[k]) }) : null)),
         h("span", { class: "lv-tot", text: tokShort(liveTotal(c)) })));
       if (S.tokens.open[c.id]) {
         const top = Math.max(1, ...LIVE_KINDS.map(([k]) => c[k]));
@@ -2345,6 +2346,7 @@
       const row = card.querySelector(`.lv-bar-row[data-id="${c.id}"]`);
       if (!row) continue;
       for (const seg of row.querySelectorAll(".lv-seg")) seg.style.width = `${((c[seg.dataset.k] / most) * 100).toFixed(2)}%`;
+      for (const n of row.querySelectorAll(".lv-n")) n.textContent = tokShort(c[n.dataset.k]);
       row.querySelector(".lv-tot").textContent = tokShort(liveTotal(c));
       row.querySelector(".lv-secs").textContent = `${LIVE_SRC[c.source] ?? c.source} · ${Math.round(((c.ended ?? liveNow()) - c.started) / 1000)} s${c.ended ? " · done" : ""}`;
       const open = card.querySelector(`.lv-open[data-open="${c.id}"]`);
@@ -2386,7 +2388,7 @@
 
   // Ask about these prompts (askreport.ts, 0.12): a model on this computer reads the span's prompts and answers; another
   // of your models only when picked. Neither the question nor the answer is kept.
-  const ASK_SAMPLES = ["Which prompts cost the most, and why?", "Which hand offs were graded partly or wrong?", "Where did Leanfare save the most?"];
+  const ASK_SAMPLES = [["Cost the most", "Which prompts cost the most, and why?"], ["Partly or wrong", "Which hand offs were graded partly or wrong?"], ["Saved the most", "Where did Leanfare save the most?"]];
   function reportAskEl(d) {
     S.ask ??= { models: null, model: "", busy: false, out: null, error: null, question: "" };
     const a = S.ask;
@@ -2411,10 +2413,12 @@
       : "Open Ollama with a model in it to ask on this computer, or pick one of your other models.";
     const total = d.prompts.length + (d.more ?? 0);
     sel.title = note;
+    // 0.14.2: one line: the title, the question, three short samples (the whole question on hover), the model, Ask.
     return h("div", { class: "rp-ask", id: "rpAsk" },
-      h("div", { class: "rp-ask-head" }, h("b", { text: "Ask about these prompts" }), h("span", { class: "muted", title: note, text: `${total} ${total === 1 ? "prompt" : "prompts"} in this span, with the filters above` }),
-        h("span", { class: "rp-ask-chips" }, ...ASK_SAMPLES.map((t) => h("button", { type: "button", class: "chip-btn", text: t, onclick: () => { a.question = t; ask(); } })))),
-      h("form", { class: "rp-ask-row", onsubmit: ask }, input, sel, h("button", { class: "btn small primary", type: "submit", text: a.busy ? "Asking…" : "Ask", disabled: a.busy })),
+      h("form", { class: "rp-ask-row", onsubmit: ask },
+        h("b", { class: "rp-ask-t", title: `${total} ${total === 1 ? "prompt" : "prompts"} in this span, with the filters above. ${note}`, text: "Ask about these prompts" }),
+        input, h("span", { class: "rp-ask-chips" }, ...ASK_SAMPLES.map(([t, q]) => h("button", { type: "button", class: "chip-btn", title: q, text: t, onclick: () => { a.question = q; ask(); } }))),
+        sel, h("button", { class: "btn small primary", type: "submit", text: a.busy ? "Asking…" : "Ask", disabled: a.busy })),
       a.busy ? h("div", { class: "rp-ask-out busy", text: "Reading the prompts…" })
         : a.error ? h("div", { class: "rp-ask-out err", text: a.error })
         : a.out ? h("div", { class: "rp-ask-out" }, h("div", { class: "rp-ask-text", text: a.out.answer }),
