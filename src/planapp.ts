@@ -111,7 +111,7 @@ export const PLAN_APP_HTML = `<!doctype html>
       el("td", { "data-l": "Model", text: p.model_label || (p.runs_on === "you" ? (plan.you && plan.you.label) || (p.your_model && p.your_model.label) || "your model" : p.model || "") }),
       el("td", { class: "t", "data-l": "Time", text: secs(p.seconds) }),
       el("td", { "data-l": "Tokens", text: "~" + tok(p.tokens) + (p.runs_on === "you" ? " of your plan" : " kept") }),
-      el("td", { class: "c", "data-l": "Cost", text: p.runs_on === "you" ? "in your plan" : p.runs_on === "codex" ? "in your ChatGPT plan" : usd(p.cost_usd) }),
+      el("td", { class: "c", "data-l": "Cost", text: p.runs_on === "you" ? "in your plan" : p.runs_on === "codex" ? "in your ChatGPT plan" : p.runs_on === "gemini" ? "in your Google account" : usd(p.cost_usd) }),
       run ? el("td", { class: "s " + nowClass(st(p.n)), "data-l": "Now", text: nowOf(st(p.n)) }) : null));
     const t = plan.totals;
     const mine = plan.parts.filter((p) => p.runs_on !== "you").length;

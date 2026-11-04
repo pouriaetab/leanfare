@@ -24,7 +24,7 @@ export interface Standing { model: string; label: string; kind: GradedKind; n: n
 
 let cache: Map<string, Standing> | null = null; // model|kind -> its standing
 const key = (model: string, kind: string) => `${model}|${kind}`;
-export const labelOf = (model: string) => (model === CODEX_ID ? CODEX_LABEL : getModel(model)?.label ?? model);
+export const labelOf = (model: string) => (model === CODEX_ID ? CODEX_LABEL : model === "gemini-cli/auto" ? "Gemini CLI" : getModel(model)?.label ?? model);
 export function forgetGrades() { cache = null; }
 
 function standingsMap(): Map<string, Standing> {

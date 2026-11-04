@@ -96,9 +96,9 @@ export function sessionOf(path: string): string {
   return (bySubagent(path) && n >= 3 ? parts[n - 3] : parts[n - 1]).replace(/\.jsonl$/, "");
 }
 
-const providerOf = (id: string) => (id === CODEX_ID ? "codex" : getModel(id)?.local ? "local" : getModel(id)?.provider ?? id.split("/")[0]);
-const labelOf = (id: string) => (id === CODEX_ID ? "Codex" : getModel(id)?.label ?? (id.split("/").slice(1).join("/") || id)); // Codex: its place says "ChatGPT plan"
-const whereOf = (id: string, cost: number | null): ReportPart["where"] => (id === CODEX_ID ? "plan" : getModel(id)?.local ? "local" : cost === 0 ? "free" : "paid");
+const providerOf = (id: string) => (id === CODEX_ID ? "codex" : id === "gemini-cli/auto" ? "gemini-cli" : getModel(id)?.local ? "local" : getModel(id)?.provider ?? id.split("/")[0]);
+const labelOf = (id: string) => (id === CODEX_ID ? "Codex" : id === "gemini-cli/auto" ? "Gemini CLI" : getModel(id)?.label ?? (id.split("/").slice(1).join("/") || id)); // Codex: its place says "ChatGPT plan"
+const whereOf = (id: string, cost: number | null): ReportPart["where"] => (id === CODEX_ID || id === "gemini-cli/auto" ? "plan" : getModel(id)?.local ? "local" : cost === 0 ? "free" : "paid");
 const freshOf = (u: { uncached: number; cacheWrite: number; cacheWrite1h?: number; output: number }) => u.uncached + u.cacheWrite + (u.cacheWrite1h ?? 0) + u.output;
 
 // What each hand off's calls used, by its mark (ledger.job): every call made for it, as the ledger has them. Side by

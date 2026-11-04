@@ -143,9 +143,11 @@ export async function codexState(fresh = false): Promise<CodexState> {
 }
 
 // Whether a plan may put parts on Codex now: ok, or why not (null: nothing to say, as when it is off).
-export async function codexFor(manager: string): Promise<{ ok: boolean; why: string | null }> {
+// own (0.14.1): you work in Codex, so its parts run on a lighter model of the same plan (his loop: the platform's model
+// sends parts to its own lower models).
+export async function codexFor(manager: string): Promise<{ ok: boolean; why: string | null; own?: boolean }> {
   if (!settings().codexPlan) return { ok: false, why: null };
-  if (/codex|chatgpt/i.test(manager)) return { ok: false, why: null }; // you work in Codex: its parts are yours anyway
+  const own = /codex|chatgpt/i.test(manager);
   const s = await codexState();
   if (!s.installed) return { ok: false, why: "Codex is not on this computer (Settings, Your ChatGPT plan through Codex, says how to get it)" };
   if (s.login === "other") return { ok: false, why: "Codex is signed in with an API key or another login, not with ChatGPT, so its use would be billed (run codex login in Terminal and sign in with ChatGPT)" };
@@ -154,8 +156,10 @@ export async function codexFor(manager: string): Promise<{ ok: boolean; why: str
   try { w = windowsNow("chatgpt", await planView("chatgpt")); } catch {}
   const near = [w.five !== null && w.five >= NEAR ? `the 5 hours at ${Math.round(w.five)}%` : "", w.week !== null && w.week >= NEAR ? `the week at ${Math.round(w.week)}%` : ""].filter(Boolean).join(", ");
   if (near) return { ok: false, why: `your ChatGPT plan is near its limit (${near})` };
-  return { ok: true, why: null };
+  return { ok: true, why: null, ...(own ? { own: true } : {}) };
 }
+// The lightest model the plan offers: a mini one, else the last it lists.
+export const lighter = (offered: string[]): string | null => offered.find((m) => /mini|nano|small|lite/i.test(m)) ?? (offered.length > 1 ? offered[offered.length - 1] : null);
 
 // ---- running one part -----------------------------------------------------------------------
 // At most two Codex runs at once: each is a whole agent, and they share the plan's limits. A slot that
@@ -197,7 +201,7 @@ async function mcpOff(bin: string, cwd: string, signal: AbortSignal): Promise<st
   return on.flatMap((n) => ["-c", `mcp_servers.${n}.enabled=false`]);
 }
 
-export interface CodexPart { n: number; title: string; task: string; folder: string | null; files: string[]; effort: "low" | "medium" | "high"; search?: boolean } // search: Codex's own web search on (0.13)
+export interface CodexPart { n: number; title: string; task: string; folder: string | null; files: string[]; effort: "low" | "medium" | "high"; search?: boolean; light?: boolean } // search: Codex's own web search on (0.13); light: a lighter model of the plan's (0.14.1: you work in Codex)
 export function codexPrompt(p: CodexPart): string {
   return [
     "This is one part of a larger task, handed to you on its own. Read what it needs and answer. Do not change any file, and do not run anything that changes the project.",
@@ -311,7 +315,7 @@ export async function runCodex(p: CodexPart, signal: AbortSignal, ms = CODEX_WAI
     if (signal.aborted) throw new UserError(499, "Stopped.", "stopped");
     const t0 = performance.now();
     const go = (m: string | null) => run(bin, [...(p.search ? ["--search"] : []), ...codexArgs(p.effort, answerFile, servers, m)], { cwd, input: codexPrompt(p), signal, ms });
-    let model = picked?.model ?? null;
+    let model = (p.light ? lighter(await codexModels(bin, signal)) : null) ?? picked?.model ?? null;
     let r = await go(model);
     const bad = r.code !== 0 && !r.timedOut && !signal.aborted ? notOffered(`${r.err}\n${r.out}`) : null;
     if (bad !== null) {

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.1
+
+- Plan first in every app that lets Leanfare in. At levels 4 and 5 the first tool call of a prompt that is not Leanfare's plan is turned back once, with the reason, and the next goes through: in Claude Code (a hook next to the read hook), Codex (its hooks.json, which also says the level with each prompt), Gemini CLI (BeforeAgent and BeforeTool) and Cursor (its hooks.json).
+- Cowork and Claude Desktop: a mod, leanfare-level, puts Leanfare's level in the system prompt of every chat and asks for the plan first at 4 and 5. Install it from Leanfare's plugin marketplace (the guide says how).
+- Always on: the Mac app opens at login (its menu turns it off) and starts Leanfare again when it stops, up to 3 times in 10 minutes. Without the app, `leanfare service install` adds a LaunchAgent (macOS) or a systemd user unit (Linux). An app's door waits up to 20 seconds for a start and says why one failed.
+- Your Google account through Gemini CLI: turned on in Settings, a plan's parts run on it read only before anything paid. Working in Codex or Gemini CLI, Leanfare's parts go to a lighter model of the same plan.
+
 ## 0.14.0
 
 - Level 4 sends more out. Working things out below high effort goes to Leanfare's models like drafting does, and a change to files is drafted outside as a patch (a unified diff) that your app reads, applies and grades. At level 4 the hardest working out still stays with your app's strongest model; at 5 it goes out too. Free models take working things out at medium effort from level 4, where every answer is checked by a second model. Jobs you set by hand stay as you set them.

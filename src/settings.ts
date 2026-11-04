@@ -45,6 +45,7 @@ export interface Settings {
   brief: boolean; // the chat screen's answers: short (the answer first, a table or a short list), more only when asked
   planAuto: number; // a plan's paid parts run without asking while their estimate is at most this many US dollars (0: always ask)
   codexPlan: boolean; // a plan's reading, drafting and working out parts may run on your ChatGPT plan through Codex (codex.ts); off until you turn it on
+  geminiCliPlan?: boolean; // 0.14.1: and on your Google account through Gemini CLI (geminicli.ts); off until you turn it on
   setupDone: boolean; // the first run's Set up was done (setup.ts); until then the app opens on it
   appsOff: string[]; // platforms plans and the delegate leave out (platforms.ts): provider ids, "chatgpt" (OpenAI and Codex), "local"
   filesTo: "any" | "notFree" | "local"; // before 0.12: where your projects' files may go; read only while where is not set
@@ -101,6 +102,7 @@ export const DEFAULTS: Settings = {
   brief: true,
   planAuto: 0,
   codexPlan: false,
+  geminiCliPlan: false,
   setupDone: false,
   appsOff: [],
   filesTo: "any",
@@ -206,7 +208,7 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
     }
     out.levels = next;
   }
-  for (const k of ["showValue", "brief", "codexPlan", "setupDone", "whoWrote", "review", "reviewHook", "raiseWhenLow", "askEachChat", "planMeter"] as const) {
+  for (const k of ["showValue", "brief", "codexPlan", "geminiCliPlan", "setupDone", "whoWrote", "review", "reviewHook", "raiseWhenLow", "askEachChat", "planMeter"] as const) {
     if (!(k in p)) continue;
     if (typeof p[k] !== "boolean") return { error: `${k} must be true or false` };
     out[k] = p[k];
