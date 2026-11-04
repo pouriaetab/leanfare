@@ -25,6 +25,7 @@ import { isLevel, levelFor, levelText, type Level } from "./level";
 import { homedir } from "node:os";
 import { dirname, relative, sep } from "node:path";
 import { CODEX_ID, CODEX_LABEL, codexFor, runCodex } from "./codex";
+import { checkResult, checksFor, checksLine, parseChecks, setChecks, wordsFound, type Check, type CheckResult } from "./checks";
 import { DEFAULT_MAX_OUT, TIER, gradeRow, nameOf, notePart, runDelegate, taskFor, type Effort, type Kind } from "./delegate";
 import { LOCAL_CONTEXT, allModels, fitsText, getModel, localNeed, type Model } from "./data";
 import { fitsFree } from "./freeplans";
@@ -104,6 +105,8 @@ export interface PlanResult {
   private?: boolean; // stays on this computer: its parts go only to models here, or stay with you
   you?: { model: string | null; label: string | null; plan: string | null }; // the app's own model, as it said, and your plan for it
   level?: number; // 0.12: the level it was made at (level.ts); its parts run at it
+  folder?: string | null; // 0.14: the project it was made in, when known: its checks (checks.ts) go with it
+  checks?: Check[]; // 0.14: the project's checks when it was made
   table: string; // the table as markdown
   next: string; // what to do now
 }
@@ -493,10 +496,12 @@ export function tableOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
     "|---|---|---|---|---|---|---|---|---|",
     ...rows.map((x) => `| ${x} |`),
     "",
-    `${totalsText(t)} ${timeLine(t)}Pay per use: ${usd(t.cost)}.${t.out ? "" : ` ${r.parts.every((p) => p.keep) ? (r.parts.some((p) => p.keepWhy) ? `Answer it yourself: ${QUESTIONS_WHY}.` : "It is small enough to answer yourself: handing it off would cost more than it saves.") : nothingOut(r.parts)}`}${r.codex ? ` Codex took no part: ${r.codex}.` : ""}${r.local ? ` ${localLine(r.local)}` : ""}${r.parts.some((p) => p.risk) ? ` Parts on a free tier: ${[...new Set(r.parts.map((p) => p.risk).filter(Boolean))].join("; ")}. For anything private, plan it with private: it stays on this computer.` : ""}${r.private ? " This plan stays on this computer." : ""}`,
+    `${totalsText(t)} ${timeLine(t)}Pay per use: ${usd(t.cost)}.${t.out ? "" : ` ${r.parts.every((p) => p.keep) ? (r.parts.some((p) => p.keepWhy) ? `Answer it yourself: ${QUESTIONS_WHY}.` : "It is small enough to answer yourself: handing it off would cost more than it saves.") : nothingOut(r.parts)}`}${r.codex ? ` Codex took no part: ${r.codex}.` : ""}${r.local ? ` ${localLine(r.local)}` : ""}${r.parts.some((p) => p.risk) ? ` Parts on a free tier: ${[...new Set(r.parts.map((p) => p.risk).filter(Boolean))].join("; ")}. For anything private, plan it with private: it stays on this computer.` : ""}${r.private ? " This plan stays on this computer." : ""}${r.checks?.length ? ` Checks for this project: ${checksLine(r.checks)}.` : r.folder ? ` ${NO_CHECKS}` : ""}`,
   ].join("\n");
 }
 
+// A project with no checks yet (0.14): set once, they go with every plan made in its folder.
+export const NO_CHECKS = "This project has no checks yet: give plan a short list in checks once (the command that runs its tests, a scan, words to keep out, what to look at); Leanfare keeps it for this folder and shows it with every plan here.";
 // A local model that would take the reading and drafting free: to download, on a yes.
 export const localLine = (l: NonNullable<PlanResult["local"]>) => `A local model fits this computer: ${l.name} (${gb(l.size)}), rated like ${l.like}, free to run. Download it in Settings, Local models (in your app: local_model).`;
 
@@ -534,6 +539,7 @@ function nextOf(r: Omit<PlanResult, "table" | "next" | "id">, started: Set<numbe
       : " For a part on another model than the one you run on, start a helper (a subagent) with that model if your app can (model: opus, sonnet or haiku); if it cannot, do the part yourself.";
     s.push(`Do these yourself: ${on.join(", ")}.${how}`);
   }
+  if (r.checks?.length) s.push(`When every part is back and applied, run the project's checks (${r.checks.map((c) => c.n).join(", ")}) and report them with grade: the plan's id, whole true, and checks with the numbers that passed and failed.`);
   const patches = r.parts.filter((p) => p.patch).map((p) => p.n);
   if (patches.length) s.push(`${list(patches).replace(/^p/, "P")} come${patches.length === 1 ? "s" : ""} back as ${patches.length === 1 ? "a patch" : "patches"}: read ${patches.length === 1 ? "it" : "each"}, apply what is right with your own tools, and grade ${patches.length === 1 ? "it" : "each"}.`);
   if (yoursFirst.size) s.push(`${list([...yoursFirst]).replace(/^p/, "P")} wait${yoursFirst.size === 1 ? "s" : ""} for yours: once yours are done, run ${yoursFirst.size === 1 ? "it" : "them"} with delegate, with the answers ${yoursFirst.size === 1 ? "it needs" : "they need"} in the task (plan_run does not run ${yoursFirst.size === 1 ? "it" : "them"}).`);
@@ -542,7 +548,7 @@ function nextOf(r: Omit<PlanResult, "table" | "next" | "id">, started: Set<numbe
 
 // ---- the plan ------------------------------------------------------------------------------------
 
-export interface PlanInput { task: string; files: PlanFile[]; manager: string | null; split?: "auto" | "rules"; private?: boolean; yourModel?: string | null; level?: Level; signal: AbortSignal }
+export interface PlanInput { task: string; files: PlanFile[]; manager: string | null; split?: "auto" | "rules"; private?: boolean; yourModel?: string | null; level?: Level; folder?: string | null; checks?: Check[]; signal: AbortSignal }
 
 // The name of a model an app says it runs on: the price list's when it has the model, else made from the id
 // (claude-opus-5-5: Claude Opus 5.5; gpt-5.4: GPT-5.4; a date at the end is dropped).
@@ -598,7 +604,17 @@ export function checkPlan(b: any, trusted = false): Omit<PlanInput, "signal"> | 
   const yourModel = nameOf(b.your_model ?? b.yourModel);
   if (yourModel === false) return "your_model must be a model's name, like claude-opus-5-5.";
   if (b.level !== undefined && b.level !== null && !isLevel(b.level)) return "level must be a whole number from 1 to 5.";
-  return { task: b.task.trim(), files, manager, split, ...(b.private ? { private: true } : {}), ...(yourModel ? { yourModel } : {}), ...(isLevel(b.level) ? { level: b.level } : {}) };
+  // 0.14: the project's folder (the door gives the one it works in) and, once per project, its checks.
+  if (b.folder !== undefined && b.folder !== null && (typeof b.folder !== "string" || !FULL_PATH.test(b.folder.trim()) || b.folder.length > 1000)) return "folder must be the project's full path.";
+  const folder = typeof b.folder === "string" && b.folder.trim() ? b.folder.trim() : null;
+  let checks: Check[] | undefined;
+  if (b.checks !== undefined && b.checks !== null) {
+    const got = parseChecks(b.checks);
+    if (typeof got === "string") return got;
+    if (!folder) return "checks are kept for a project's folder: give plan the folder too.";
+    checks = got;
+  }
+  return { task: b.task.trim(), files, manager, split, ...(b.private ? { private: true } : {}), ...(yourModel ? { yourModel } : {}), ...(isLevel(b.level) ? { level: b.level } : {}), ...(folder ? { folder } : {}), ...(checks ? { checks } : {}) };
 }
 
 // The plan whose limits count: Codex spends a ChatGPT plan, the others a Claude plan when they are Claude's.
@@ -679,7 +695,11 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
   const sg = wantsLocal ? suggestLocal().suggestion : null;
   const local = sg ? { name: sg.name, size: sg.size, like: sg.like, rating: sg.rating, fit: sg.fit } : null;
   const you = { model: input.yourModel ?? null, label: input.yourModel ? modelName(input.yourModel) : null, plan: planFor(manager) };
-  const base = { task: input.task, manager, parts: placed, totals, split, limits: known ? limits : null, local, codex: codex.why, ...(input.private ? { private: true } : {}), you, level: lv.level };
+  // The project's checks (0.14): set with this plan, or as set before for this folder.
+  const folder = input.folder ?? null;
+  if (folder && input.checks?.length) setChecks(folder, input.checks);
+  const checks = checksFor(folder);
+  const base = { task: input.task, manager, parts: placed, totals, split, limits: known ? limits : null, local, codex: codex.why, ...(input.private ? { private: true } : {}), you, level: lv.level, folder, checks };
   const result: PlanResult = { id: randomId(), ...base, table: tableOf(base), next: nextOf(base) };
   keep(result, new Map(input.files.filter((f) => f.path).map((f) => [f.name, { path: f.path!, size: f.size }])));
   return result;
@@ -697,8 +717,8 @@ const appOf = (plan: PlanResult) => ({ app: plan.manager === "you" ? null : plan
 
 // after_yours: it waits for one of the person's parts (directly or through others), so it is theirs to hand over once theirs is done.
 export type RunStatus = "waiting" | "running" | "done" | "failed" | "stopped" | "yours" | "after_yours" | "blocked" | "asks";
-export interface RunPart { n: number; title: string; status: RunStatus; answer: string | null; receipt: string | null; model: string | null; modelId?: string | null; cost: number | null; seconds: number | null; error: string | null; verdict?: Verdict | null; gradedBy?: "you" | "manager" | null; took?: boolean } // took: the app has had its answer (plan or plan_status)
-export interface RunView { id: string; started: string; running: boolean; parts: RunPart[]; cost: number | null; asks: { parts: number[]; estimate: number | null; cap: number } | null }
+export interface RunPart { n: number; title: string; status: RunStatus; answer: string | null; receipt: string | null; model: string | null; modelId?: string | null; cost: number | null; seconds: number | null; error: string | null; verdict?: Verdict | null; gradedBy?: "you" | "manager" | null; took?: boolean; words?: string[] } // took: the app has had its answer (plan or plan_status); words: the project's words checks it fails (0.14)
+export interface RunView { id: string; started: string; running: boolean; parts: RunPart[]; cost: number | null; asks: { parts: number[]; estimate: number | null; cap: number } | null; checks?: Check[]; checked?: CheckResult | null } // checks: the project's (0.14); checked: what the app reported
 
 // What a plan's paid parts would cost.
 export function paidOf(plan: PlanResult): { parts: number[]; estimate: number | null } {
@@ -713,7 +733,7 @@ const wherePaths = new Map<string, Map<string, { path: string; size: number }>>(
 // grades: part n -> its grade's row, so grading a part again replaces its grade
 const runs = new Map<string, { view: RunView; ac: AbortController; tick: () => void; yes: { on: boolean }; grades: Map<number, number> }>();
 export const keptPlan = (id: string) => kept.get(id) ?? null;
-export const forgetPlans = () => { for (const r of runs.values()) r.ac.abort(); kept.clear(); runs.clear(); wherePaths.clear(); };
+export const forgetPlans = () => { for (const r of runs.values()) r.ac.abort(); kept.clear(); runs.clear(); wherePaths.clear(); checkedLater.clear(); };
 const HANDED = 20_000; // characters of an earlier part's answer handed on
 const running = (id: string) => !!runs.get(id)?.view.running;
 
@@ -761,7 +781,7 @@ export function startRun(id: string, opts: { paid?: boolean } = {}): RunView {
   const before = new Map((had?.view.parts ?? []).filter((r) => r.status === "done").map((r) => [r.n, r]));
   const yes = { on: !!opts.paid };
   const cap = settings().planAuto;
-  const view: RunView = { id, started: now().toISOString(), running: true, cost: 0, asks: null,
+  const view: RunView = { id, started: now().toISOString(), running: true, cost: 0, asks: null, checks: plan.checks ?? [], checked: had?.view.checked ?? null,
     parts: plan.parts.map((p) => before.get(p.n) ?? ({ n: p.n, title: p.title, status: p.where === "you" ? "yours" : "waiting", answer: null, receipt: null, model: null, cost: null, seconds: null, error: null })) };
   const ac = new AbortController();
   const at = (n: number) => view.parts.find((x) => x.n === n)!;
@@ -802,7 +822,11 @@ export function startRun(id: string, opts: { paid?: boolean } = {}): RunView {
       if (p.where === "paid" && !yes.on && (p.cost === null || spent() + p.cost > cap)) { r.status = "asks"; continue; }
       r.status = "running";
       going.add(p.n);
-      runPart(p, plan, at, ac.signal, yes.on).then((got) => Object.assign(r, got)).catch((e: any) => {
+      runPart(p, plan, at, ac.signal, yes.on).then((got) => {
+        Object.assign(r, got);
+        const words = wordsFound(plan.checks ?? [], r.answer); // the project's words checks, scanned here for nothing
+        if (words.length) r.words = words;
+      }).catch((e: any) => {
         // spent: what its calls were charged before it stopped or failed, when known.
         Object.assign(r, { status: ac.signal.aborted || e?.status === 499 ? "stopped" : "failed", error: String(e?.message ?? e).slice(0, 500), cost: typeof e?.spent === "number" ? e.spent : null });
       }).finally(() => { going.delete(p.n); tick(); });
@@ -816,6 +840,21 @@ export function startRun(id: string, opts: { paid?: boolean } = {}): RunView {
   tick();
   return view;
 }
+
+// What the app reported of the project's checks once a plan's parts were back (grade, checks; 0.14).
+export function recordChecks(id: string, b: unknown): CheckResult {
+  const plan = kept.get(id);
+  if (!plan) throw new UserError(404, "This plan is no longer in Leanfare (it was restarted, or 20 newer plans were made).", "plan_gone");
+  if (!plan.checks?.length) throw new UserError(400, "This plan's project has no checks: give plan a list in checks once, with the folder.", "no_checks");
+  const got = checkResult(plan.checks, b);
+  if (typeof got === "string") throw new UserError(400, got, "bad_checks");
+  const held = runs.get(id);
+  if (held) held.view.checked = got;
+  else checkedLater.set(id, got);
+  return got;
+}
+const checkedLater = new Map<string, CheckResult>(); // reported for a plan none of whose parts ran in Leanfare
+export const checkedOf = (id: string): CheckResult | null => runs.get(id)?.view.checked ?? checkedLater.get(id) ?? null;
 
 // Leanfare switched off (switch.ts): every running plan stops, as plan_stop stops one. Returns how many.
 export function stopAllRuns(): number {

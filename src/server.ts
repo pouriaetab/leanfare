@@ -41,7 +41,8 @@ import { notNowWhy } from "./allowance";
 import { FREE_LIST, afterFreeKey, freeView } from "./freelist";
 import { LASTING, hideNotice, keepKeysFresh, keyChanged, keyNotices, keyState, keyUnusable, noCredit, providerAway, recheckKey } from "./keystate";
 import { TASK_OF, shareView } from "./share";
-import { checkPlan, gradePart, keptPlan, makePlan, nextStarted, runView, startRun, stopAllRuns, stopRun, tookAnswers } from "./planner";
+import { checkPlan, gradePart, keptPlan, makePlan, nextStarted, recordChecks, runView, startRun, stopAllRuns, stopRun, tookAnswers } from "./planner";
+import { allChecks, removeChecks } from "./checks";
 import { setAuto } from "./workers";
 import { setUp, setupView } from "./setup";
 import { OFF_TEST, OFF_TEXT, OFF_TRIAL, setSwitch, switchedOn } from "./switch";
@@ -865,6 +866,11 @@ async function api(req: Request, url: URL): Promise<Response> {
   // The next steps again, once a yes started a plan's paid parts too (the plan tool asks before it answers).
   if (p === "/api/plan/next" && m === "GET") { const id = url.searchParams.get("id") ?? ""; const plan = keptPlan(id), v = runView(id); return plan && v ? json({ next: nextStarted(plan, v) }) : fail(404, "No run of that plan."); }
   if (p === "/api/plan/stop" && m === "POST") { const b = await readBody(req); const v = stopRun(String(b?.id ?? "")); return v ? json(v) : fail(404, "No run of that plan."); }
+  // The project's checks (checks.ts, 0.14): what the app reported once a plan's parts were back; every project's list;
+  // one project's list taken away (Settings, Project checks).
+  if (p === "/api/plan/checks" && m === "POST") { const b = await readBody(req); return json({ checked: recordChecks(String(b?.id ?? ""), b) }); }
+  if (p === "/api/checks" && m === "GET") return json({ projects: allChecks() });
+  if (p === "/api/checks" && m === "DELETE") { const folder = url.searchParams.get("folder") ?? ""; return removeChecks(folder) ? json({ ok: true, projects: allChecks() }) : fail(404, "No checks for that folder."); }
   // The delegate trial (trial.ts): its estimate and last report, start, stop.
   if (p === "/api/trial" && m === "GET") return json(await trialView(req.signal));
   if (p === "/api/trial/start" && m === "POST") {
