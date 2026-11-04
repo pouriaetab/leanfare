@@ -2,6 +2,8 @@
 // the part alone (an estimate, from the outside model's numbers), what handing it off cost the app, and the saving. And
 // quality three ways: the outside answer, the whole result together, and the app alone where sampled.
 import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { db } from "../src/db";
 import { gradeTogether, runDelegate } from "../src/delegate";
 import { reportLines } from "../src/mcp";
@@ -51,6 +53,19 @@ describe("in the report", () => {
     expect(p.both).toEqual({ alone: x.both.alone, spent: x.both.spent, saved: x.both.saved });
     expect(rep.tiles.both).toMatchObject({ app: "Claude Code", spent: x.both.spent, saved: x.both.saved });
     expect(reportLines(rep, "custom")).toContain(`Saved for Claude Code (an estimate): about `);
+  });
+
+  test("a Claude Code session another test file left does not count: reset clears the apps' session files", async () => {
+    // Its prompt at 10:30 would take the hand off at noon (its last prompt begun at most 6 hours before), outside the span.
+    const left = join(process.env.CLAUDE_CONFIG_DIR!, "projects", "-Users-you-app", "s-left.jsonl");
+    mkdirSync(dirname(left), { recursive: true });
+    writeFileSync(left, JSON.stringify({ type: "user", timestamp: "2026-10-21T10:30:00Z", cwd: "/Users/you/app", message: { role: "user", content: "Left by another test file" } }) + "\n");
+    await reset({ ticked: [DEEPSEEK, GEMINI, GROK], sideBySide: 5, sideBySideCap: 1 });
+    await keys("deepseek", "google", "xai");
+    expect(existsSync(left)).toBe(false);
+    await handOff();
+    const rep = await report(span());
+    expect(rep.prompts.map((p) => p.ts)).toEqual(["2026-10-21T12:00:00.000Z"]);
   });
 
   test("the whole result, graded by the app (its last hand off) or by you (a hand off of that prompt)", async () => {
