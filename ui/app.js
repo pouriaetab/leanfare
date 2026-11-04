@@ -553,7 +553,7 @@
       return h("tr", { class: p.where === "you" ? "yours" : "" },
         td("#", { text: String(p.n) }),
         h("td", { "data-label": "Part", class: "part" }, h("b", { text: p.title }), h("div", { class: "fine", text: p.why })),
-        td("Kind", { text: `${p.kind}, ${p.effort}` }),
+        td("Kind", { text: `${p.kind}${p.patch ? " (patch)" : ""}, ${p.effort}` }),
         td("Runs on", {}, p.where === "you" ? youText(P) : RUNS_ON[p.where], p.risk ? h("span", { class: "chip warn", title: "A free tier: what is sent there may be read or kept by its company. Make the plan private to keep it on this computer.", text: p.risk }) : null),
         td("Model", { text: p.model?.label ?? ((/claude code/i.test(P.manager) ? p.use?.label : null) ?? P.you?.label ?? p.use?.label ?? "your model") }),
         td("Time", { text: p.seconds === null ? "—" : secsShort(p.seconds) }),
@@ -3255,13 +3255,13 @@
   const JOB_ROWS = [["read", "Reading"], ["search", "Searching"], ["write", "Drafting"], ["reason", "Working things out"]];
   const JOB_CHOICES = [["leanfare", "Leanfare"], ["low", "When low"], ["app", "Your app"]];
   function jobsSettingEl(s) {
-    const jobs = { read: "leanfare", search: "leanfare", write: "low", reason: "app", ...(s.jobs ?? {}) };
+    const jobs = { read: "leanfare", search: "leanfare", write: "low", reason: "low", ...(s.jobs ?? {}) };
     const cap = moneyInput(s.paidCap ?? 0.1, "Paid work, at most a hand off");
     return h("div", { class: "setting", id: "jobsCard" }, h("h3", { text: "Jobs" }),
-      h("p", { class: "note", text: "Where each kind of job goes in a plan: to Leanfare's models, to them only when your Claude plan runs low (Settings, Where Leanfare may send work, shows the mode), or kept with your app. Changes to files always stay with your app." }),
+      h("p", { class: "note", text: "Where each kind of job goes in a plan: to Leanfare's models, to them only when your Claude plan runs low or the level is 4 or 5 (When low), or kept with your app. Changes to files stay with your app below level 4; at 4 and 5 a model drafts them as patches your app applies." }),
       ...JOB_ROWS.map(([k, label]) => h("div", { class: "job-row" }, h("span", { class: "pname", text: label }),
         h("div", { class: "seg", role: "group", "aria-label": label }, ...JOB_CHOICES.map(([v, word]) => h("button", { type: "button", "aria-pressed": String(jobs[k] === v), text: word,
-          onclick: () => patchSettings({ jobs: { [k]: v } }, `${label}: ${v === "leanfare" ? "to Leanfare" : v === "low" ? "to Leanfare when your plan runs low" : "kept with your app"}.`) }))))),
+          onclick: () => patchSettings({ jobs: { [k]: v } }, `${label}: ${v === "leanfare" ? "to Leanfare" : v === "low" ? "to Leanfare when your plan runs low, or at level 4 and up" : "kept with your app"}.`) }))))),
       h("div", { class: "row" }, h("span", { text: "Paid work: at most, for one hand off" }), cap,
         h("button", { class: "btn", type: "button", text: "Save", onclick: () => patchSettings({ paidCap: cap.querySelector("input").value || 0 }, "Saved.") })),
       h("p", { class: "fine", text: `A hand off goes to a free or cheaper model first; one that would cost more than ${money(s.paidCap ?? 0.1)} on a paid model stays with your app, and so does a check above it. Free and local models have no cap.` }));

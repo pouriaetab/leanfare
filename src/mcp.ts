@@ -699,7 +699,7 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
     const saved = folder ? writeShared(folder, j.id, { "plan.md": `# Plan ${j.id}\n\n${args.task.trim()}\n\n${j.table}\n\n${j.next}\n` }) : null;
     const shape = {
       id: j.id, saved_in: saved,
-      parts: j.parts.map((p: any) => ({ n: p.n, title: p.title, kind: p.kind, effort: p.effort, needs: p.needs, runs_on: p.where, risk: p.risk ?? null, model: p.model?.id ?? null, model_label: p.model?.label ?? null,
+      parts: j.parts.map((p: any) => ({ n: p.n, title: p.title, kind: p.kind, ...(p.patch ? { patch: true } : {}), effort: p.effort, needs: p.needs, runs_on: p.where, risk: p.risk ?? null, model: p.model?.id ?? null, model_label: p.model?.label ?? null,
         your_model: p.use ?? null, // a part that stays with you: the model to pick for it in your app (alias: Claude Code's name for it)
         seconds: p.seconds, tokens: p.tokens, cost_usd: p.cost,
         files: p.files.slice(0, 50), more_files: Math.max(0, p.files.length - 50), task: p.task })),
