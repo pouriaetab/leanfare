@@ -1,6 +1,8 @@
 // One Leanfare server per test run, with the fixed test catalogue.
 import { forgetAllowances } from "../src/allowance";
-import { unlinkSync } from "node:fs";
+import { rmSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { paths } from "../src/config";
 import { db, openDb, putSetting } from "../src/db";
 import { loadCatalog, store } from "../src/data";
@@ -17,6 +19,7 @@ import { sideBySideIdle, stopSideBySide } from "../src/sidebyside";
 import { stopTrial } from "../src/trial";
 import { forgetRequests } from "../src/delegate";
 import { forgetTests } from "../src/localtest";
+import { forgetLogs } from "../src/plans";
 import { setNow } from "../src/util";
 import { KEYS, type startFake } from "./fake";
 import * as connect from "../src/connect";
@@ -39,6 +42,18 @@ export async function boot() {
   return booted;
 }
 
+// Claude Code's and Codex's own session files (what the report, the meter and Your plans read), in the tests' own
+// folders only: a test writes the ones it needs after reset. A file another test file left would count in this one,
+// and GitHub runs the test files in a different order on each machine: on 3 Nov a hand off at noon was counted with a
+// prompt another file had left at 10:30, outside the span its test asked for, and its report came back empty.
+const REPO = join(import.meta.dir, "..");
+function forgetAppLogs() {
+  const claude = (process.env.CLAUDE_CONFIG_DIR ?? "").split(",").map((s) => s.trim()).filter(Boolean).map((r) => join(r, "projects"));
+  const codex = process.env.CODEX_HOME?.trim() ? ["sessions", "archived_sessions"].map((d) => join(process.env.CODEX_HOME!.trim(), d)) : [];
+  for (const d of [...claude, ...codex]) if (d.startsWith(tmpdir()) && !d.startsWith(REPO)) rmSync(d, { recursive: true, force: true });
+  forgetLogs();
+}
+
 export async function reset(patch: Partial<Settings> = {}) {
   stopRunning();
   stopSideBySide();
@@ -51,6 +66,7 @@ export async function reset(patch: Partial<Settings> = {}) {
   forgetRests();
   forgetNoQuota();
   forgetAllowances(); // allowance.ts reads the ledger again
+  forgetAppLogs();
   Object.assign(ANSWER_TIME, { start: 0, idle: 90_000 });
   resetSettingsCache();
   resetBudget();
