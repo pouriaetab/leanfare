@@ -324,6 +324,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var problem: String?
     var quitting = false
     var starting = false // waiting for the Leanfare this app started to answer
+    var restarts: [Date] = [] // 0.14.1: when Leanfare stopped by itself and this app started it again
     var windowWanted = false // open the window once Leanfare answers
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -340,6 +341,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         statusItem.menu = menu
         server.onExit = { [weak self] code in self?.serverExited(code) }
+        // 0.14.1, always on: Open at Login is turned on once, the first time this version runs; the menu turns it off.
+        if !UserDefaults.standard.bool(forKey: "loginOnce") {
+            UserDefaults.standard.set(true, forKey: "loginOnce")
+            if SMAppService.mainApp.status != .enabled { try? SMAppService.mainApp.register() }
+        }
         connect(openWindow: true)
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
@@ -391,8 +397,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func serverExited(_ code: Int32) {
         if quitting || server.stopping { return }
-        if code == 4 { setProblem("Port \(server.port) is used by another program, so Leanfare could not start. Start it in Terminal on another port: leanfare --port 4748") }
-        else { setProblem("Leanfare stopped (code \(code)). Its log is in ~/.leanfare/app.log. Choose Start Leanfare Again in the menu.") }
+        if code == 4 { setProblem("Port \(server.port) is used by another program, so Leanfare could not start. Start it in Terminal on another port: leanfare --port 4748"); return }
+        // 0.14.1, always on: Leanfare starts again by itself, up to 3 times in 10 minutes, waiting longer each time.
+        let now = Date()
+        restarts = restarts.filter { now.timeIntervalSince($0) < 600 }
+        if restarts.count < 3 {
+            let wait = [2.0, 10.0, 30.0][restarts.count]
+            restarts.append(now)
+            setProblem("Leanfare stopped (code \(code)). Starting it again in \(Int(wait)) seconds.")
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                guard let self = self, !self.quitting, self.server.child == nil else { return }
+                self.connect(openWindow: false)
+            }
+            return
+        }
+        setProblem("Leanfare stopped (code \(code)) 3 times in 10 minutes. Its log is in ~/.leanfare/app.log. Choose Start Leanfare Again in the menu.")
     }
 
     func setProblem(_ text: String) {
@@ -563,6 +583,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func startAgainServer() {
         problem = nil
         last = nil
+        restarts = [] // started by hand: the count of restarts begins again
         statusItem.button?.title = " …"
         // A Leanfare of this app's that stopped answering is stopped first.
         if server.child != nil {
