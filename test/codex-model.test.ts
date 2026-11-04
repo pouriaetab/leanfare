@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { codexArgs, codexModels, codexPicked, codexSetting, forgetCodex, notOffered, runCodex } from "../src/codex";
 import { saveSettings } from "../src/settings";
-import { boot, ui } from "./app";
+import { boot, reset, ui } from "./app";
 import { closeApp, openApp } from "./dom";
 
 const FAKE = `#!/bin/sh
@@ -74,7 +74,8 @@ afterAll(() => {
   if (wasHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = wasHome;
   rmSync(dir, { recursive: true, force: true });
 });
-beforeEach(() => {
+beforeEach(async () => {
+  await reset(); // a clean server: no lock or settings left by another test file (local.test.ts ends with the lock on)
   forgetCodex();
   for (const f of ["calls.log", "no-app-server", "offered", "configured", "default", "home/config.toml"]) rmSync(join(dir, f), { force: true });
   set("model-list.json", JSON.stringify(LIST));
