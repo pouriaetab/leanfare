@@ -29,7 +29,7 @@
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   /* Type as Claude Desktop sets it (measured on claude.ai, 3 Nov 2026): a screen's one title, section titles, text
      (labels, buttons, fields), secondary text, small labels; chat messages a size up. Every size here is one of these. */
-  --fs-title: 22px; --fs-head: 15px; --fs-body: 14px; --fs-small: 13px; --fs-tiny: 12px; --fs-chat: 16px;
+  --fs-title: 20px; --fs-head: 14px; --fs-body: 13px; --fs-small: 12px; --fs-tiny: 11px; --fs-chat: 16px; /* 0.14.2: Claude Desktop's steps, one size smaller (his ask); chat messages stay 16 */
   --fw-head: 520; --fw-label: 450;
   --series-1: #2a78d6; --series-2: #eb6834; /* the report's two lines: kept out, used by your apps */
   --lk-1: #2a78d6; --lk-2: #eb6834; --lk-3: #1baf7a; --lk-4: #eda100; /* live tokens: new input, cached, thinking, written */
@@ -1021,3 +1021,64 @@ tr.wd td { background: var(--panel-2); }
 .chk-list li { display: flex; gap: 6px; align-items: center; min-width: 0; padding: 1px 0; }
 .chk-list .chip { padding: 0 6px; line-height: 16px; font-size: var(--fs-tiny); flex: none; }
 .chk-what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+/* ---- 0.14.2, compact (his ask, 4 Nov: smaller type, less space, thinner bars, one line where there were two) ----
+   Each rule here tightens one in the sheet above; the sizes stay the six of the scale. */
+.fold { padding: 1px 0; }
+.fold > summary { padding: 3px 2px; gap: 8px; }
+.fold-body { gap: 6px; padding: 0 0 6px; }
+.card { padding: 7px 10px; }
+.rp-tile { padding: 6px 9px; gap: 1px; }
+.rp-tiles { gap: 6px; }
+.rp-card h3 { margin: 0 0 2px; font-size: var(--fs-small); }
+.trial-table th, .trial-table td { padding: 2px 8px 2px 0; }
+.trial-table { font-size: var(--fs-tiny); }
+.rp-table.both td .tiny, .sp-table td .tiny { line-height: 1.25; }
+.rp-filters select { min-height: 24px; padding-top: 1px; padding-bottom: 1px; font-size: var(--fs-tiny); }
+.rp-views { margin: 0 0 2px; }
+/* thin bars: the work by model, quality by kind and by level, the tiles, the meters, the free list and Live */
+.rp-bar .track { height: 4px; }
+.rp-kind .stack, .rp-level .stack { height: 4px; }
+.rp-kind, .rp-level { padding: 3px 0; gap: 1px 12px; }
+.rp-tile .q3 .bar { height: 4px; }
+.barrow .track { height: 4px; }
+.meter .mt-row .track { height: 4px; }
+.lv-bar { height: 5px; }
+.lv-bar-row { padding: 2px 6px; grid-template-columns: minmax(0, 13em) minmax(0, 1fr) max-content 4em; gap: 8px; }
+.lv-bars { gap: 1px; }
+/* Live: each kind's number in its own color, beside the bar */
+.lv-nums { display: flex; gap: 6px; font-size: var(--fs-tiny); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lv-n { color: var(--lk); font-weight: var(--fw-label); }
+@media (max-width: 560px) { .lv-bar-row { grid-template-columns: minmax(0, 1fr) 4em; } .lv-bar-row .lv-nums { grid-column: 1 / -1; grid-row: 3; } }
+/* Prompts: the card's title in the table's first header row */
+.rp-table.both th.rp-ttl { font-size: var(--fs-small); color: var(--text); text-align: left; vertical-align: bottom; border-bottom: 2px solid var(--line); white-space: nowrap; }
+.rp-table.both th.rp-ttl small { margin-left: 6px; color: var(--muted); font-weight: 400; font-size: var(--fs-tiny); }
+/* Ask about these prompts: one line */
+.rp-ask { padding: 5px 8px; gap: 4px; }
+.rp-ask-row { flex-wrap: nowrap; gap: 6px; }
+.rp-ask-t { white-space: nowrap; font-size: var(--fs-small); }
+.rp-ask-q { flex: 1 1 160px; padding: 2px 10px; font-size: var(--fs-small); }
+.rp-ask-row .rp-ask-chips { flex: none; flex-wrap: nowrap; gap: 4px; }
+.rp-ask-row .chip-btn { font-size: var(--fs-tiny); padding: 1px 8px; white-space: nowrap; }
+.rp-ask-row select { flex: 0 1 170px; font-size: var(--fs-tiny); min-height: 24px; }
+@media (max-width: 900px) { .rp-ask-row { flex-wrap: wrap; } }
+/* Models: one table across the card; speed and score as thin bars in their cells */
+.sp-wrap.one { display: block; }
+.sp-table td.nm b { display: inline; margin-right: 6px; }
+.sp-table td.nm .tiny { display: inline; }
+.sp-table td.bar-cell { white-space: nowrap; }
+.sp-table td.now { min-width: 0; }
+.ibar { display: inline-block; width: 56px; height: 4px; border-radius: 2px; background: var(--panel-2); overflow: hidden; vertical-align: middle; margin-right: 6px; }
+.ibar i { display: block; height: 100%; border-radius: 2px; background: var(--series-1); }
+.ibar.good i { background: var(--fill-good); } .ibar.warn i { background: var(--fill-warn); } .ibar.bad i { background: var(--fill-bad); }
+/* the filters and the views' buttons a size down; Work by model one line a model */
+.rp-filters .seg { min-height: 24px; }
+.rp-filters .seg button { font-size: var(--fs-tiny); min-height: 22px; padding: 1px 8px; }
+.rp-views .btn.small { min-height: 24px; padding: 1px 8px; font-size: var(--fs-tiny); }
+.rp-bar { gap: 8px; }
+.rp-bar .nm { display: flex; gap: 6px; align-items: baseline; }
+.rp-bar { grid-template-columns: minmax(150px, 1.3fr) minmax(60px, 2fr) 44px auto auto; }
+/* Savings' buttons and pickers a size down */
+#tab-savings .btn { min-height: 26px; padding: 2px 10px; font-size: var(--fs-small); }
+#tab-savings .btn.small { min-height: 22px; padding: 1px 8px; font-size: var(--fs-tiny); }
+#tab-savings select { min-height: 26px; padding-top: 2px; padding-bottom: 2px; font-size: var(--fs-small); }
