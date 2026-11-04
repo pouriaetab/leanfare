@@ -20,22 +20,23 @@ export function noteSession(sid: string, facts: [string, string | number][], now
   try { appendFileSync(sessionFile(), facts.map(([w, v]) => `${now}\t${sid}\t${w}\t${v}\n`).join(""), { mode: 0o600 }); } catch {}
 }
 
-export interface SessionFacts { handoffs: Set<number>; plans: Set<string>; asked: Set<number>; level: number | null; prompts: number }
+export interface SessionFacts { handoffs: Set<number>; plans: Set<string>; asked: Set<number>; level: number | null; prompts: number; promptAt: number | null; plannedAt: number | null; gatedAt: number | null } // 0.14.1: when the last prompt went, the last plan was called, and the plan first reminder was last given
 export function sessionFacts(sid: string, now: number): SessionFacts | null {
   if (!SESSION_ID.test(sid)) return null;
   let text = "";
   try { text = readFileSync(sessionFile(), "utf8"); } catch { return null; }
-  const s: SessionFacts = { handoffs: new Set(), plans: new Set(), asked: new Set(), level: null, prompts: 0 };
+  const s: SessionFacts = { handoffs: new Set(), plans: new Set(), asked: new Set(), level: null, prompts: 0, promptAt: null, plannedAt: null, gatedAt: null };
   let seen = false;
   for (const line of text.split("\n")) {
     const [t, id, what, v] = line.split("\t");
     if (id !== sid || !(now - Number(t) < KEEP) || v === undefined) continue;
     seen = true;
     if (what === "h") s.handoffs.add(Number(v));
-    else if (what === "p") s.plans.add(v);
+    else if (what === "p") { s.plans.add(v); s.plannedAt = Math.max(s.plannedAt ?? 0, Number(t)); }
+    else if (what === "g") s.gatedAt = Math.max(s.gatedAt ?? 0, Number(t));
     else if (what === "a") s.asked.add(Number(v));
     else if (what === "l") { const n = Number(v); if (Number.isInteger(n) && n >= 1 && n <= 5) s.level = n; } // the last one set
-    else if (what === "s") s.prompts++;
+    else if (what === "s") { s.prompts++; s.promptAt = Math.max(s.promptAt ?? 0, Number(t)); }
   }
   return seen ? s : null;
 }
