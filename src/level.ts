@@ -16,7 +16,7 @@ export const LEVEL_MEANS: Record<Level, string> = {
   1: "Leanfare waits until the user or you ask for it.",
   2: "Only big reads (about 40 KB of logs or docs, 200 KB of anything else, or more than 5 files) and tasks with several parts go to Leanfare.",
   3: "Reads over about 10 KB that you will not change, project wide searches, summaries, reviews and first drafts go to Leanfare first; you keep decisions, changes to files and the final answer.",
-  4: "Every prompt that is more than a quick question is planned with Leanfare's plan tool first, and each part goes where the plan says.",
+  4: "Every prompt that is more than a quick question is planned with Leanfare's plan tool first, and each part goes where the plan says; a change to files may come back as a patch for you to read and apply.",
   5: "Every part a model the user ticked can do goes to Leanfare; you review, decide, change files and answer.",
 };
 // For you, in Settings: what each level does in your apps.
@@ -24,7 +24,7 @@ export const LEVEL_SAYS: Record<Level, string> = {
   1: "Leanfare waits until you or your app ask for it.",
   2: "Only big reads (long logs, docs, many files) and tasks with many parts.",
   3: "Reads over 10 KB, project wide searches, summaries, reviews and first drafts go first. Your app keeps decisions, file changes and the answer.",
-  4: "Every prompt is planned first; each part goes to the cheapest model that does it well.",
+  4: "Every prompt is planned first; each part goes to the cheapest model that does it well, file changes too (as patches your app applies).",
   5: "Every part a model you ticked can do goes out; your app reviews, decides and answers.",
 };
 export const isLevel = (n: unknown): n is Level => Number.isInteger(n) && (n as number) >= 1 && (n as number) <= 5;

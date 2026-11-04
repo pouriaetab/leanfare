@@ -106,7 +106,7 @@ export const PLAN_APP_HTML = `<!doctype html>
     const laterOf = (p, seen = 0) => seen < 50 && p.needs.some((n) => byN(n).runs_on === "you" || (byN(n).needs && laterOf(byN(n), seen + 1))); // it waits for one of yours, through its needs
     const rows = plan.parts.map((p) => el("tr", { class: p.runs_on === "you" ? "you" : "" },
       el("td", { class: "n", text: p.n }),
-      el("td", {}, el("b", { text: p.title }), el("div", { class: "why", text: p.kind + ", " + p.effort + (p.needs.length ? " · after " + p.needs.join(", ") : "") })),
+      el("td", {}, el("b", { text: p.title }), el("div", { class: "why", text: p.kind + (p.patch ? " (patch)" : "") + ", " + p.effort + (p.needs.length ? " · after " + p.needs.join(", ") : "") })),
       el("td", { "data-l": "Runs on", text: (p.runs_on === "you" ? youText(plan) : RUNS[p.runs_on] || p.runs_on) + (p.risk ? " (" + p.risk + ")" : "") }),
       el("td", { "data-l": "Model", text: p.model_label || (p.runs_on === "you" ? (plan.you && plan.you.label) || (p.your_model && p.your_model.label) || "your model" : p.model || "") }),
       el("td", { class: "t", "data-l": "Time", text: secs(p.seconds) }),

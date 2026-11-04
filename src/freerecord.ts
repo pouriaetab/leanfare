@@ -43,7 +43,10 @@ export function freeHeld(kind: string | null | undefined, effort: string | null 
   const r = freeRecord(kind as GradedKind, at);
   const so = r.n ? scoreText(scoreOf(r)) : "no grades yet";
   if (r.n >= FREE_MIN && r.score < DOWN_BELOW) return `free models have scored ${so} at ${KIND_WORD[kind as GradedKind]} for you, under half good`;
-  if (kind === "reason" && effort !== "low" && level !== 5 && !(r.n >= FREE_MIN && r.score >= FREE_EARN))
-    return `free models take working things out at ${effort === "high" ? "high" : "medium"} effort once your grades say they do it well (60 of 100 from ${FREE_MIN} grades); so far ${so}`;
+  // 0.14: at level 4 they take it at medium effort too (every answer at 4 is checked by a second model, level.ts); high
+  // effort waits for level 5.
+  const free = effort === "high" ? level === 5 : (level ?? 0) >= 4;
+  if (kind === "reason" && effort !== "low" && !free && !(r.n >= FREE_MIN && r.score >= FREE_EARN))
+    return `free models take working things out at ${effort === "high" ? "high effort at level 5" : "medium effort at level 4 and up"}, or once your grades say they do it well (60 of 100 from ${FREE_MIN} grades); so far ${so}`;
   return null;
 }

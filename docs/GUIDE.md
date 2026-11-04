@@ -162,7 +162,7 @@ Settings, **How much Leanfare takes first**, is a knob from 1 to 5, with what ea
 1. **Off:** Leanfare only when you ask for it.
 2. **Light:** big reads and tasks with several parts.
 3. **More** (the default): also reads over about 10 KB your app will not change, project wide searches, summaries, reviews and first drafts.
-4. **Most:** your app plans every prompt that is more than a quick question with Leanfare first.
+4. **Most:** your app plans every prompt that is more than a quick question with Leanfare first. Reading, searching, drafting and working things out below high effort go out, and a change to files comes back as a patch your app reads and applies.
 5. **All it can:** every part a model can do; your app reviews, decides and answers.
 
 Each app can keep its own level (Claude Code; Claude Desktop and Cowork; Codex; Gemini CLI; Cursor), and one chat can have its own: say "Leanfare 4" in it. When your Claude plan runs low, the level goes up to 4 by itself, and to 5 when it is very low (a switch turns this off). The level changes the reminder before big reads, which parts of a plan go out, and how often a stronger model checks an answer (every answer at 4 and 5). The report shows quality by level. In Claude Code the prompt hook says the level with each prompt, with the reason (so your Claude plan lasts longer), the first step in plain words (at 4 and 5, Leanfare's plan tool is the first tool call) and the tools by name, since Claude Code may load an app's tools only when it looks for them.
@@ -211,7 +211,9 @@ Write what you want done in the **Plan** tab, or let Claude call the `plan` tool
 
 ### Jobs
 
-Settings, **Jobs**, says where each kind of job goes in a plan: **Leanfare** (its models), **When low** (to Leanfare only while your Claude plan runs low; see [Plan modes](#plan-modes)) or **Your app**. At first reading and searching go to Leanfare, drafting goes when your plan runs low, and working things out stays with your app: in the grades so far reading did best on free models and working things out worst. Changes to files always stay with your app.
+Settings, **Jobs**, says where each kind of job goes in a plan: **Leanfare** (its models), **When low** (to Leanfare only while your Claude plan runs low; see [Plan modes](#plan-modes)) or **Your app**. At first reading and searching go to Leanfare, and drafting and working things out go when your plan runs low or the level is 4 or 5. At level 4 working things out at high effort still stays with your app's strongest model; at 5 it goes out too. Below level 4 changes to files stay with your app; at 4 and 5 a model drafts each as a patch (a unified diff) and your app reads it, applies what is right and grades it, as drafting. Jobs you set by hand stay as you set them. Free models take working things out at medium effort from level 4 (every answer at 4 is checked by a second model), at high effort at 5, or once your grades say they do it well.
+
+A part that stays with your app names the model to run it on among your app's own (Claude's: Opus for the hardest judgement, Sonnet for most code, Haiku for light work). Claude Code runs it with a subagent on that model; Cowork can start a helper the same way; Claude Desktop's chat does the part itself.
 
 ### Plan modes
 

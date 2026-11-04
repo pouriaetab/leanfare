@@ -24,22 +24,34 @@ const plan = (task: string) => makePlan({ task, files: [], manager: "Claude Code
 const placeOf = (r: any, kind: string) => r.parts.filter((p: any) => p.kind === kind).map((p: any) => [p.where === "you" ? "you" : "out", p.why]);
 
 describe("where each kind of job goes", () => {
-  test("by default: reading and searching to Leanfare, drafting when the plan runs low, working things out with your app", () => {
-    expect(DEFAULTS.jobs).toEqual({ read: "leanfare", search: "leanfare", write: "low", reason: "app" });
+  test("by default: reading and searching to Leanfare, drafting and working things out when the plan runs low (or at level 4 and up)", () => {
+    expect(DEFAULTS.jobs).toEqual({ read: "leanfare", search: "leanfare", write: "low", reason: "low" });
     expect(DEFAULTS.paidCap).toBe(0.1);
   });
-  test("a plan follows them: working things out stays, drafting stays while the plan has plenty and goes out when it runs low", async () => {
+  test("a plan follows them: drafting and working things out stay while the plan has plenty and go out when it runs low; a rule set to your app holds", async () => {
     const task = "Write a short guide for the settings screen: work out what each setting does, then draft it.";
     const before = await plan(task);
-    expect(placeOf(before, "reason")[0]).toEqual(["you", "your rules keep working things out with Claude Code (Settings, Jobs)"]);
+    expect(placeOf(before, "reason")[0]).toEqual(["you", "your rules send working things out out only when your plan runs low (Settings, Jobs)"]);
     expect(placeOf(before, "write")[0]).toEqual(["you", "your rules send drafting out only when your plan runs low (Settings, Jobs)"]);
     saveSnap({ at: T("2026-10-21T11:00:00Z"), five: null, week: { used: 74, resets: T("2026-10-25T12:00:00Z") } });
     const after = await plan(task);
     expect(placeOf(after, "write")[0][0]).toBe("out");
-    expect(placeOf(after, "reason")[0][0]).toBe("you"); // still yours: your rule
+    expect(placeOf(after, "reason")[0][0]).toBe("out");
+    await reset({ ticked: ALL_TICKED, jobs: { ...JOB_DEFAULTS, reason: "app" }, jobsSet: true } as any);
+    const kept = await plan(task);
+    expect(placeOf(kept, "reason")[0]).toEqual(["you", "your rules keep working things out with Claude Code (Settings, Jobs)"]); // still yours: your rule
+  });
+  test("Jobs saved as the defaults before 0.14 (never set by hand) follow the new ones; set in Settings, they hold", async () => {
+    const { OLD_JOB_DEFAULTS, resetSettingsCache, settings } = await import("../src/settings");
+    await reset({ ticked: ALL_TICKED, jobs: OLD_JOB_DEFAULTS } as any);
+    resetSettingsCache();
+    expect(settings().jobs).toEqual(JOB_DEFAULTS);
+    await reset({ ticked: ALL_TICKED, jobs: OLD_JOB_DEFAULTS, jobsSet: true } as any);
+    resetSettingsCache();
+    expect(settings().jobs).toEqual(OLD_JOB_DEFAULTS);
   });
   test("changed in Settings: one kind at a time, checked", async () => {
-    expect(validatePatch({ jobs: { reason: "leanfare" } })).toEqual({ patch: { jobs: { ...JOB_DEFAULTS, reason: "leanfare" } } });
+    expect(validatePatch({ jobs: { reason: "leanfare" } })).toEqual({ patch: { jobs: { ...JOB_DEFAULTS, reason: "leanfare" }, jobsSet: true } });
     expect(validatePatch({ jobs: { code: "leanfare" } })).toEqual({ error: "jobs can hold read, search, write, reason" });
     expect(validatePatch({ jobs: { read: "maybe" } })).toEqual({ error: "each job goes to leanfare, low or app" });
     expect(validatePatch({ paidCap: "0.25" })).toEqual({ patch: { paidCap: 0.25 } });
@@ -47,7 +59,7 @@ describe("where each kind of job goes", () => {
     const doc = await openApp(url, { screen: "settings" });
     for (let i = 0; i < 100 && !doc.querySelector("#jobsCard"); i++) await Bun.sleep(50);
     const row = [...doc.querySelectorAll("#jobsCard .job-row")].find((r: any) => r.querySelector(".pname").textContent === "Working things out") as any;
-    expect([...row.querySelectorAll("button")].map((b: any) => [b.textContent, b.getAttribute("aria-pressed")])).toEqual([["Leanfare", "false"], ["When low", "false"], ["Your app", "true"]]);
+    expect([...row.querySelectorAll("button")].map((b: any) => [b.textContent, b.getAttribute("aria-pressed")])).toEqual([["Leanfare", "false"], ["When low", "true"], ["Your app", "false"]]);
     [...row.querySelectorAll("button")][0].click();
     for (let i = 0; i < 100 && (await ui(url, "/api/state")).json.settings.jobs.reason !== "leanfare"; i++) await Bun.sleep(30);
     expect((await ui(url, "/api/state")).json.settings.jobs).toEqual({ ...JOB_DEFAULTS, reason: "leanfare" });
