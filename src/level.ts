@@ -30,15 +30,13 @@ export const LEVEL_SAYS: Record<Level, string> = {
 export const isLevel = (n: unknown): n is Level => Number.isInteger(n) && (n as number) >= 1 && (n as number) <= 5;
 export const levelText = (n: Level) => `${n} (${LEVEL_NAME[n]})`;
 
-// The apps a level can be set for, by the name the MCP door gives them (mcp.ts: clientLabel).
-export const APP_LEVELS: Record<string, string> = { "claude-code": "Claude Code", claude: "Claude Desktop and Cowork", codex: "Codex", "gemini-cli": "Gemini CLI", cursor: "Cursor" };
+// The apps a level can be set for, by the name the MCP door gives them (mcp.ts: clientLabel): Claude's, since Leanfare
+// lives in Claude only (0.15). Another app that still calls Leanfare (an older setup) follows the default level.
+export const APP_LEVELS: Record<string, string> = { "claude-code": "Claude Code", claude: "Claude Desktop and Cowork" };
 export function appKey(app: string | null | undefined): string | null {
   if (!app) return null;
   if (/^claude code$/i.test(app)) return "claude-code";
   if (/^(claude|cowork)$/i.test(app)) return "claude";
-  if (/^codex$/i.test(app)) return "codex";
-  if (/^gemini cli$/i.test(app)) return "gemini-cli";
-  if (/^cursor$/i.test(app)) return "cursor";
   return null;
 }
 const CLAUDE = /claude|cowork/i;

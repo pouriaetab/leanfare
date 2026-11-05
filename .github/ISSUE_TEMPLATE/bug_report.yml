@@ -46,9 +46,6 @@ body:
         - Claude Code
         - Claude Desktop
         - Cowork
-        - Codex
-        - Cursor
-        - Gemini CLI
         - Another app
     validations:
       required: true

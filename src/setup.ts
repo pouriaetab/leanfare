@@ -8,8 +8,6 @@ import { keyWhere } from "./keys";
 import { saveSettings, settings } from "./settings";
 import { setSwitch } from "./switch";
 import { autoView, setAuto } from "./workers";
-// Cursor plans by itself with hooks only (0.14.1, workers.ts): Settings turns that on, never Set up by itself.
-const HOOKS_ONLY = new Set(["cursor"]);
 
 const short = (name: string) => name.replace(/ \(and Cowork\)$/, "");
 
@@ -28,8 +26,9 @@ function toUse(): { models: Model[]; first: boolean } {
 const WHERE: Record<string, string> = { keychain: "your key, in the Keychain", file: "your key, saved in Leanfare", environment: "your key, from this computer's settings", shell: "your key, from your Terminal's settings" };
 
 export function setupView() {
-  const apps = appsView().filter((a) => a.status !== "not installed")
-    .map((a) => ({ id: a.id, name: short(a.name), status: a.status, after: a.after, note: a.note, plansItself: !!a.auto && !HOOKS_ONLY.has(a.id) }));
+  // Claude's apps only (0.15): Leanfare lives in Claude Desktop with Cowork, and Claude Code.
+  const apps = appsView().filter((a) => !a.archived && a.status !== "not installed")
+    .map((a) => ({ id: a.id, name: short(a.name), status: a.status, after: a.after, note: a.note, plansItself: !!a.auto }));
   const use = toUse();
   const using = new Set(use.models.map((m) => m.provider));
   const models = allProviders().filter((p) => using.has(p.id)).map((p) => ({
@@ -54,7 +53,7 @@ export async function setUp(signal?: AbortSignal) {
 async function setUpApps(signal?: AbortSignal) {
   const results: { id: string; name: string; ok: boolean; after: string; error?: string; note?: string }[] = [];
   const said = (e: any) => String(e?.message ?? e);
-  for (const a of appsView()) {
+  for (const a of appsView().filter((x) => !x.archived)) {
     if (signal?.aborted) break; // Stop: the apps done so far keep Leanfare, the rest are left as they were
     if (a.status === "not installed" || a.status === "broken") continue;
     const name = short(a.name);
@@ -68,7 +67,7 @@ async function setUpApps(signal?: AbortSignal) {
     let note: string | undefined;
     try {
       const auto = autoView(a.id);
-      if (auto && !auto.on && !HOOKS_ONLY.has(a.id)) setAuto(a.id, true);
+      if (auto && !auto.on) setAuto(a.id, true);
     } catch (e: any) { note = `${name} does not plan by itself yet: ${said(e)}`; }
     results.push({ id: a.id, name, ok: true, after: a.after, ...(note ? { note } : {}) });
   }

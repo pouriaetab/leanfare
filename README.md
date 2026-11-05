@@ -2,9 +2,9 @@
 
 [![Latest release](https://img.shields.io/github/v/release/pouriaetab/leanfare)](https://github.com/pouriaetab/leanfare/releases/latest) [![Tests](https://github.com/pouriaetab/leanfare/actions/workflows/ci.yml/badge.svg)](https://github.com/pouriaetab/leanfare/actions/workflows/ci.yml) [![License](https://img.shields.io/github/license/pouriaetab/leanfare)](LICENSE)
 
-Leanfare makes the AI apps you already use cost less. It works inside them and hands simple work, like reading files and drafting, to cheaper or free models. You keep working as before.
+Leanfare makes your Claude plan last longer. It works inside Claude and hands simple work, like reading files and drafting, to cheaper or free models. You keep working as before.
 
-It works with Claude Desktop, Cowork, Claude Code, Cursor, Codex, Gemini CLI, Windsurf, VS Code and LM Studio.
+It lives inside Claude: Claude Desktop, Cowork and Claude Code. From there it hands parts to outside models: free and paid ones from OpenAI, Google, xAI, Perplexity, DeepSeek and the other providers you connect, Codex on your ChatGPT plan, Gemini CLI on your Google account, and models on your own computer.
 
 ![Leanfare's report: what it saved your app, what the outside models used, your app's own use, and how good the answers were](docs/savings.png)
 

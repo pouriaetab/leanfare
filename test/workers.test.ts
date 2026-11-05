@@ -126,11 +126,12 @@ describe("Codex and Gemini CLI plan by themselves", () => {
     expect(() => setAuto("nowhere", true)).toThrow("cannot plan by itself");
   });
 
-  test("the screen's address: In your apps shows it per app and turns it on and off", async () => {
-    const r = await ui(url, "/api/apps", { id: "codex", auto: true });
-    expect(r.status).toBe(200);
-    expect(r.json.apps.find((a: any) => a.id === "codex").auto).toMatchObject({ on: true });
-    expect(r.json.apps.find((a: any) => a.id === "cursor").auto).toMatchObject({ on: false }); // 0.14.1: Cursor's hooks
+  test("the screen's address: archived since Leanfare lives in Claude only (0.15), it is never turned on there, only off", async () => {
+    const no = await ui(url, "/api/apps", { id: "codex", auto: true });
+    expect([no.status, no.json.error]).toEqual([409, "Leanfare lives in Claude only now (Claude Desktop, Cowork and Claude Code), so it no longer plans by itself there. Turning it off still works."]);
+    expect(no.json.apps.find((a: any) => a.id === "codex").auto).toMatchObject({ on: false });
+    setAuto("codex", true); // as an older Leanfare left it
+    expect((await ui(url, "/api/apps")).json.apps.find((a: any) => a.id === "codex").auto.on).toBe(true);
     const off = await ui(url, "/api/apps", { id: "codex", auto: false });
     expect(off.json.apps.find((a: any) => a.id === "codex").auto.on).toBe(false);
   });

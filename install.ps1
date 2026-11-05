@@ -36,7 +36,7 @@ function Install-Leanfare {
     Get-ChildItem -Path $Dir -Filter "leanfare.exe.old-*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     if (Test-Path $Exe) {
       & $Exe stop *> $null
-      # Apps using Leanfare's tools (Claude Desktop, Cursor) keep it running; a running file can be renamed, not replaced.
+      # Apps using Leanfare's tools (Claude Desktop, Claude Code) keep it running; a running file can be renamed, not replaced.
       Move-Item $Exe "$Exe.old-$([Guid]::NewGuid().ToString('N'))" -Force
     }
     Copy-Item $New $Exe -Force
@@ -56,7 +56,7 @@ function Install-Leanfare {
   }
   Write-Host ""
   Write-Host "Start it:            leanfare        (it opens http://127.0.0.1:4747 in your browser)"
-  Write-Host "In your AI apps:     Leanfare, Settings, ""In your apps"": one press adds its tools to Claude Desktop, Cursor and others"
+  Write-Host "In Claude:           Leanfare, Settings, ""In your apps"": one press adds its tools to Claude Desktop and Claude Code"
   Write-Host "Measure it first:    leanfare trial  (how well the models you tick answer, before Claude relies on them)"
 }
 

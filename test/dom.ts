@@ -13,7 +13,9 @@ export async function closeApp() {
   const w = win;
   win = null;
   try { w?.__streams?.abort(); } catch {} // ends its streams still open (Savings' Live card reads one), as a closed tab does
-  try { await w?.happyDOM?.abort(); } catch {} // ends the page's timers (window.close() does not)
+  // Ends the page's timers (window.close() does not). Waited for at most a second: on 5 Nov, after api.test.ts, a task of
+  // the Settings page never finished aborting, and the next hook timed out though every check had passed.
+  try { await Promise.race([w?.happyDOM?.abort(), Bun.sleep(1000)]); } catch {}
 }
 
 // screen: the screen the page starts on, as if it was the last one used (most tests are about the

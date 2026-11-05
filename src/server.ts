@@ -16,7 +16,7 @@ import { TASKS, allModels, getModel, isRetired, refreshCatalog, refreshOllama, r
 import * as extra from "./providers";
 import { UI_FILES } from "./assets";
 import { findKeys, readFound, recognize } from "./findkeys";
-import { appsView, setApp } from "./apps";
+import { archived, ARCHIVED_SAYS, appsView, useApp } from "./apps";
 import { SUBSCRIPTIONS } from "./subscriptions";
 import { db, lastRepair } from "./db";
 import { allKeys, getKey, keyWhere, keychainNote, removeKey, saveKey, storeName } from "./keys";
@@ -781,13 +781,18 @@ async function api(req: Request, url: URL): Promise<Response> {
     }
     return json({ results, state: state() });
   }
-  // Use Leanfare in your apps: its MCP server in Claude Desktop, Claude Code, Cursor and the rest (apps.ts).
+  // Use Leanfare in your apps: its MCP server in Claude Desktop (with Cowork) and Claude Code (apps.ts); from an archived
+  // app (0.15: Leanfare lives in Claude only) it is only taken out.
   if (p === "/api/apps" && m === "GET") return json({ apps: appsView() });
   if (p === "/api/apps" && m === "POST") {
     const b = await readBody(req);
     try {
-      if (typeof b.auto === "boolean") { setAuto(String(b.id ?? ""), b.auto); return json({ app: appsView().find((a) => a.id === b.id) ?? null, apps: appsView() }); }
-      return json({ app: await setApp(String(b.id ?? ""), !!b.on), apps: appsView() });
+      if (typeof b.auto === "boolean") {
+        if (b.auto && archived(String(b.id ?? ""))) throw new Error(`${ARCHIVED_SAYS}, so it no longer plans by itself there. Turning it off still works.`);
+        setAuto(String(b.id ?? ""), b.auto);
+        return json({ app: appsView().find((a) => a.id === b.id) ?? null, apps: appsView() });
+      }
+      return json({ app: await useApp(String(b.id ?? ""), !!b.on), apps: appsView() });
     }
     catch (e: any) { return json({ error: String(e?.message ?? e), apps: appsView() }, 409); }
   }

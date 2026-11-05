@@ -1117,50 +1117,55 @@ describe("Use Leanfare in your apps (Settings)", () => {
   const realHome = process.env.HOME;
   afterEach(() => { process.env.HOME = realHome; });
 
-  test("the apps on this computer are listed with Add; Add writes the app's settings and turns into Remove", async () => {
+  test("Claude's apps are listed with Add; Add writes the app's settings and turns into Remove; an archived app is not listed", async () => {
     const home = mkdtempSync(join(tmpdir(), "leanfare-apps-screen-"));
     process.env.HOME = home;
-    mkdirSync(join(home, ".cursor"), { recursive: true });
+    mkdirSync(join(home, ".cursor"), { recursive: true }); // Cursor is here: archived (0.15), so not listed
+    const { APPS } = require("../src/apps") as typeof import("../src/apps");
+    const desk = APPS.find((a) => a.id === "claude-desktop")!.file();
+    mkdirSync(require("node:path").dirname(desk), { recursive: true });
     const doc = await openApp();
     doc.querySelector('.tabs button[data-tab="settings"]').click();
     await waitFor(() => !!doc.querySelector(".apps .app-row"));
-    const row = () => [...doc.querySelectorAll(".apps .app-row")].find((r: any) => r.textContent.includes("Cursor")) as any;
+    const row = () => [...doc.querySelectorAll(".apps .app-row")].find((r: any) => r.textContent.includes("Claude Desktop")) as any;
     expect(row().textContent).toContain("not added yet");
+    expect(doc.querySelector(".apps").textContent).not.toContain("Cursor");
     [...row().querySelectorAll("button")].find((b: any) => b.textContent === "Add").click();
-    await waitFor(() => toasts(doc).includes("Added Leanfare's tools to Cursor."));
-    expect(JSON.parse(readFileSync(join(home, ".cursor", "mcp.json"), "utf8")).mcpServers.leanfare.args.at(-1)).toBe("mcp");
+    await waitFor(() => toasts(doc).includes("Added Leanfare's tools to Claude Desktop (and Cowork)."));
+    expect(JSON.parse(readFileSync(desk, "utf8")).mcpServers.leanfare.args.at(-1)).toBe("mcp");
     await waitFor(() => row().textContent.includes("added") && !row().textContent.includes("not added"));
     expect([...row().querySelectorAll("button")].map((b: any) => b.textContent)).toContain("Remove");
-    expect(doc.querySelector(".apps").textContent).toContain("more not found on this computer");
+    expect(doc.querySelector(".apps").textContent).toContain("1 more not found on this computer (Claude Code)");
     expect(bad(doc)).toBe(false);
   }, 20000);
 
-  test("once Leanfare's tools are in Codex, Plan by itself is one press: a block in AGENTS.md, and the press undoes it", async () => {
+  test("an archived app Leanfare is still in (Codex, from an older Leanfare) shows one line, and Take it out takes its tools and its Plan by itself out", async () => {
     const codex = process.env.CODEX_HOME!;
-    const { rmSync } = require("node:fs") as typeof import("node:fs");
+    const { rmSync, existsSync } = require("node:fs") as typeof import("node:fs");
+    const { setApp } = require("../src/apps") as typeof import("../src/apps");
+    const { setAuto } = require("../src/workers") as typeof import("../src/workers");
     rmSync(codex, { recursive: true, force: true });
     mkdirSync(codex, { recursive: true });
-    expect((await ui(url, "/api/apps", { id: "codex", on: true })).status).toBe(200);
+    await setApp("codex", true);
+    setAuto("codex", true);
     const doc = await openApp();
     doc.querySelector('.tabs button[data-tab="settings"]').click();
-    await waitFor(() => !!doc.querySelector(".apps .auto-row"));
-    const row = () => [...doc.querySelectorAll(".apps .app-row")].find((r: any) => r.textContent.includes("Codex CLI")) as any;
-    expect(row().querySelector(".auto-row").textContent).toContain("Plan by itself: a block in AGENTS.md");
-    [...row().querySelectorAll(".auto-row button")].find((b: any) => b.textContent === "Turn on").click();
-    await waitFor(() => toasts(doc).includes("Codex CLI now plans by itself with Leanfare."));
-    expect(readFileSync(join(codex, "AGENTS.md"), "utf8")).toContain("call Leanfare's plan tool first");
-    await waitFor(() => !!row()?.querySelector(".auto-row button") && row().querySelector(".auto-row button").textContent === "Turn off");
-    row().querySelector(".auto-row button").click();
-    await waitFor(() => toasts(doc).includes("no longer plans with Leanfare by itself"));
-    expect(readFileSync(join(codex, "AGENTS.md"), "utf8")).toBe("");
-    await ui(url, "/api/apps", { id: "codex", on: false });
+    const row = () => doc.querySelector(".apps .app-row.archived") as any;
+    await waitFor(() => !!row());
+    expect(row().textContent).toContain("Codex CLI · Leanfare is still in it. It lives in Claude only now, and still sends parts to outside models.");
+    [...row().querySelectorAll("button")].find((b: any) => b.textContent === "Take it out").click();
+    await waitFor(() => toasts(doc).includes("Took Leanfare's tools out of Codex CLI."));
+    expect(readFileSync(join(codex, "config.toml"), "utf8")).not.toContain("leanfare");
+    expect(existsSync(join(codex, "AGENTS.md")) ? readFileSync(join(codex, "AGENTS.md"), "utf8") : "").not.toContain("Leanfare");
+    await waitFor(() => !row());
+    expect(row()).toBeFalsy();
     expect(bad(doc)).toBe(false);
   }, 30000);
 });
 
-describe("Plan by itself for tools another copy of Leanfare added", () => {
+describe("an archived app with tools another copy of Leanfare added", () => {
   async function waitFor(ok: () => boolean, ms = 8000) { for (let i = 0; i < ms / 50 && !ok(); i++) await Bun.sleep(50); }
-  test("the Plan by itself line shows for them too", async () => {
+  test("shows the same one line, so it can be taken out", async () => {
     const { mkdirSync, rmSync, writeFileSync } = require("node:fs") as typeof import("node:fs");
     const codex = process.env.CODEX_HOME!;
     rmSync(codex, { recursive: true, force: true });
@@ -1170,10 +1175,10 @@ describe("Plan by itself for tools another copy of Leanfare added", () => {
     await reset({ ticked: ALL_TICKED });
     const doc = await openApp();
     doc.querySelector('.tabs button[data-tab="settings"]').click();
-    const row = () => [...doc.querySelectorAll(".apps .app-row")].find((r: any) => r.textContent.includes("Codex CLI")) as any;
-    await waitFor(() => !!row()?.querySelector(".auto-row"));
-    expect(row().textContent).toContain("added from another copy of Leanfare");
-    expect(row().querySelector(".auto-row").textContent).toContain("Plan by itself: a block in AGENTS.md");
+    const row = () => doc.querySelector(".apps .app-row.archived") as any;
+    await waitFor(() => !!row());
+    expect(row().textContent).toContain("Codex CLI · Leanfare is still in it.");
+    expect([...row().querySelectorAll("button")].map((b: any) => b.textContent)).toEqual(["Take it out"]);
     rmSync(codex, { recursive: true, force: true });
   }, 20000);
 });

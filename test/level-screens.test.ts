@@ -44,18 +44,19 @@ test("picking what a number does sets it; each app keeps its own level with the 
   byLabel(doc, "Level 4, Most").click();
   await waitFor(() => settings().level === 4);
   expect(settings().level).toBe(4);
-  await waitFor(() => !!byLabel(doc, "Codex: 5, All it can"));
-  byLabel(doc, "Codex: 5, All it can").click();
-  await waitFor(() => settings().levels?.codex === 5);
-  expect(settings().levels).toEqual({ codex: 5 });
-  await waitFor(() => !!byLabel(doc, "Codex: use the default level"));
-  const row = byLabel(doc, "Codex: use the default level").closest(".lv-app");
+  await waitFor(() => !!byLabel(doc, "Claude Code: 5, All it can"));
+  expect(byLabel(doc, "Codex: 5, All it can")).toBeFalsy(); // Leanfare lives in Claude only (0.15)
+  byLabel(doc, "Claude Code: 5, All it can").click();
+  await waitFor(() => settings().levels?.["claude-code"] === 5);
+  expect(settings().levels).toEqual({ "claude-code": 5 });
+  await waitFor(() => !!byLabel(doc, "Claude Code: use the default level"));
+  const row = byLabel(doc, "Claude Code: use the default level").closest(".lv-app");
   expect(row.textContent).toContain("5 · All it can");
-  byLabel(doc, "Codex: use the default level").click();
-  await waitFor(() => !settings().levels?.codex);
+  byLabel(doc, "Claude Code: use the default level").click();
+  await waitFor(() => !settings().levels?.["claude-code"]);
   expect(settings().levels).toEqual({});
-  await waitFor(() => !byLabel(doc, "Codex: use the default level"));
-  expect([...doc.querySelectorAll(".lv-app")].find((r: any) => r.textContent.startsWith("Codex"))!.textContent).toContain("default (4)");
+  await waitFor(() => !byLabel(doc, "Claude Code: use the default level"));
+  expect([...doc.querySelectorAll(".lv-app")].find((r: any) => r.textContent.startsWith("Claude Code"))!.textContent).toContain("default (4)");
 }, 30000);
 
 test("the switches: raise when low, ask at each new chat, and the two for the review", async () => {
