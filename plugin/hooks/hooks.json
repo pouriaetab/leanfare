@@ -5,7 +5,8 @@
     ],
     "PreToolUse": [
       {"matcher": "Read", "hooks": [{"type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/leanfare.sh\" hook read", "timeout": 5}]},
-      {"matcher": "^(Read|Grep|Glob|Bash|Edit|Write|MultiEdit|NotebookEdit|Task|Agent|WebFetch|WebSearch|LS)$|leanfare__plan$", "hooks": [{"type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/leanfare.sh\" hook first", "timeout": 5}]}
+      {"matcher": "^(Read|Grep|Glob|Bash|Edit|Write|MultiEdit|NotebookEdit|Task|Agent|WebFetch|WebSearch|LS)$|leanfare__plan$", "hooks": [{"type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/leanfare.sh\" hook first", "timeout": 5}]},
+      {"matcher": "^(Agent|Task)$", "hooks": [{"type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/leanfare.sh\" hook helper", "timeout": 5}]}
     ],
     "PostToolUse": [
       {"matcher": "mcp__.*leanfare.*__(delegate|plan|plan_run|plan_status|grade|level)", "hooks": [{"type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/leanfare.sh\" hook handoff", "timeout": 5}]}

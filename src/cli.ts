@@ -341,6 +341,7 @@ else if (command === "hook") {
     const { isHookApp } = await import("./firsthook");
     const hookApp = args.includes("--app") && isHookApp(appArg) ? appArg : "claude-code";
     if (args.includes("first")) { const { runFirstHook } = await import("./firsthook"); await runFirstHook(hookApp); }
+    else if (args.includes("helper")) { const { runHelperHook } = await import("./helperhook"); await runHelperHook(); } // 0.15: the model of a helper Claude Code starts
     else if (args.includes("prompt") && hookApp !== "claude-code") { const { runPromptHook } = await import("./firsthook"); await runPromptHook(hookApp); }
     else if (args.includes("read")) { const { runReadHook } = await import("./readhook"); await runReadHook(); }
     else if (args.includes("handoff")) { const { runHandoffHook } = await import("./reviewhook"); await runHandoffHook(); }
