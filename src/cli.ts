@@ -235,18 +235,18 @@ async function status() {
 
 // leanfare apps [add|remove <app>]: Leanfare's tools in the AI apps on this computer (see apps.ts).
 async function apps() {
-  const { APPS, appsView, setApp } = await import("./apps");
+  const { APPS, appsView, useApp, archived } = await import("./apps");
   const [verb, id] = args.slice(args.indexOf("apps") + 1);
   if (verb === "add" || verb === "remove") {
-    if (!id || !APPS.some((a) => a.id === id)) { console.error(`Name the app: ${APPS.map((a) => a.id).join(", ")}.`); process.exit(2); }
+    if (!id || !APPS.some((a) => a.id === id)) { console.error(`Name the app: ${APPS.filter((a) => !archived(a.id)).map((a) => a.id).join(", ")}.`); process.exit(2); }
     try {
-      const v = await setApp(id, verb === "add");
+      const v = await useApp(id, verb === "add");
       console.log(verb === "add" ? `Added Leanfare's tools to ${v.name}. ${v.after}` : `Took Leanfare's tools out of ${v.name}.`);
       process.exit(0);
     } catch (e: any) { console.error(String(e?.message ?? e)); process.exit(1); }
   }
   const SAY: Record<string, string> = { added: "added", old: "added, from another copy (run: leanfare apps add <app> to update)", "not added": "not added", broken: "settings file is not valid; left alone", "not installed": "not on this computer" };
-  for (const v of appsView()) console.log(`${v.id.padEnd(15)} ${v.name.padEnd(28)} ${SAY[v.status]}`);
+  for (const v of appsView()) if (!v.archived || v.status === "added" || v.status === "old") console.log(`${v.id.padEnd(15)} ${v.name.padEnd(28)} ${SAY[v.status]}${v.archived ? " (Leanfare lives in Claude only now: leanfare apps remove " + v.id + ")" : ""}`);
   console.log(`\nAdd Leanfare's tools to one: leanfare apps add <app>`);
   process.exit(0);
 }

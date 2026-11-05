@@ -41,6 +41,13 @@ export interface AppDef {
 const configDir = (macPath: string, linuxPath: string, winPath: string) =>
   mac() ? join(home(), "Library", "Application Support", macPath) : win() ? join(appData(), winPath) : join(home(), ".config", linuxPath);
 
+// Leanfare lives in Claude only (0.15): Claude Desktop with Cowork, and Claude Code. The other apps it used to add itself
+// to are archived: their entries stay here so Leanfare can still find itself in one and take itself out, but it no
+// longer offers them. Their models stay outside models Leanfare sends parts to (Codex, Gemini CLI, the providers).
+export const CLAUDE_APP_IDS = new Set(["claude-desktop", "claude-code"]);
+export const archived = (id: string) => !CLAUDE_APP_IDS.has(id);
+export const ARCHIVED_SAYS = "Leanfare lives in Claude only now (Claude Desktop, Cowork and Claude Code)";
+
 export const APPS: AppDef[] = [
   { id: "claude-desktop", name: "Claude Desktop (and Cowork)", format: "json", key: "mcpServers",
     file: () => join(configDir("Claude", "Claude", "Claude"), "claude_desktop_config.json"),
@@ -77,7 +84,7 @@ function claudeJson() {
 }
 
 export type AppStatus = "added" | "old" | "not added" | "broken" | "not installed";
-export interface AppView { id: string; name: string; status: AppStatus; file: string; after: string; manual: string | null; note: string | null; auto: AutoView | null } // auto: plan by itself (workers.ts), where the app has a way
+export interface AppView { id: string; name: string; status: AppStatus; file: string; after: string; manual: string | null; note: string | null; auto: AutoView | null; archived: boolean } // auto: plan by itself (workers.ts), where the app has a way; archived: not offered (0.15), only taken out
 
 const NAME = "leanfare";
 export const entry = () => selfCommand("mcp");
@@ -265,8 +272,17 @@ export function appsView(): AppView[] {
       manual: a.format === "claude-cli" ? claudeAddLine() : null,
       note: status === "broken" ? `Its settings file (${a.file()}) is not valid ${a.format === "toml" ? "TOML" : "JSON"} in the shape it uses, so Leanfare leaves it alone.` : status === "old" ? "Added before, from another copy of Leanfare: press Update to point it at this one." : null,
       auto: (() => { try { return autoView(a.id); } catch { return null; } })(),
+      archived: archived(a.id),
     };
   });
+}
+
+// What Settings, Set up and `leanfare add` may do (0.15): add Leanfare to a Claude app, take it out of any app. An
+// archived app is never added again; setApp itself still writes every app's file, so taking out works for all.
+export async function useApp(id: string, on: boolean): Promise<AppView> {
+  const a = APPS.find((x) => x.id === id);
+  if (a && on && archived(id)) throw new Error(`${ARCHIVED_SAYS}, so it no longer adds itself to ${a.name}. Taking it out still works.`);
+  return setApp(id, on);
 }
 
 export async function setApp(id: string, on: boolean): Promise<AppView> {
