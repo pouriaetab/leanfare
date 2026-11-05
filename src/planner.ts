@@ -949,6 +949,13 @@ export function stopAllRuns(): number {
   return n;
 }
 
+// Every plan's parts stopped, and settled: a part stopped late writes its cost ledger row when its request ends, which
+// must not land after the tests' reset cleared the ledger (test/app.ts). Waits at most ms.
+export async function runsSettled(ms = 5000): Promise<void> {
+  stopAllRuns();
+  for (const t0 = Date.now(); Date.now() - t0 < ms && [...runs.values()].some((r) => r.view.running); ) await Bun.sleep(20);
+}
+
 export function stopRun(id: string): RunView | null {
   const r = runs.get(id);
   if (!r) return null;

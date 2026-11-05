@@ -21,6 +21,7 @@ import { forgetRequests } from "../src/delegate";
 import { forgetTests } from "../src/localtest";
 import { forgetLogs } from "../src/plans";
 import { forgetFound } from "../src/found";
+import { runsSettled } from "../src/planner";
 import { setNow } from "../src/util";
 import { KEYS, type startFake } from "./fake";
 import * as connect from "../src/connect";
@@ -58,12 +59,17 @@ function forgetAppLogs() {
   for (const d of [...claude, ...codex, ...home]) if (d.startsWith(tmpdir()) && !d.startsWith(REPO)) rmSync(d, { recursive: true, force: true });
   forgetLogs();
   forgetFound(); // the apps found a moment ago, with those folders
+  // And the Claude plan's numbers from the status line (statusline.ts): a plan another file left as low raises the
+  // level a test sets (modes.ts), which changed what screens.test.ts's Plan tab placed.
+  const data = process.env.LEANFARE_DATA_DIR?.trim();
+  if (data && data.startsWith(tmpdir()) && !data.startsWith(REPO)) for (const f of ["limits-last.json", "limits.jsonl"]) rmSync(join(data, f), { force: true });
 }
 
 export async function reset(patch: Partial<Settings> = {}) {
   stopRunning();
   stopSideBySide();
   await sideBySideIdle();
+  await runsSettled(); // a plan part another file stopped writes its ledger row first (plan-tab.test.ts, then screens.test.ts)
   setPaused(false);
   setNow("2026-10-21T12:00:00Z");
   await stopTrial();
