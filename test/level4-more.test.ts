@@ -3,7 +3,7 @@
 // reads and applies; free models take medium working out at 4; Claude Desktop and Cowork hear which of Claude's own
 // models a part that stays should run on.
 import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { forgetPlans, gradePart, makePlan, PATCH_ASK, picksPerPart, runView, startRun } from "../src/planner";
 import { JOB_DEFAULTS } from "../src/settings";
@@ -23,12 +23,12 @@ const SPLIT = JSON.stringify({ parts: [
   { title: "Find where the cap is read", kind: "read", effort: "low", needs: [], size: "small", task: "List where the paid cap is read." },
   { title: "Work out the fix", kind: "reason", effort: "medium", needs: [1], size: "small", task: "Work out why the cap is skipped." },
   { title: "Decide the design", kind: "reason", effort: "high", needs: [2], size: "small", task: "Decide how the cap should hold across plans." },
-  { title: "Change the code", kind: "code", effort: "medium", needs: [], size: "small", task: "Make the cap hold for a plan's paid parts." },
+  { title: "Change the code", kind: "code", effort: "medium", needs: [], size: "small", files: ["src/cap.ts"], task: "Make the cap hold for a plan's paid parts." }, // 0.15: a patch needs the files it changes
   { title: "Run the tests", kind: "act", effort: "low", needs: [4], size: "none", task: "Run the tests." },
 ] });
 const plan = (level: 2 | 3 | 4 | 5, manager = "Claude Code") => {
   fake.hooks.answer = (prompt) => (prompt.includes("The person works in") ? SPLIT : null);
-  return makePlan({ task: "Fix the paid cap for plans", files: [], manager, level, signal: signal() });
+  return makePlan({ task: "Fix the paid cap for plans", files: [{ name: "src/cap.ts", size: 4000 }], manager, level, signal: signal() });
 };
 const at = (r: any, n: number) => r.parts.find((p: any) => p.n === n);
 
@@ -67,9 +67,12 @@ describe("level 4 sends more out", () => {
       prompts.push(prompt);
       return prompt.includes("Draft this change as a patch") ? "--- a/src/cap.ts\n+++ b/src/cap.ts\n@@ -1 +1 @@\n-x\n+y\nsrc/cap.ts: the cap holds." : null;
     };
-    const r = await makePlan({ task: "Fix the paid cap for plans", files: [], manager: "Claude Code", level: 4, signal: signal() });
+    mkdirSync(join(process.cwd(), "src"), { recursive: true });
+    writeFileSync(join(process.cwd(), "src", "cap.ts"), "x\n"); // the file the change names, in the tests' own project
+    const r = await makePlan({ task: "Fix the paid cap for plans", files: [{ name: "src/cap.ts", size: 2 }], manager: "Claude Code", level: 4, signal: signal() });
     startRun(r.id, { paid: true });
     await until(() => !runView(r.id)!.running);
+    rmSync(join(process.cwd(), "src"), { recursive: true, force: true });
     const four = runView(r.id)!.parts.find((p) => p.n === 4)!;
     expect(four.status).toBe("done");
     expect(four.answer).toContain("+++ b/src/cap.ts");

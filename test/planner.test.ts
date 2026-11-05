@@ -107,8 +107,10 @@ describe("where each part runs", () => {
     await keys("openai", "google", "deepseek");
     const T = (iso: string) => Date.parse(iso);
     saveSnap({ at: T("2026-10-21T11:00:00Z"), five: { used: 92, resets: T("2026-10-21T15:00:00Z") }, week: { used: 40, resets: T("2026-10-27T12:00:00Z") } });
-    fake.hooks.answer = (prompt) => (prompt.includes("The person works in") ? SPLIT : null);
-    const r = await makePlan({ task: "Reverse engineer LiteLLM", files: [], manager: "Claude Code", signal: signal() });
+    // The change names the folder it works in: with no files, a change has nothing to draft a patch against (0.15).
+    const split = JSON.parse(SPLIT); split.parts[3].files = ["src/"];
+    fake.hooks.answer = (prompt) => (prompt.includes("The person works in") ? JSON.stringify(split) : null);
+    const r = await makePlan({ task: "Reverse engineer LiteLLM", files: [{ name: "src/", size: 40_000 }], manager: "Claude Code", signal: signal() });
     expect(r.limits).toEqual({ five: 92, week: 40 });
     const design = r.parts.find((p) => p.n === 3)!;
     expect(design.where).not.toBe("you");
