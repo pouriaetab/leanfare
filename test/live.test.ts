@@ -17,7 +17,7 @@ async function waitFor(ok: () => boolean | Promise<boolean>, ms = 8000) { for (l
 const M = { id: "deepseek/deepseek-v4-flash", label: "DeepSeek V4 Flash", provider: "deepseek" };
 const slowHandOff = (ms: number) => ui(url, "/api/delegate", { task: `Find the errors. [slow ${ms}] [usage 2000 500] [cached 300]`, files: [{ name: "app.log", text: "10:01 error: disk full\n" }], kind: "read", effort: "low", check: "never", app: "Claude" });
 
-test("a call's tokens: estimates as text comes, the provider's counts when they come; ended calls go after 90 seconds", () => {
+test("a call's tokens: estimates as text comes, the provider's counts when they come; ended calls go after 90 seconds, but the last ones stay until newer ones end", () => {
   const t = 1_000_000;
   liveStart("a", "delegate", "Delegate", M, 1200, t);
   liveAdd("a", 400, 800, t + 1000); // 400 characters written, 800 thought
@@ -31,7 +31,16 @@ test("a call's tokens: estimates as text comes, the provider's counts when they 
   v = liveView(t + 4000);
   expect([v.running.length, v.ended.length]).toEqual([0, 1]);
   expect(v.minute).toEqual({ input: 1500, cached: 600, thinking: 200, written: 300 });
-  expect(liveView(t + 3000 + 91_000).ended).toEqual([]);
+  // 0.15.1: the last calls stay, however long ago they ended, until newer ones end; then the older ones go.
+  expect(liveView(t + 3000 + 91_000).ended.map((c) => c.id)).toEqual(["a"]);
+  expect(liveView(t + 3_600_000).ended.map((c) => c.id)).toEqual(["a"]);
+  liveStart("b", "delegate", "Delegate", M, 100, t + 3_600_000);
+  liveEnd("b", t + 3_601_000);
+  expect(liveView(t + 3_602_000).ended.map((c) => c.id)).toEqual(["b"]);
+  // Calls that ended within a minute of the newest are the last ones too, even when the newest is old.
+  liveStart("c", "check", "Check", M, 100, t + 3_610_000);
+  liveEnd("c", t + 3_640_000);
+  expect(liveView(t + 9_000_000).ended.map((c) => c.id)).toEqual(["c", "b"]);
 });
 
 test("a hand off shows while it runs, then as ended with the provider's counts; the stream sends it too", async () => {
@@ -102,4 +111,61 @@ test("Savings: the Live card's bars while a hand off runs, a call opened into it
   await waitFor(() => doc.querySelector("#liveCard .lv-kinds button.lk-2")?.getAttribute("aria-pressed") === "false");
   expect(doc.querySelector("#liveCard .lv-table tbody tr.off").textContent).toContain("Cached");
   await run;
+}, 30000);
+
+// 0.15.1: the card went empty a minute after the last call, even when you clicked a bar or picked Lanes; now the last
+// calls stay, with when they ended, until newer ones come.
+test("Savings: with nothing running, the Live card keeps the last calls, with when they ended; a click or another view never empties it", async () => {
+  const t = Date.now();
+  liveStart("old", "delegate", "Delegate", M, 3000, t - 200_000);
+  liveAdd("old", 800, 0, t - 199_000);
+  liveEnd("old", t - 180_000); // three minutes ago
+  const doc = await open(url);
+  doc.querySelector('.tabs button[data-tab="savings"]').click();
+  await waitFor(() => !!doc.querySelector("#liveCard .lv-bar-row"));
+  expect(doc.querySelector("#liveCard .lv-head .muted").textContent).toBe("nothing running now · the last call ended 3 min ago");
+  await waitFor(() => doc.querySelector('details.fold[data-fold="live"] > summary .fold-gist')?.textContent === "nothing running · the last call ended 3 min ago");
+  expect(doc.querySelector('details.fold[data-fold="live"] > summary .fold-gist').textContent).toBe("nothing running · the last call ended 3 min ago"); // the group's title line
+  expect(doc.querySelector("#liveCard .lv-dot.on")).toBeNull();
+  const row = doc.querySelector("#liveCard .lv-bar-row");
+  expect(row.textContent).toContain("DeepSeek V4 Flash");
+  expect(row.textContent).toContain("done");
+  row.click();
+  await waitFor(() => !!doc.querySelector("#liveCard .lv-open"));
+  expect(doc.querySelector("#liveCard .lv-bar-row")).not.toBeNull(); // still there after the click
+  const pick = (name: string) => [...doc.querySelectorAll("#liveCard .seg button")].find((b: any) => b.textContent === name) as any;
+  pick("Lanes").click();
+  await waitFor(() => !!doc.querySelector("#liveCard svg.lv-lanes rect.lv-lane"));
+  expect(doc.querySelector("#liveCard svg.lv-lanes").textContent).toContain("the last end");
+  pick("Numbers").click();
+  await waitFor(() => !!doc.querySelector("#liveCard .lv-table"));
+  expect(doc.querySelector("#liveCard .lv-table thead").textContent).toContain("The last calls");
+  const written = [...doc.querySelectorAll("#liveCard .lv-table tbody tr")].find((r: any) => r.firstChild.textContent === "Written") as any;
+  expect(written.children[1].textContent).toBe("200"); // 800 characters, about four a token
+  pick("Bars").click();
+  await waitFor(() => !!doc.querySelector("#liveCard .lv-bar-row"));
+  // A new call takes their place.
+  liveStart("new", "delegate", "Delegate", M, 1000);
+  await waitFor(() => !!doc.querySelector('#liveCard .lv-bar-row[data-id="new"]'));
+  expect(doc.querySelector('#liveCard .lv-bar-row[data-id="old"]')).toBeNull();
+  expect(doc.querySelector("#liveCard .lv-head .muted").textContent).toStartWith("1 call running");
+  liveEnd("new");
+  await waitFor(() => doc.querySelector("#liveCard .lv-head .muted")?.textContent === "nothing running now");
+  expect(doc.querySelector('#liveCard .lv-bar-row[data-id="new"]')).not.toBeNull(); // ended in the last minute: shown as before
+}, 30000);
+
+test("Savings: when the minute after the last call passes, the Live card is drawn once more as the last calls, lanes and all", async () => {
+  const t = Date.now();
+  liveStart("late", "delegate", "Delegate", M, 2000, t - 60_000);
+  liveEnd("late", t - 56_000); // still in the last minute, for four seconds more
+  const doc = await open(url);
+  doc.querySelector('.tabs button[data-tab="savings"]').click();
+  await waitFor(() => !!doc.querySelector("#liveCard .lv-bar-row"));
+  expect(doc.querySelector("#liveCard .lv-head .muted").textContent).toBe("nothing running now");
+  ([...doc.querySelectorAll("#liveCard .seg button")].find((b: any) => b.textContent === "Lanes") as any).click();
+  await waitFor(() => !!doc.querySelector("#liveCard svg.lv-lanes"));
+  expect(doc.querySelector("#liveCard svg.lv-lanes").textContent).toContain("now");
+  await waitFor(() => !!doc.querySelector("#liveCard svg.lv-lanes")?.textContent.includes("the last end"), 9000); // no click needed
+  expect(doc.querySelector("#liveCard svg.lv-lanes rect.lv-lane")).not.toBeNull();
+  expect(doc.querySelector("#liveCard .lv-head .muted").textContent).toStartWith("nothing running now · the last call ended ");
 }, 30000);
