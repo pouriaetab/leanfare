@@ -1748,7 +1748,6 @@
   // ---- the report (report.ts) ------------------------------------------------------------------------
   // What Leanfare did for your apps over a span of time, with filters: four tiles, tokens over time, work by model,
   // quality by kind of work, and each prompt with the parts it handed off. Numbers only, as everywhere.
-  const RP_RANGES = [["1h", "1 h"], ["6h", "6 h"], ["today", "Today"], ["7d", "7 days"], ["30d", "30 days"], ["year", "Year"], ["custom", "Custom…"]];
   const RP_VIEWS = [["overview", "Overview", "The totals, tokens over time, work by model and quality by kind"], ["prompts", "Prompts", "Each prompt and its parts, and questions about them"],
     ["models", "Models", "Each model's speed, failures, cost and quality"], ["quality", "Quality", "Grades by level, and how the app alone is worked out"]];
   const RP_KIND = { read: "Reading", write: "Drafting", reason: "Working out", search: "Search", other: "Other" };
@@ -1756,8 +1755,7 @@
   const RP_GRADE = { good: "✓ good", partly: "~ partly", wrong: "× wrong" };
   const rpProvider = (id) => (id === "local" ? "This computer" : id === "codex" ? "ChatGPT plan (Codex)" : id === "gemini-cli" ? "Google account (Gemini CLI)" : S.st?.providers?.find((p) => p.id === id)?.name ?? id);
   const shortPlan = (name) => (name ? name.replace(/^(Claude|ChatGPT)\s+/i, "") : null);
-  const RP_PAGE = 10; // prompts at a time: the Prompts view fits a screen
-  S.report = S.report ?? { q: { range: "7d" }, data: null, open: {}, seq: 0, shown: RP_PAGE };
+  S.report = S.report ?? { q: { range: "7d" }, data: null, open: {}, seq: 0, page: 0 };
 
   async function loadReport() {
     const seq = ++S.report.seq;
@@ -1773,7 +1771,7 @@
   }
   function setReport(patch) {
     Object.assign(S.report.q, patch);
-    S.report.loading = true; S.report.shown = RP_PAGE;
+    S.report.loading = true; S.report.page = 0;
     const old = $("#reportCard");
     if (old) old.replaceWith(reportCardEl());
     loadReport();
@@ -1786,13 +1784,6 @@
       h("option", { value: "", text: label }), ...items.map(([v, t]) => h("option", { value: v, text: t, selected: q[key] === v })));
     const o = d?.options ?? { apps: [], providers: [], models: [], kinds: [], threads: [] };
     const keep = (list, v) => (v && !list.some(([x]) => x === v) ? [...list, [v, v]] : list); // a picked value stays in its list
-    const custom = q.range === "custom" ? h("span", { class: "rp-custom" },
-      h("input", { type: "date", "aria-label": "From", value: (q.from ?? "").slice(0, 10) }), h("span", { text: "to" }), h("input", { type: "date", "aria-label": "To", value: (q.to ?? "").slice(0, 10) }),
-      h("button", { class: "btn small", type: "button", text: "Show", onclick: (e) => {
-        const [a, b] = [...e.target.parentElement.querySelectorAll("input")].map((i) => i.value);
-        if (!a || !b) { toast("Pick both days first.", "error"); return; }
-        setReport({ from: new Date(a + "T00:00:00").toISOString(), to: new Date(new Date(b + "T00:00:00").getTime() + 86_400_000).toISOString() });
-      } })) : null;
     const exportBtns = [
       d?.prompts?.length ? h("button", { class: "btn small", type: "button", text: "Export CSV", title: "Every prompt and part in this span, numbers only", onclick: () => download(`leanfare-report-${new Date().toISOString().slice(0, 10)}.csv`, reportCsv(d), "text/csv") }) : null,
       d?.prompts?.some((p) => p.parts.some((x) => x.words)) ? h("button", { class: "btn small", type: "button", text: "Export CSV with the words", onclick: async () => {
@@ -1802,9 +1793,7 @@
         download(`leanfare-report-words-${new Date().toISOString().slice(0, 10)}.csv`, reportCsv(d, words), "text/csv");
       } }) : null];
     const filters = h("div", { class: "rp-filters" },
-      h("div", { class: "seg", role: "group", "aria-label": "Time span" }, ...RP_RANGES.map(([v, t]) => h("button", { type: "button", class: q.range === v ? "on" : "", text: t, "aria-pressed": String(q.range === v),
-        onclick: () => (v === "custom" ? setReport({ range: "custom", from: q.from ?? new Date(Date.now() - 7 * 86_400_000).toISOString(), to: q.to ?? new Date().toISOString() }) : setReport({ range: v, from: null, to: null })) }))),
-      custom,
+      rpWhenEl(q),
       pick("All apps", "app", keep(o.apps.map((a) => [a, a]), q.app)),
       pick("All providers", "provider", keep(o.providers.map((p) => [p, rpProvider(p)]), q.provider)),
       pick("All models", "model", keep(o.models.map((m) => [m.id, m.label]), q.model)),
@@ -2109,71 +2098,289 @@
   }
   function gradeChip(g, blind) { return g ? h("span", { class: `chip ${g === "good" ? "good" : g === "wrong" ? "bad" : "warn"}`, title: blind ? "judged blind by another model" : "graded by your app", text: RP_GRADE[g] }) : h("span", { class: "none", text: "—" }); }
   const SIDE_WORD = { same: "as good", worse: "better", better: "not as good" }; // side by side's verdict is the hand off's side; here, the app alone's
+  // ---- 0.15: the prompts in one table, By prompt or By model ------------------------------------------------------
+  // By prompt: a row for each prompt with its totals; ▸ opens its own rows (its main model, each of Claude's helpers by
+  // model and kind, each outside model by kind) in the same table, so every column stays in line. By model: those rows
+  // alone, the prompt's id, time and app on each. Columns move (drag a header, or the Columns menu) and hide; the view,
+  // the columns and the rows per page are kept in this browser.
+  const RP_COLS = [["prm", "PRM"], ["when", "When"], ["app", "App"], ["main", "Main model"], ["mainTok", "Main tokens", true], ["helpers", "Claude helpers"], ["helperTok", "Helper tokens", true],
+    ["outside", "Outside models"], ["outsideTok", "Outside tokens", true], ["kinds", "Kinds"], ["helperTotal", "Helpers total", true], ["outsideTotal", "Outside total", true], ["cost", "Cost", true],
+    ["saved", "Saved", true], ["grade", "Grade"], ["together", "Together"], ["alone", "App alone"]]; // [id, header, a number]
+  const RP_COLS_HIDDEN = ["together", "alone"];
+  const RP_SIZES = [10, 15, 25, 50, 100];
+  const RP_COL_TIP = {
+    prm: "The prompt's id; a part's id is the prompt's and its place (PRM-41.2)", main: "The model the chat runs on, and its thinking effort when the app said it",
+    mainTok: "The main model's own tokens: new input, read again from the cache, and written. Helpers apart", helpers: "Claude's own models on helpers (subagents): each with how many ran and their effort",
+    helperTok: "The helpers' tokens: new input, read again from the cache, and written", outside: "The models outside Claude that took parts: free, paid, a subscription or this computer",
+    outsideTok: "What the outside models read, thought and wrote, measured from their calls", helperTotal: "The helpers' new and written tokens (cache reads apart)",
+    outsideTotal: "Everything the outside models read, thought and wrote", saved: "What the app would have used doing the parts itself, less what handing them off cost it (an estimate)",
+  };
+  const redrawReport = () => { const old = $("#reportCard"); if (old) old.replaceWith(reportCardEl()); };
+  function rpCols() {
+    const ids = RP_COLS.map(([id]) => id), saved = store.get("report:cols", null);
+    const order = saved && Array.isArray(saved.order) ? [...saved.order.filter((id) => ids.includes(id)), ...ids.filter((id) => !saved.order.includes(id))] : ids;
+    const hidden = saved && Array.isArray(saved.hidden) ? saved.hidden.filter((id) => ids.includes(id)) : RP_COLS_HIDDEN;
+    return { order, hidden };
+  }
+  const setRpCols = (c) => { store.set("report:cols", c); redrawReport(); };
+  // A column moved before another (drag and drop), or one step left or right (the menu).
+  function moveRpCol(id, before) {
+    const c = rpCols(), order = c.order.filter((x) => x !== id);
+    order.splice(before === null ? order.length : Math.max(0, order.indexOf(before)), 0, id);
+    setRpCols({ ...c, order });
+  }
+  function stepRpCol(id, by) {
+    const c = rpCols(), shown = c.order.filter((x) => !c.hidden.includes(x)), i = shown.indexOf(id), j = i + by;
+    if (i < 0 || j < 0 || j >= shown.length) return;
+    const order = [...c.order], a = order.indexOf(id), b = order.indexOf(shown[j]);
+    [order[a], order[b]] = [order[b], order[a]];
+    setRpCols({ ...c, order });
+  }
+  const noClaude = (label) => String(label ?? "").replace(/^Claude /, "");
+  const kindWord = (k) => (k ? (RP_KIND[k] ?? k).toLowerCase() : "");
+  const claudeTok = (o) => (o ? `${tokShort(o.input ?? 0)} new, ${tokShort(o.cached ?? 0)} cached, ${tokShort(o.output ?? 0)} written` : "");
+  const outsideTok = (u) => (u ? (u.thought === null ? `${tokShort(u.read)} read, ${tokShort(u.wrote)} written (thinking in it)` : `${tokShort(u.read)} read, ${tokShort(u.thought)} think, ${tokShort(u.wrote)} written`) : "");
+  const outsideSum = (u) => (u ? u.read + (u.thought ?? 0) + u.wrote : null);
+  const helperWord = (x) => `${noClaude(x.label)}${x.n > 1 ? ` ×${x.n}` : ""}${x.effort ? ` (${x.effort})` : ""}`;
+  function sumUsedUi(us) {
+    const got = us.filter(Boolean);
+    if (!got.length) return null;
+    const unknown = got.some((u) => u.thought === null);
+    return { read: got.reduce((n, u) => n + u.read, 0), thought: unknown ? null : got.reduce((n, u) => n + u.thought, 0), wrote: got.reduce((n, u) => n + u.wrote, 0) };
+  }
+  const sumOwnUi = (os) => (os.length ? os.reduce((a, o) => ({ input: a.input + o.input, cached: a.cached + o.cached, output: a.output + o.output, fresh: a.fresh + o.fresh }), { input: 0, cached: 0, output: 0, fresh: 0 }) : null);
+  const worstGrade = (gs) => (gs.includes("wrong") ? "wrong" : gs.includes("partly") ? "partly" : gs.includes("good") ? "good" : null);
+
+  // A prompt's own rows: its main model, its helpers by model and kind, its outside models by kind.
+  function rpChildren(p) {
+    const rows = [];
+    if (p.model || p.main) rows.push({ role: "main", p });
+    for (const x of p.helpers ?? []) rows.push({ role: "helper", p, x });
+    const groups = new Map();
+    for (const x of p.parts) { const k = `${x.model}|${x.kind ?? "other"}`; groups.set(k, [...(groups.get(k) ?? []), x]); }
+    for (const xs of groups.values()) rows.push({ role: "outside", p, xs });
+    return rows;
+  }
+
+  // One cell of a row: a prompt's totals (r.role "prompt") or one of its rows; flat: By model, where each row says its prompt.
+  function rpCell(id, r, ctx) {
+    const p = r.p, td = (text, cls = "", title = null) => h("td", { class: cls || null, title, "data-col": id, text });
+    const muted = (text) => td(text, "muted");
+    const blank = () => td("");
+    const own = r.role === "prompt" || ctx.flat; // the prompt's id, time and app on this row
+    if (id === "prm") {
+      if (r.role === "prompt") return h("td", { class: "pid", "data-col": id }, ctx.kids ? h("span", { class: "tw", text: ctx.open ? "▾" : "▸" }) : null, p.id ?? "—");
+      const refs = r.role === "outside" ? r.xs.map((x) => x.ref).filter(Boolean).join(", ") : "";
+      return td(ctx.flat ? p.id ?? "—" : refs, "pid", ctx.flat && refs ? refs : null);
+    }
+    if (id === "when") return own ? td(ctx.when(p.ts), "when") : blank();
+    if (id === "app") return own ? td(`${p.app}${p.plan ? ` · ${shortPlan(p.plan)}` : ""}`, "nw") : blank();
+    if (id === "main") {
+      if (r.role !== "prompt" && r.role !== "main") return blank();
+      return p.model ? td(`${p.model.label}${p.effort ? ` · ${p.effort}` : ""}`, "nw", p.effort ? null : "Its effort: not said") : muted("not known");
+    }
+    if (id === "mainTok") {
+      if (r.role !== "prompt" && r.role !== "main") return blank();
+      return p.main ? td(claudeTok(p.main), "num", `${tokShort(p.main.fresh)} new and written`) : muted("not known");
+    }
+    if (id === "helpers") {
+      if (r.role === "helper") return td(helperWord(r.x), "nw", r.x.label);
+      if (r.role !== "prompt") return blank();
+      return p.helpers?.length ? td(p.helpers.map(helperWord).join(", "), "", p.helpers.map((x) => x.label).join(", ")) : muted("—");
+    }
+    if (id === "helperTok") {
+      if (r.role === "helper") return td(claudeTok(r.x), "num");
+      if (r.role !== "prompt") return blank();
+      return p.helpers?.length ? td(claudeTok(sumOwnUi(p.helpers)), "num") : muted("—");
+    }
+    if (id === "helperTotal") {
+      const o = r.role === "helper" ? r.x : r.role === "prompt" ? sumOwnUi(p.helpers ?? []) : null;
+      if (r.role !== "prompt" && r.role !== "helper") return blank();
+      return o ? td(tokShort(o.fresh), "num", `new and written; ${tokShort(o.cached)} more read again from the cache`) : muted("—");
+    }
+    const xs = r.role === "outside" ? r.xs : r.role === "prompt" ? p.parts : null;
+    if (id === "outside") {
+      if (!xs) return blank();
+      if (r.role === "outside") return h("td", { class: "nw", "data-col": id }, xs[0].label, h("span", { class: "tiny", text: `${RP_WHERE[xs[0].where] ?? xs[0].where}${xs.length > 1 ? ` · ${xs.length} parts` : ""}` }),
+        ...xs.filter((x) => x.words).map((x) => h("button", { type: "button", class: "lv-back", text: S.words?.open?.[x.id] ? "Hide the words" : "Read the words", onclick: (e) => { e.stopPropagation(); toggleWords(x.id); } })));
+      return xs.length ? td([...new Set(xs.map((x) => x.label))].join(", ")) : muted("—");
+    }
+    if (id === "outsideTok" || id === "outsideTotal") {
+      if (!xs) return blank();
+      if (!xs.length) return muted("—");
+      const u = sumUsedUi(xs.map((x) => x.used));
+      if (!u) return muted("not measured");
+      return id === "outsideTok" ? td(outsideTok(u), "num") : td(tokShort(outsideSum(u)), "num");
+    }
+    if (id === "kinds") {
+      const ks = r.role === "helper" ? [r.x.kind] : r.role === "outside" ? [r.xs[0].kind] : r.role === "prompt" ? [...p.parts.map((x) => x.kind), ...(p.helpers ?? []).map((x) => x.kind)] : [];
+      return td([...new Set(ks.filter(Boolean).map(kindWord))].join(", "));
+    }
+    if (id === "cost") {
+      if (!xs) return blank();
+      return xs.length ? td(money(xs.reduce((n, x) => n + (x.cost ?? 0), 0)), "num") : muted("—");
+    }
+    if (id === "saved") {
+      if (!xs) return blank();
+      if (!xs.length) return td("0", "num");
+      const mid = xs.reduce((n, x) => n + x.both.saved.mid, 0), lo = xs.reduce((n, x) => n + x.both.saved.low, 0), hi = xs.reduce((n, x) => n + x.both.saved.high, 0);
+      return td(approx(mid), "num est", `range ${tokShort(Math.max(0, lo))} to ${tokShort(hi)}`);
+    }
+    if (id === "grade") {
+      if (!xs) return blank();
+      if (!xs.length) return muted("—");
+      const g = r.role === "prompt" ? p.grade : worstGrade(xs.map((x) => x.grade));
+      return h("td", { "data-col": id }, g ? gradeChip(g, xs.some((x) => x.gradedBy === "check")) : h("span", { class: "muted", text: "not graded" }));
+    }
+    if (id === "together") {
+      if (r.role !== "prompt") return blank();
+      return h("td", { "data-col": id }, p.together ? gradeChip(p.together) : h("span", { class: "muted", text: p.parts.length ? "not graded" : "—" }));
+    }
+    if (id === "alone") {
+      if (r.role !== "prompt") return blank();
+      return h("td", { "data-col": id }, p.alone?.grade ? gradeChip(p.alone.grade, true) : h("span", { class: "muted", text: p.parts.length ? "not known" : "—" }));
+    }
+    return blank();
+  }
+
   function reportPromptsEl(d) {
     const app = appWord(d);
     const long = Date.parse(d.to) - Date.parse(d.from) > 86_400_000;
     // The day and the time apart, joined with a comma: asked for both at once, some versions of the system's date
     // library write "Oct 20 at 10:05 AM" and others "Oct 20, 10:05 AM".
     const when = (iso) => { const t = new Date(iso), time = t.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }); return long ? `${t.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${time}` : time; };
-    const secs = (ms) => (ms === null || ms === undefined ? "" : ` · ${ms < 1500 ? "1 s" : ms < 90_000 ? Math.round(ms / 1000) + " s" : Math.round(ms / 60_000) + " min"}`);
-    const two = (main, sub, cls = "") => h("td", { class: "num " + cls, title: sub || null }, main);
-    const usedCell = (u, none) => (u ? two(`${tokShort(u.read)} read`, u.thought === null ? `${tokShort(u.wrote)} written, thinking not split` : `${tokShort(u.thought)} thinking · ${tokShort(u.wrote)} written`)
-      : h("td", { class: "num muted", text: none }));
-    const muted = (text) => h("td", { class: "muted", text });
+    const flat = store.get("report:rows", "prompt") === "model";
+    const size = RP_SIZES.includes(store.get("report:size", 15)) ? store.get("report:size", 15) : 15;
+    const cols = rpCols(), shown = cols.order.filter((id) => !cols.hidden.includes(id));
+    const label = (id) => { const c = RP_COLS.find(([x]) => x === id); return id === "alone" ? `${app} alone` : c[1]; };
+    const isNum = (id) => !!RP_COLS.find(([x]) => x === id)?.[2];
+    // The rows of this page: prompts (By prompt), or their own rows (By model).
+    const all = flat ? d.prompts.flatMap((p) => rpChildren(p)) : d.prompts;
+    const pages = Math.max(1, Math.ceil(all.length / size));
+    const page = Math.min(Math.max(0, S.report.page ?? 0), pages - 1);
+    const slice = all.slice(page * size, page * size + size);
+    const row = (r, ctx, cls, onclick = null) => h("tr", { class: cls, onclick }, ...shown.map((id) => rpCell(id, r, ctx)));
     const rows = [];
-    for (const p of d.prompts.slice(0, S.report.shown)) {
-      const open = !!S.report.open[p.key];
-      const toggle = () => { S.report.open[p.key] = !open; const old = $("#reportCard"); if (old) old.replaceWith(reportCardEl()); };
-      const handed = p.parts.length > 0;
-      rows.push(h("tr", { class: "pr" + (open ? " open" : ""), onclick: handed || p.own ? toggle : null },
-        h("td", { class: "pid" }, (handed || p.own) ? h("span", { class: "tw", text: open ? "▾" : "▸" }) : null, p.id ?? "—"),
-        h("td", { class: "when", text: when(p.ts) }),
-        h("td", { class: "nw" }, `${p.app}${p.model ? ` · ${p.model.label}` : ""}${p.plan ? ` · ${shortPlan(p.plan)}` : ""}`),
-        handed ? usedCell(p.used, "not measured") : h("td", { class: "num muted", text: "nothing handed off" }),
-        p.both ? two(approx(p.both.alone.mid), `range ${tokShort(Math.max(0, p.both.alone.low))} to ${tokShort(p.both.alone.high)}`, "est") : h("td", { class: "num muted", text: "—" }),
-        p.both ? two(approx(p.both.saved.mid), null, "est") : h("td", { class: "num", text: "0" }),
-        p.own ? two(`${tokShort(p.own.fresh)} new`, "measured") : h("td", { class: "num muted", text: "not known" }),
-        h("td", {}, handed ? gradeChip(p.grade, p.parts.some((x) => x.gradedBy === "check")) : h("span", { class: "none", text: "—" })),
-        h("td", {}, p.together ? gradeChip(p.together) : h("span", { class: "muted", text: handed ? "not graded" : "—" })),
-        h("td", {}, p.alone?.grade ? gradeChip(p.alone.grade, true) : h("span", { class: "muted", text: handed ? "not known" : "—" }))));
+    if (flat) for (const r of slice) rows.push(row(r, { flat: true, when }, `part ${r.role}`));
+    else for (const p of slice) {
+      const kids = rpChildren(p), open = !!S.report.open[p.key];
+      rows.push(row({ role: "prompt", p }, { kids: kids.length > 0, open, when }, "pr" + (open ? " open" : ""), kids.length ? () => { S.report.open[p.key] = !open; redrawReport(); } : null));
       if (!open) continue;
-      p.parts.forEach((x, i) => rows.push(h("tr", { class: "part" },
-        h("td", { class: "ind pid", text: x.ref ?? `${i + 1}` }), h("td", { class: "when", text: when(x.ts) }),
-        h("td", {}, `${(RP_KIND[x.kind] ?? x.kind ?? "part").toLowerCase()} · ${x.label}`, h("span", { class: "tiny", text: `${RP_WHERE[x.where]}${secs(x.ms)}` }),
-          x.words ? h("button", { type: "button", class: "lv-back", text: S.words?.open?.[x.id] ? "Hide the words" : "Read the words", onclick: () => toggleWords(x.id) }) : null),
-        usedCell(x.used, "not measured (before 0.10)"),
-        two(approx(x.both.alone.mid), `reads what it read, thinks and writes as ${x.label} did (from its numbers)`, "est"),
-        two(approx(x.both.saved.mid), `minus ${tokShort(x.back)} read back, ${tokShort(x.both.spent - x.back)} for the call`, "est"),
-        h("td", {}),
-        h("td", {}, gradeChip(x.grade, x.gradedBy === "check"), x.grade ? h("span", { class: "tiny", text: x.gradedBy === "check" ? `checked blind${x.checker ? ` by ${x.checker}` : ""}` : `by ${p.app}` }) : null),
-        h("td", {}),
-        h("td", {}, x.alone ? [h("span", { class: "tiny", text: "sampled" }), h("span", { class: x.alone.verdict === "better" ? "gw" : "gg", text: SIDE_WORD[x.alone.verdict] }),
-          x.alone.used !== null ? h("span", { class: "tiny", text: `${x.alone.label} used ${tokShort(x.alone.used)}` }) : null]
-          : h("span", { class: "muted", text: x.side ? `the best model you have: ${x.side === "worse" ? "better" : x.side === "better" ? "not as good" : "as good"}` : "not sampled" })))));
-      for (const x of p.parts) if (x.words && S.words?.open?.[x.id]) rows.push(wordsRowEl(x, p.app));
-      rows.push(h("tr", { class: "part own" },
-        h("td", {}), h("td", {}), h("td", { class: "nw", text: p.app }),
-        h("td", { colspan: 7, class: "muted", text: p.own ? `prompt ${tokShort(p.prompt ?? 0)}, its own work ${tokShort(p.own.fresh)} new tokens (measured)${p.own.cached ? `, ${tokShort(p.own.cached)} more read again from the cache` : ""}` : "its own work: not known (this app does not share it)" })));
-      if (handed) {
+      for (const r of kids) {
+        rows.push(row(r, { flat: false, when }, `part ${r.role}`));
+        if (r.role === "outside") for (const x of r.xs) if (x.words && S.words?.open?.[x.id]) rows.push(wordsRowEl(x, p.app, shown.length));
+      }
+      if (p.parts.length) {
         const last = p.parts[p.parts.length - 1];
         const grade = async (v) => { try { await api("/api/grades/together", { body: { verdict: v, handoff: last.id } }); } catch {} loadReport(); };
-        rows.push(h("tr", { class: "part own" }, h("td", {}), h("td", {}),
-          h("td", { colspan: 8 }, h("span", { class: "muted", text: `The whole result, ${p.app} and the hand offs together${p.together ? ` (${p.togetherBy === "you" ? "you said" : `${p.app} said`} ${p.together})` : ""}: ` }),
-            ...["good", "partly", "wrong"].map((v) => h("button", { class: "btn small" + (p.together === v ? " on" : ""), type: "button", "aria-pressed": String(p.together === v), text: RP_GRADE[v], onclick: () => grade(v) })))));
+        rows.push(h("tr", { class: "part own" }, h("td", { colspan: String(shown.length) }, h("span", { class: "muted", text: `The whole result, ${p.app} and the hand offs together${p.together ? ` (${p.togetherBy === "you" ? "you said" : `${p.app} said`} ${p.together})` : ""}: ` }),
+          ...["good", "partly", "wrong"].map((v) => h("button", { class: "btn small" + (p.together === v ? " on" : ""), type: "button", "aria-pressed": String(p.together === v), text: RP_GRADE[v], onclick: () => grade(v) })))));
       }
     }
-    const left = d.prompts.length - S.report.shown + d.more;
-    const th = (t, cls = "") => h("th", { class: cls, text: t });
-    // 0.14.2: the card's title sits in the table's first header row, over ID, When and App, so it takes no line.
-    const ttl = `Each prompt with both sides: what the outside models used, what ${app} would have used doing it alone (an estimate), and the grades. Open one for its parts (PRM-41.1, PRM-41.2…). Claude Code's own tokens come from its own files: numbers only, never your words. New tokens: what it did not read again from its cache. Claude's chats and Cowork do not share theirs, so they show as not known.`;
-    return h("div", { class: "card rp-card rp-prompts" },
-      h("div", { class: "scroll" }, h("table", { class: "trial-table rp-table both" },
-        h("thead", {},
-          h("tr", {}, h("th", { colspan: 3, class: "rp-ttl", title: ttl }, "Prompts", h("small", { text: "open one for its parts" })), h("th", { colspan: 4, class: "grp", text: "Tokens" }), h("th", { colspan: 3, class: "grp", text: "Grades" })),
-          h("tr", {}, th("ID"), th("When"), th("App · main model"), th("Outside used", "num"), th(`${app} alone`, "num"), th("Saved", "num"), th(`${app} used, whole prompt`, "num"), th("Outside"), th("Together"), th(`${app} alone`))),
+    // Headers: drag one onto another to move it there.
+    const th = (id) => h("th", { class: isNum(id) ? "num" : null, draggable: "true", "data-col": id, title: RP_COL_TIP[id] ?? null, text: label(id),
+      ondragstart: (e) => { e.dataTransfer?.setData("text/plain", id); S.report.drag = id; },
+      ondragover: (e) => { e.preventDefault(); e.currentTarget.classList.add("drop"); },
+      ondragleave: (e) => e.currentTarget.classList.remove("drop"),
+      ondrop: (e) => { e.preventDefault(); const from = e.dataTransfer?.getData("text/plain") || S.report.drag; S.report.drag = null; if (from && from !== id) moveRpCol(from, id); } });
+    const setView = (v) => { store.set("report:rows", v); S.report.page = 0; redrawReport(); };
+    const colMenu = S.report.colsOpen ? h("div", { class: "rp-pop rp-colmenu", role: "dialog", "aria-label": "Columns", onkeydown: (e) => { if (e.key === "Escape") { S.report.colsOpen = false; redrawReport(); } } },
+      h("div", { class: "rp-pop-head" }, h("b", { text: "Columns" }), h("span", { class: "muted", text: "show, hide and move" })),
+      ...cols.order.map((id) => h("div", { class: "rp-colrow" },
+        h("label", {}, h("input", { type: "checkbox", checked: !cols.hidden.includes(id), "aria-label": `Show ${label(id)}`, disabled: id === "prm",
+          onchange: (e) => setRpCols({ ...cols, hidden: e.target.checked ? cols.hidden.filter((x) => x !== id) : [...cols.hidden, id] }) }), label(id)),
+        h("button", { type: "button", class: "btn small", text: "↑", "aria-label": `Move ${label(id)} left`, disabled: cols.hidden.includes(id), onclick: () => stepRpCol(id, -1) }),
+        h("button", { type: "button", class: "btn small", text: "↓", "aria-label": `Move ${label(id)} right`, disabled: cols.hidden.includes(id), onclick: () => stepRpCol(id, 1) }))),
+      h("div", { class: "rp-pop-foot" }, h("button", { type: "button", class: "btn small", text: "As at first", onclick: () => { store.del("report:cols"); redrawReport(); } }),
+        h("button", { type: "button", class: "btn small primary", text: "Done", onclick: () => { S.report.colsOpen = false; redrawReport(); } }))) : null;
+    const go = (to) => { S.report.page = to; redrawReport(); };
+    const bar = h("div", { class: "rp-tbar" },
+      h("b", { class: "rp-ttl", text: "Prompts" }),
+      h("div", { class: "seg", role: "group", "aria-label": "Rows" },
+        ...[["prompt", "By prompt", "A row for each prompt with its totals: open one for its models"], ["model", "By model", "A row for each prompt's model and kind of work"]].map(([v, t, tip]) =>
+          h("button", { type: "button", class: (flat ? "model" : "prompt") === v ? "on" : "", "aria-pressed": String((flat ? "model" : "prompt") === v), title: tip, text: t, onclick: () => setView(v) }))),
+      h("span", { class: "grow" }),
+      h("span", { class: "rp-pop-wrap" }, h("button", { type: "button", class: "btn small", text: "Columns", "aria-haspopup": "dialog", "aria-expanded": String(!!S.report.colsOpen), onclick: () => { S.report.colsOpen = !S.report.colsOpen; redrawReport(); } }), colMenu));
+    const pager = h("div", { class: "rp-pager" },
+      h("label", { class: "muted" }, "Rows per page ", h("select", { "aria-label": "Rows per page", onchange: (e) => { store.set("report:size", Number(e.target.value)); S.report.page = 0; redrawReport(); } },
+        ...RP_SIZES.map((n) => h("option", { value: String(n), text: String(n), selected: n === size })))),
+      h("span", { class: "grow" }),
+      h("span", { class: "muted", text: `${all.length ? page * size + 1 : 0} to ${Math.min(all.length, page * size + size)} of ${all.length}${flat ? " rows" : " prompts"}${d.more ? ` (${d.more} more: pick a shorter span)` : ""}` }),
+      h("button", { type: "button", class: "btn small", text: "‹", "aria-label": "Previous page", disabled: page === 0, onclick: () => go(page - 1) }),
+      h("span", { class: "rp-page", text: `Page ${page + 1} of ${pages}` }),
+      h("button", { type: "button", class: "btn small", text: "›", "aria-label": "Next page", disabled: page >= pages - 1, onclick: () => go(page + 1) }));
+    return h("div", { class: "card rp-card rp-prompts" }, bar,
+      h("div", { class: "scroll" }, h("table", { class: "trial-table rp-table both pt" + (flat ? " flat" : "") },
+        h("thead", {}, h("tr", {}, ...shown.map(th))),
         h("tbody", {}, ...rows))),
-      left > 0 ? h("button", { class: "btn small", type: "button", text: `Show ${Math.min(RP_PAGE, left)} more`, onclick: () => { S.report.shown += RP_PAGE; const old = $("#reportCard"); if (old) old.replaceWith(reportCardEl()); } }) : null);
+      pager);
   }
+
+  // ---- 0.15: the span, from a calendar that opens under its button ------------------------------------------------
+  // A quick pick, one day (a click, then Show this day), or a range (a click on its first day and one on its last).
+  const RP_QUICK = [["1h", "Last hour"], ["6h", "Last 6 hours"], ["today", "Today"], ["yesterday", "Yesterday"], ["7d", "Last 7 days"], ["30d", "Last 30 days"], ["year", "This year"]];
+  const rpNow = () => Date.parse(S.report?.data?.now ?? "") || Date.now(); // the app's clock, as the report says it
+  const isoDay = (t) => { const x = new Date(t); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`; };
+  const midnight = (day, add = 0) => { const [y, m, dd] = day.split("-").map(Number); return new Date(y, m - 1, dd + add); };
+  const dayWord = (day, year = false) => midnight(day).toLocaleDateString(undefined, { month: "short", day: "numeric", ...(year ? { year: "numeric" } : {}) });
+  function rpSpanWord(q) {
+    const quick = RP_QUICK.find(([v]) => v === q.range);
+    if (quick) return quick[1];
+    if (q.range === "custom" && q.from && q.to) {
+      const a = isoDay(Date.parse(q.from)), b = isoDay(Date.parse(q.to) - 1);
+      return a === b ? dayWord(a) : `${dayWord(a)} to ${dayWord(b)}`;
+    }
+    return "Last 7 days";
+  }
+  function pickSpan(v) {
+    S.report.calOpen = false; S.report.calPick = null;
+    if (v === "yesterday") { const today = isoDay(rpNow()); setReport({ range: "custom", from: midnight(today, -1).toISOString(), to: midnight(today).toISOString() }); return; }
+    setReport({ range: v, from: null, to: null });
+  }
+  function pickDays(a, b) {
+    S.report.calOpen = false; S.report.calPick = null;
+    const [x, y] = [a, b].sort();
+    setReport({ range: "custom", from: midnight(x).toISOString(), to: midnight(y, 1).toISOString() });
+  }
+  function rpCalEl(q) {
+    const cur = q.range === "custom" && q.from && q.to ? { a: isoDay(Date.parse(q.from)), b: isoDay(Date.parse(q.to) - 1) } : null;
+    S.report.calMonth ??= (cur ? cur.b : isoDay(rpNow())).slice(0, 7);
+    const [y, m] = S.report.calMonth.split("-").map(Number);
+    const pick = S.report.calPick, sel = pick ? { a: pick.a, b: pick.a } : cur;
+    const lo = sel ? (sel.a < sel.b ? sel.a : sel.b) : null, hi = sel ? (sel.a < sel.b ? sel.b : sel.a) : null;
+    const today = isoDay(rpNow()), first = new Date(y, m - 1, 1), days = new Date(y, m, 0).getDate();
+    const month = (by) => { const t = new Date(y, m - 1 + by, 1); S.report.calMonth = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}`; redrawReport(); };
+    const cells = [];
+    for (let i = 0; i < first.getDay(); i++) cells.push(h("span", { class: "rp-day pad" }));
+    for (let dd = 1; dd <= days; dd++) {
+      const day = `${y}-${String(m).padStart(2, "0")}-${String(dd).padStart(2, "0")}`, inside = lo !== null && day >= lo && day <= hi;
+      cells.push(h("button", { type: "button", class: "rp-day" + (inside ? " in" : "") + (day === lo || day === hi ? " edge" : "") + (day === today ? " today" : "") + (day > today ? " later" : ""),
+        "aria-label": dayWord(day, true), "aria-pressed": String(inside), text: String(dd),
+        onclick: () => { if (!S.report.calPick) { S.report.calPick = { a: day }; redrawReport(); } else pickDays(S.report.calPick.a, day); } }));
+    }
+    return h("div", { class: "rp-pop rp-cal", role: "dialog", "aria-label": "Pick the span", onkeydown: (e) => { if (e.key === "Escape") { S.report.calOpen = false; S.report.calPick = null; redrawReport(); } } },
+      h("div", { class: "rp-quick" }, ...RP_QUICK.map(([v, t]) => h("button", { type: "button", class: "btn small" + (q.range === v ? " on" : ""), "aria-pressed": String(q.range === v), text: t, onclick: () => pickSpan(v) }))),
+      h("div", { class: "rp-month" },
+        h("button", { type: "button", class: "btn small", text: "‹", "aria-label": "Previous month", onclick: () => month(-1) }),
+        h("b", { text: first.toLocaleDateString(undefined, { month: "long", year: "numeric" }) }),
+        h("button", { type: "button", class: "btn small", text: "›", "aria-label": "Next month", onclick: () => month(1) })),
+      h("div", { class: "rp-days" }, ...["S", "M", "T", "W", "T", "F", "S"].map((w) => h("span", { class: "rp-wd", text: w })), ...cells),
+      h("div", { class: "rp-pop-foot" },
+        h("span", { class: "muted grow", text: pick ? `From ${dayWord(pick.a)}: click the last day, or show this day alone.` : "Click a day, or its first day and its last for a range." }),
+        pick ? h("button", { type: "button", class: "btn small primary", text: "Show this day", onclick: () => pickDays(pick.a, pick.a) }) : null));
+  }
+  function rpWhenEl(q) {
+    return h("span", { class: "rp-pop-wrap rp-when-wrap" },
+      h("button", { type: "button", class: "btn small rp-when", "aria-haspopup": "dialog", "aria-expanded": String(!!S.report.calOpen), "aria-label": `Time span: ${rpSpanWord(q)}`, text: `${rpSpanWord(q)} ▾`,
+        onclick: () => { S.report.calOpen = !S.report.calOpen; S.report.calPick = null; if (!S.report.calOpen) S.report.calMonth = null; redrawReport(); } }),
+      S.report.calOpen ? rpCalEl(q) : null);
+  }
+  // A click outside an open calendar or Columns menu closes it, as a menu does.
+  document.addEventListener("mousedown", (e) => {
+    if (!S.report || (!S.report.calOpen && !S.report.colsOpen) || e.target?.closest?.(".rp-pop-wrap")) return;
+    S.report.calOpen = false; S.report.colsOpen = false; S.report.calPick = null; S.report.calMonth = null;
+    redrawReport();
+  });
 
   // How the app alone is worked out: the step in use, and the ones to come.
   function reportHowEl(d) {
@@ -2432,11 +2639,11 @@
     S.words.open[id] = !S.words.open[id];
     const old = $("#reportCard"); if (old) old.replaceWith(reportCardEl());
   }
-  function wordsRowEl(x, app) {
+  function wordsRowEl(x, app, span = 9) {
     const w = S.words?.got?.[x.id];
     const copy = (t) => h("button", { type: "button", class: "btn small", text: "Copy", onclick: () => { try { navigator.clipboard.writeText(t); toast("Copied.", "done"); } catch {} } });
     const block = (title, t) => h("div", { class: "wd-block" }, h("div", { class: "wd-title" }, h("b", { text: title }), copy(t)), h("pre", { class: "wd-text", text: t }));
-    return h("tr", { class: "part wd" }, h("td", {}), h("td", { colspan: "8" }, !w ? h("span", { class: "muted", text: "These words are no longer kept." }) : [
+    return h("tr", { class: "part wd" }, h("td", { colspan: String(span) }, !w ? h("span", { class: "muted", text: "These words are no longer kept." }) : [
       block(`The task ${app} wrote`, w.task),
       w.files?.length ? h("div", { class: "wd-files", text: `Files: ${w.files.map((f) => `${f.name} (${Math.max(1, Math.round(f.size / 1024))} KB)`).join(", ")}` }) : null,
       w.answer !== null && w.answer !== undefined ? block("The answer that came back", w.answer) : null]));
@@ -2448,16 +2655,18 @@
     const cell = (v) => { let s = v === null || v === undefined ? "" : String(v); if (typeof v === "string" && /^[=+\-@\t\r]/.test(s)) s = "'" + s; return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
     const head = ["prompt_id", "time", "app", "thread", "project", "main_model", "plan", "prompt_tokens", "own_new_tokens", "own_cache_reads", "part_id", "handoff", "kind", "model", "where", "tokens_read", "tokens_back", "kept_out", "saved", "cost_usd", "grade", "graded_by", "side_by_side",
       "outside_read", "outside_thinking", "outside_written", // what the outside models used, measured (empty: not measured; thinking empty: not known)
-      "app_alone_est", "app_alone_low", "app_alone_high", "app_spent", "saved_est", "together", "app_alone_grade"]; // both sides (estimates) and the grades
+      "app_alone_est", "app_alone_low", "app_alone_high", "app_spent", "saved_est", "together", "app_alone_grade", // both sides (estimates) and the grades
+      "main_effort", "main_new", "main_cached", "main_written", "helpers", "helper_new", "helper_cached", "helper_written"]; // 0.15: the main model's own tokens, and Claude's helpers
     if (words) head.push("task", "answer", "files"); // 0.12: the kept words (words.ts), on each part's row
     const wordCols = (w) => (w ? [w.task, w.answer ?? "", (w.files ?? []).map((f) => f.name).join("; ")] : ["", "", ""]);
     const used = (u) => (u ? [u.read, u.thought, u.wrote] : ["", "", ""]);
     const both = (b) => (b ? [b.alone.mid, b.alone.low, b.alone.high, b.spent, b.saved.mid] : ["", "", "", "", ""]);
+    const mine = (p) => { const hs = p.helpers ?? [], o = sumOwnUi(hs); return [p.effort, p.main?.input, p.main?.cached, p.main?.output, hs.map(helperWord).join("; "), o?.input, o?.cached, o?.output]; };
     const lines = [head.join(",")];
     for (const p of d.prompts) {
       const base = [p.id, p.ts, p.app, p.thread, p.project, p.model?.label, p.plan, p.prompt, p.own?.fresh, p.own?.cached];
-      lines.push([...base, "", "", "", "", "", "", "", p.kept, p.saved === null ? "" : p.saved.toFixed(4), p.cost.toFixed(6), p.grade, "", "", ...used(p.used), ...both(p.both), p.together, p.alone?.grade, ...(words ? ["", "", ""] : [])].map(cell).join(","));
-      p.parts.forEach((x, i) => lines.push([...base, x.ref ?? i + 1, x.id, x.kind, x.label, x.where, x.read, x.back, x.read, "", x.cost === null ? "" : x.cost.toFixed(6), x.grade, x.gradedBy, x.side, ...used(x.used), ...both(x.both), x.together, x.alone?.grade, ...(words ? wordCols(words[x.id]) : [])].map(cell).join(",")));
+      lines.push([...base, "", "", "", "", "", "", "", p.kept, p.saved === null ? "" : p.saved.toFixed(4), p.cost.toFixed(6), p.grade, "", "", ...used(p.used), ...both(p.both), p.together, p.alone?.grade, ...mine(p), ...(words ? ["", "", ""] : [])].map(cell).join(","));
+      p.parts.forEach((x, i) => lines.push([...base, x.ref ?? i + 1, x.id, x.kind, x.label, x.where, x.read, x.back, x.read, "", x.cost === null ? "" : x.cost.toFixed(6), x.grade, x.gradedBy, x.side, ...used(x.used), ...both(x.both), x.together, x.alone?.grade, "", "", "", "", "", "", "", "", ...(words ? wordCols(words[x.id]) : [])].map(cell).join(",")));
     }
     return lines.join("\n") + "\n";
   }
