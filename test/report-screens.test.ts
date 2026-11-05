@@ -62,43 +62,112 @@ describe("the report", () => {
     expect(doc.querySelectorAll("#reportCard .rp-chart path.l1, #reportCard .rp-chart path.l2")).toHaveLength(2);
     expect([...doc.querySelectorAll("#reportCard .rp-bar .nm span")].map((e: any) => e.textContent)).toEqual(["Gemini 3.8 Flash", "DeepSeek V4 Flash"]);
     expect([...doc.querySelectorAll("#reportCard .rp-kind .nm b")].map((e: any) => e.textContent)).toEqual(["Reading", "Drafting"]);
+    // 0.15: one table; the prompt's model, its own tokens, Claude's helpers and the outside models in columns of their own.
+    expect([...doc.querySelectorAll("#reportCard .rp-prompts thead th")].map((th: any) => th.textContent))
+      .toEqual(["PRM", "When", "App", "Main model", "Main tokens", "Claude helpers", "Helper tokens", "Outside models", "Outside tokens", "Kinds", "Helpers total", "Outside total", "Cost", "Saved", "Grade"]);
     const rows = [...doc.querySelectorAll("#reportCard tr.pr")].map((r: any) => [...r.querySelectorAll("td")].map((td: any) => td.textContent.trim()));
     expect(rows.map((r) => r.filter((_, i) => i !== 1))).toEqual([
-      ["▸PRM-2", "Claude · Claude Opus 5.5", "not measured", "≈ 11k", "≈ 10k", "not known", "× wrong", "not graded", "not known"],
-      ["▸PRM-1", "Claude Code · Claude Opus 5.5", "not measured", "≈ 31k", "≈ 30k", "3k new", "✓ good", "not graded", "not known"],
+      ["▸PRM-2", "Claude", "Claude Opus 5.5", "not known", "—", "—", "DeepSeek V4 Flash", "not measured", "drafting", "—", "not measured", "$0.0030", "≈ 10k", "× wrong"],
+      ["▸PRM-1", "Claude Code", "Claude Opus 5.5", "2k new, 40k cached, 1k written", "—", "—", "Gemini 3.8 Flash", "not measured", "reading", "—", "not measured", "$0", "≈ 30k", "✓ good"],
     ]);
-    // A row is one line: a cell's second line is on hover.
-    expect([...doc.querySelectorAll("#reportCard tr.pr")].map((r: any) => [r.querySelectorAll("td")[4].title, r.querySelectorAll("td")[6].title]))
-      .toEqual([["range 7k to 16k", ""], ["range 21k to 41k", "measured"]]);
-    expect([...doc.querySelectorAll("#reportCard thead th")].map((th: any) => th.textContent))
-      .toEqual(["Promptsopen one for its parts", "Tokens", "Grades", "ID", "When", "App · main model", "Outside used", "Claude alone", "Saved", "Claude used, whole prompt", "Outside", "Together", "Claude alone"]); // 0.14.2: the title in the first header row
+    // A cell's second line is on hover.
+    expect([...doc.querySelectorAll("#reportCard tr.pr")].map((r: any) => r.querySelector("td[data-col='saved']").title)).toEqual(["range 6k to 15k", "range 21k to 40k"]);
+    expect(doc.querySelector("#reportCard tr.pr td[data-col='main']").title).toBe("Its effort: not said");
     expect(bad(doc)).toBe(false);
   });
 
-  test("a prompt opens to its parts and its app's own work", async () => {
+  test("a prompt opens to its own rows in the same table: its main model, then each outside model by kind, every column in line", async () => {
     const doc = await open(url);
     await goReport(doc);
     ([...doc.querySelectorAll("#reportCard tr.pr")] as any[])[1].click();
     await waitFor(() => doc.querySelectorAll("#reportCard tr.part").length === 3);
-    const parts = [...doc.querySelectorAll("#reportCard tr.part")].map((r: any) => r.textContent);
-    expect(doc.querySelector("#reportCard tr.part td.pid").textContent).toBe("PRM-1.1");
-    expect(parts[0]).toBe("PRM-1.1Oct 20, 10:05 AMreading · Gemini 3.8 Flashfree · 6 snot measured (before 0.10)≈ 31k≈ 30k✓ goodby Claude Codenot sampled");
-    const cells = [...doc.querySelectorAll("#reportCard tr.part")][0].querySelectorAll("td");
-    expect([cells[4].title, cells[5].title]).toEqual(["reads what it read, thinks and writes as Gemini 3.8 Flash did (from its numbers)", "minus 500 read back, 200 for the call"]);
-    expect(parts[1]).toContain("prompt 100, its own work 3k new tokens (measured), 40k more read again from the cache");
+    const head = [...doc.querySelectorAll("#reportCard .rp-prompts thead th")].map((th: any) => th.dataset.col);
+    // Every row has a cell for every column, in the same order: what opens stays in line with the headers.
+    for (const tr of doc.querySelectorAll("#reportCard tbody tr:not(.own)") as any) expect([...tr.querySelectorAll("td")].map((td: any) => td.dataset.col)).toEqual(head);
+    const [main, outside] = [...doc.querySelectorAll("#reportCard tr.part")] as any[];
+    const cell = (tr: any, col: string) => tr.querySelector(`td[data-col='${col}']`).textContent;
+    expect(main.classList.contains("main")).toBe(true);
+    expect([cell(main, "main"), cell(main, "mainTok"), cell(main, "outside"), cell(main, "prm")]).toEqual(["Claude Opus 5.5", "2k new, 40k cached, 1k written", "", ""]);
+    expect([cell(outside, "prm"), cell(outside, "outside"), cell(outside, "kinds"), cell(outside, "cost"), cell(outside, "saved"), cell(outside, "grade"), cell(outside, "main")])
+      .toEqual(["PRM-1.1", "Gemini 3.8 Flashfree", "reading", "$0", "≈ 30k", "✓ good", ""]);
     // The whole result, graded here: kept with the prompt's last part, and shown on the prompt.
-    expect(parts[2]).toBe("The whole result, Claude Code and the hand offs together: ✓ good~ partly× wrong");
-    ([...doc.querySelectorAll("#reportCard tr.part button")] as any[]).find((b) => b.textContent === "~ partly").click();
-    await waitFor(() => doc.querySelector("#reportCard tr.pr:nth-child(2)")?.querySelectorAll("td")[8]?.textContent === "~ partly");
+    const own = doc.querySelector("#reportCard tr.part.own");
+    expect(own.textContent).toBe("The whole result, Claude Code and the hand offs together: ✓ good~ partly× wrong");
+    expect(own.querySelector("td").getAttribute("colspan")).toBe(String(head.length));
+    ([...own.querySelectorAll("button")] as any[]).find((b) => b.textContent === "~ partly").click();
+    await waitFor(() => (db.query("SELECT together FROM delegations WHERE app = 'Claude Code'").get() as any)?.together === "partly");
     expect((db.query("SELECT together, together_by FROM delegations WHERE app = 'Claude Code'").get() as any)).toEqual({ together: "partly", together_by: "you" });
+    await waitFor(() => doc.querySelector("#reportCard .rp-tile:nth-child(4)")?.title.includes("1 prompt graded together"));
     expect(doc.querySelector("#reportCard .rp-tile:nth-child(4)").title).toContain("1 prompt graded together");
+  });
+
+  test("By model: a row for each prompt's model and kind, the prompt's id, time and app on each; the choice is kept", async () => {
+    const doc = await open(url);
+    await goReport(doc);
+    ([...doc.querySelectorAll("#reportCard .rp-tbar .seg button")] as any[]).find((b) => b.textContent === "By model").click();
+    await waitFor(() => !!doc.querySelector("#reportCard table.flat"));
+    const rows = [...doc.querySelectorAll("#reportCard tbody tr")].map((r: any) => [r.className, ...["prm", "app", "main", "outside"].map((c) => r.querySelector(`td[data-col='${c}']`).textContent)]);
+    expect(rows).toEqual([
+      ["part main", "PRM-2", "Claude", "Claude Opus 5.5", ""],
+      ["part outside", "PRM-2", "Claude", "", "DeepSeek V4 Flashpaid"],
+      ["part main", "PRM-1", "Claude Code", "Claude Opus 5.5", ""],
+      ["part outside", "PRM-1", "Claude Code", "", "Gemini 3.8 Flashfree"],
+    ]);
+    expect(doc.querySelector("#reportCard .rp-pager").textContent).toContain("1 to 4 of 4 rows");
+    expect(win.localStorage.getItem("leanfare.report:rows")).toBe('"model"');
+  });
+
+  test("columns hide and move from the Columns menu, or by dragging a header; rows per page and the pages", async () => {
+    // Twelve more prompts, 20 minutes apart (more than the 10 that join hand offs into one): fourteen in all.
+    for (let i = 0; i < 12; i++) hand(new Date(Date.parse("2026-10-21T00:00:00Z") + i * 20 * 60_000).toISOString(), { app: "Claude", app_model: "claude-opus-5-5", file_tokens: 1000 + i });
+    const doc = await open(url);
+    await goReport(doc);
+    const heads = () => [...doc.querySelectorAll("#reportCard .rp-prompts thead th")].map((th: any) => th.dataset.col);
+    const button = (text: string) => ([...doc.querySelectorAll("#reportCard button")] as any[]).find((b) => b.textContent === text);
+    button("Columns").click();
+    await waitFor(() => !!doc.querySelector("#reportCard .rp-colmenu"));
+    const box = (label: string) => doc.querySelector(`#reportCard .rp-colmenu input[aria-label="${label}"]`);
+    box("Show Saved").click();
+    await waitFor(() => !heads().includes("saved"));
+    expect(heads()).not.toContain("saved");
+    box("Show Together").click();
+    await waitFor(() => heads().includes("together"));
+    doc.querySelector(`#reportCard .rp-colmenu button[aria-label="Move Cost left"]`).click();
+    await waitFor(() => heads().indexOf("cost") === heads().indexOf("outsideTotal") - 1);
+    expect(heads().slice(10, 13)).toEqual(["helperTotal", "cost", "outsideTotal"]);
+    expect(JSON.parse(win.localStorage.getItem("leanfare.report:cols")).hidden).toEqual(["alone", "saved"]);
+    // Drag Grade onto App: it moves there.
+    const th = (col: string) => doc.querySelector(`#reportCard .rp-prompts thead th[data-col='${col}']`);
+    const drag = (type: string, el: any) => { const e = new win.Event(type, { bubbles: true, cancelable: true }); (e as any).dataTransfer = { data: {} as any, setData(k: string, v: string) { this.data[k] = v; }, getData(k: string) { return this.data[k]; } }; return e; };
+    const start = drag("dragstart", th("grade")); th("grade").dispatchEvent(start);
+    const drop = drag("drop", th("app")); drop.dataTransfer = start.dataTransfer; th("app").dispatchEvent(drop);
+    await waitFor(() => heads()[2] === "grade");
+    expect(heads().slice(0, 4)).toEqual(["prm", "when", "grade", "app"]);
+    button("As at first").click();
+    await waitFor(() => heads()[2] === "app" && heads().includes("saved"));
+    expect(heads()).toEqual(["prm", "when", "app", "main", "mainTok", "helpers", "helperTok", "outside", "outsideTok", "kinds", "helperTotal", "outsideTotal", "cost", "saved", "grade"]);
+    // Rows per page: 15 at first, 10 shows two pages.
+    expect(doc.querySelectorAll("#reportCard tr.pr").length).toBe(14);
+    const size = doc.querySelector("#reportCard select[aria-label='Rows per page']");
+    size.value = "10"; size.dispatchEvent(new win.Event("change"));
+    await waitFor(() => doc.querySelectorAll("#reportCard tr.pr").length === 10);
+    expect(doc.querySelector("#reportCard .rp-page").textContent).toBe("Page 1 of 2");
+    doc.querySelector("#reportCard button[aria-label='Next page']").click();
+    await waitFor(() => doc.querySelectorAll("#reportCard tr.pr").length === 4);
+    expect(doc.querySelector("#reportCard .rp-pager").textContent).toContain("11 to 14 of 14 prompts");
+    expect(doc.querySelector("#reportCard button[aria-label='Next page']").hasAttribute("disabled")).toBe(true);
+    expect(win.localStorage.getItem("leanfare.report:size")).toBe("10");
+    expect(bad(doc)).toBe(false);
   });
 
   test("a span or a filter is asked again, and the CSV holds the prompts and their parts", async () => {
     const doc = await open(url);
     await goReport(doc);
-    ([...doc.querySelectorAll("#reportCard .seg button")] as any[]).find((b) => b.textContent === "Today").click();
+    doc.querySelector("#reportCard .rp-when").click();
+    await waitFor(() => !!doc.querySelector("#reportCard .rp-cal"));
+    ([...doc.querySelectorAll("#reportCard .rp-cal .rp-quick button")] as any[]).find((b) => b.textContent === "Today").click();
     await waitFor(() => outgoing.some((u) => u.includes("/api/report?range=today")));
+    expect(doc.querySelector("#reportCard .rp-when").textContent).toBe("Today ▾");
     await waitFor(() => doc.querySelectorAll("#reportCard tr.pr").length === 1); // yesterday's Claude Code prompt is out
     const apps = doc.querySelector("#reportCard select[aria-label='All apps']");
     apps.value = "Claude"; apps.dispatchEvent(new win.Event("change"));
@@ -113,6 +182,50 @@ describe("the report", () => {
     expect(lines.slice(1).map((l: string) => l.split(",").slice(0, 3).filter((_, i) => i !== 1))).toEqual([["PRM-2", "Claude"], ["PRM-2", "Claude"]]); // the prompt, then its part
     expect(lines[2]).toMatch(/,PRM-2\.1,\d+,write,/); // the part's id and its hand off number
     expect(lines[2]).toContain("DeepSeek V4 Flash,paid,10000,900");
+  });
+
+  test("the calendar: a click on a day then Show this day, or a click on a range's first day and its last; Esc closes it", async () => {
+    const doc = await open(url);
+    await goReport(doc);
+    const open1 = async () => { doc.querySelector("#reportCard .rp-when").click(); await waitFor(() => !!doc.querySelector("#reportCard .rp-cal")); };
+    await open1();
+    expect(doc.querySelector("#reportCard .rp-month b").textContent).toBe("October 2026");
+    const day = (label: string) => doc.querySelector(`#reportCard .rp-cal .rp-day[aria-label="${label}"]`);
+    expect(day("Oct 21, 2026").classList.contains("today")).toBe(true);
+    day("Oct 20, 2026").click();
+    await waitFor(() => !!day("Oct 20, 2026")?.classList.contains("edge"));
+    expect(doc.querySelector("#reportCard .rp-cal .rp-pop-foot").textContent).toContain("From Oct 20: click the last day, or show this day alone.");
+    ([...doc.querySelectorAll("#reportCard .rp-cal button")] as any[]).find((b) => b.textContent === "Show this day").click();
+    const one = new URLSearchParams({ range: "custom", from: new Date(2026, 9, 20).toISOString(), to: new Date(2026, 9, 21).toISOString() }).toString();
+    await waitFor(() => outgoing.some((u) => u.endsWith(`/api/report?${one}`)));
+    expect(doc.querySelector("#reportCard .rp-when").textContent).toBe("Oct 20 ▾");
+    await waitFor(() => doc.querySelectorAll("#reportCard tr.pr").length === 1);
+    expect([...doc.querySelectorAll("#reportCard tr.pr td[data-col='app']")].map((td: any) => td.textContent)).toEqual(["Claude Code"]); // the prompt of the 20th
+    // A range, picked last day first: the same as first day first; a month back and forth.
+    await open1();
+    doc.querySelector("#reportCard .rp-cal button[aria-label='Previous month']").click();
+    await waitFor(() => doc.querySelector("#reportCard .rp-month b")?.textContent === "September 2026");
+    doc.querySelector("#reportCard .rp-cal button[aria-label='Next month']").click();
+    await waitFor(() => doc.querySelector("#reportCard .rp-month b")?.textContent === "October 2026");
+    day("Oct 21, 2026").click();
+    await waitFor(() => !!doc.querySelector("#reportCard .rp-cal .rp-pop-foot")?.textContent.includes("From Oct 21"));
+    day("Oct 19, 2026").click();
+    const range = new URLSearchParams({ range: "custom", from: new Date(2026, 9, 19).toISOString(), to: new Date(2026, 9, 22).toISOString() }).toString();
+    await waitFor(() => outgoing.some((u) => u.endsWith(`/api/report?${range}`)));
+    expect(doc.querySelector("#reportCard .rp-when").textContent).toBe("Oct 19 to Oct 21 ▾");
+    await waitFor(() => doc.querySelectorAll("#reportCard tr.pr").length === 2);
+    // Opened again, the range shows; Esc closes it and changes nothing.
+    await open1();
+    expect(["Oct 19, 2026", "Oct 20, 2026", "Oct 21, 2026"].every((l) => day(l).classList.contains("in"))).toBe(true);
+    expect(day("Oct 22, 2026").classList.contains("in")).toBe(false);
+    doc.querySelector("#reportCard .rp-cal").dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await waitFor(() => !doc.querySelector("#reportCard .rp-cal"));
+    expect(doc.querySelector("#reportCard .rp-cal")).toBe(null);
+    // Yesterday, from the quick picks.
+    await open1();
+    ([...doc.querySelectorAll("#reportCard .rp-cal .rp-quick button")] as any[]).find((b) => b.textContent === "Yesterday").click();
+    await waitFor(() => doc.querySelector("#reportCard .rp-when")?.textContent === "Oct 20 ▾");
+    expect(doc.querySelector("#reportCard .rp-when").textContent).toBe("Oct 20 ▾");
   });
 
   test("the report tool's link (#report) opens Savings at the report, whatever screen was open last", async () => {

@@ -15,7 +15,7 @@
     {
       "name": "leanfare-level",
       "source": "./mods/leanfare-level",
-      "description": "Leanfare's level in every Cowork and Claude Desktop chat: in the system prompt, and at levels 4 and 5 a reminder to plan with Leanfare first. Needs Leanfare connected."
+      "description": "Leanfare in every Cowork and Claude Desktop chat: the level in the system prompt, at levels 4 and 5 a reminder to plan with Leanfare first, and each helper on the Claude model Leanfare picks. Needs Leanfare connected."
     }
   ]
 }
