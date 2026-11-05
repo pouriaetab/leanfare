@@ -27,7 +27,7 @@ import { dirname, relative, sep } from "node:path";
 import { CODEX_ID, CODEX_LABEL, codexFor, runCodex } from "./codex";
 import { GEMINI_CLI_ID, GEMINI_CLI_LABEL, geminiCliFor, runGeminiCli } from "./geminicli";
 import { checkResult, checksFor, checksLine, parseChecks, setChecks, wordsFound, type Check, type CheckResult } from "./checks";
-import { DEFAULT_MAX_OUT, TIER, gradeRow, nameOf, notePart, runDelegate, taskFor, type Effort, type Kind } from "./delegate";
+import { APP_EFFORTS, DEFAULT_MAX_OUT, TIER, effortOf, gradeRow, nameOf, notePart, runDelegate, taskFor, type Effort, type Kind } from "./delegate";
 import { LOCAL_CONTEXT, allModels, fitsText, getModel, localNeed, type Model } from "./data";
 import { fitsFree } from "./freeplans";
 import { chargeOf, plan as route, runChat, usableModels } from "./engine";
@@ -109,7 +109,7 @@ export interface PlanResult {
   codex?: string | null; // why Codex took no part, when it is turned on in Settings and could not
   gemini?: string | null; // 0.14.1: why Gemini CLI took no part, when it is turned on and could not
   private?: boolean; // stays on this computer: its parts go only to models here, or stay with you
-  you?: { model: string | null; label: string | null; plan: string | null }; // the app's own model, as it said, and your plan for it
+  you?: { model: string | null; label: string | null; plan: string | null; effort?: string }; // the app's own model and effort, as it said, and your plan for it
   level?: number; // 0.12: the level it was made at (level.ts); its parts run at it
   folder?: string | null; // 0.14: the project it was made in, when known: its checks (checks.ts) go with it
   checks?: Check[]; // 0.14: the project's checks when it was made
@@ -338,7 +338,9 @@ const nearWords = (near: string, join: ": " | " (") => (near.startsWith("your Le
 async function place(part: Split, files: PlanFile[], near: string | null, manager: string, signal: AbortSignal, codex = false, priv = false, level: Level = 2, gemini = false): Promise<Part> {
   // 0.14: at level 4 and up a change to the project is drafted outside, as a patch: placed as drafting is (your Jobs rule
   // for drafting holds), and the app reads it and applies it with its own tools. Below 4 it stays, as before.
-  if (part.kind === "code" && level >= 4 && !part.keep) {
+  // 0.15: only a change that names files Leanfare measured: with none there is nothing to draft a patch against (on 5 Nov
+  // three such parts went to Codex, which found nothing to read and answered nothing), so it stays with the app.
+  if (part.kind === "code" && level >= 4 && !part.keep && reading(part, files).named > 0) {
     const p = await place({ ...part, kind: "write" }, files, near, manager, signal, codex, priv, level, gemini);
     if (p.where === "you") return { ...p, kind: "code", use: modelInYourApp(part, manager) };
     return { ...p, kind: "code", patch: true, why: `your Leanfare level is ${levelText(level)}: a model drafts the change as a patch, and you read it and apply it (${p.why})` };
@@ -586,7 +588,7 @@ function nextOf(r: Omit<PlanResult, "table" | "next" | "id">, started: Set<numbe
 
 // ---- the plan ------------------------------------------------------------------------------------
 
-export interface PlanInput { task: string; files: PlanFile[]; manager: string | null; split?: "auto" | "rules"; private?: boolean; yourModel?: string | null; level?: Level; folder?: string | null; checks?: Check[]; parts?: GivenPart[]; signal: AbortSignal }
+export interface PlanInput { task: string; files: PlanFile[]; manager: string | null; split?: "auto" | "rules"; private?: boolean; yourModel?: string | null; yourEffort?: string | null; level?: Level; folder?: string | null; checks?: Check[]; parts?: GivenPart[]; signal: AbortSignal }
 
 // The name of a model an app says it runs on: the price list's when it has the model, else made from the id
 // (claude-opus-5-5: Claude Opus 5.5; gpt-5.4: GPT-5.4; a date at the end is dropped).
@@ -641,6 +643,8 @@ export function checkPlan(b: any, trusted = false): Omit<PlanInput, "signal"> | 
   if (b.private !== undefined && typeof b.private !== "boolean") return "private must be true or false.";
   const yourModel = nameOf(b.your_model ?? b.yourModel);
   if (yourModel === false) return "your_model must be a model's name, like claude-opus-5-5.";
+  const yourEffort = effortOf(b.your_effort ?? b.yourEffort);
+  if (yourEffort === false) return `your_effort must be one of ${APP_EFFORTS.join(", ")}.`;
   if (b.level !== undefined && b.level !== null && !isLevel(b.level)) return "level must be a whole number from 1 to 5.";
   // 0.14: the project's folder (the door gives the one it works in) and, once per project, its checks.
   if (b.folder !== undefined && b.folder !== null && (typeof b.folder !== "string" || !FULL_PATH.test(b.folder.trim()) || b.folder.length > 1000)) return "folder must be the project's full path.";
@@ -660,7 +664,7 @@ export function checkPlan(b: any, trusted = false): Omit<PlanInput, "signal"> | 
     if (!folder) return "checks are kept for a project's folder: give plan the folder too.";
     checks = got;
   }
-  return { task: b.task.trim(), files, manager, split, ...(b.private ? { private: true } : {}), ...(yourModel ? { yourModel } : {}), ...(isLevel(b.level) ? { level: b.level } : {}), ...(folder ? { folder } : {}), ...(checks ? { checks } : {}), ...(parts ? { parts } : {}) };
+  return { task: b.task.trim(), files, manager, split, ...(b.private ? { private: true } : {}), ...(yourModel ? { yourModel } : {}), ...(yourEffort ? { yourEffort } : {}), ...(isLevel(b.level) ? { level: b.level } : {}), ...(folder ? { folder } : {}), ...(checks ? { checks } : {}), ...(parts ? { parts } : {}) };
 }
 
 // The plan whose limits count: Codex spends a ChatGPT plan, the others a Claude plan when they are Claude's.
@@ -750,7 +754,7 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
   const wantsLocal = placed.some((p) => DELEGATE_KIND[p.kind] && localTakes(p) && (p.where === "paid" || (p.where === "you" && p.why.startsWith("Leanfare has no model"))));
   const sg = wantsLocal ? suggestLocal().suggestion : null;
   const local = sg ? { name: sg.name, size: sg.size, like: sg.like, rating: sg.rating, fit: sg.fit } : null;
-  const you = { model: input.yourModel ?? null, label: input.yourModel ? modelName(input.yourModel) : null, plan: planFor(manager) };
+  const you = { model: input.yourModel ?? null, label: input.yourModel ? modelName(input.yourModel) : null, plan: planFor(manager), ...(input.yourEffort ? { effort: input.yourEffort } : {}) };
   // The project's checks (0.14): set with this plan, or as set before for this folder.
   const folder = input.folder ?? null;
   if (folder && input.checks?.length) setChecks(folder, input.checks);
@@ -765,7 +769,7 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
 // ---- running a plan ---------------------------------------------------------------------------------
 
 // The app a plan came from and the model it runs on, kept with each part's row (the report shows them).
-const appOf = (plan: PlanResult) => ({ app: plan.manager === "you" ? null : plan.manager, appModel: plan.you?.model ?? null });
+const appOf = (plan: PlanResult) => ({ app: plan.manager === "you" ? null : plan.manager, appModel: plan.you?.model ?? null, appEffort: plan.you?.effort ?? null });
 // The parts Leanfare runs, run at once where they can, each as soon as the parts it needs are back,
 // with their answers handed on in its task. The parts that stay with the person are theirs, and so is a
 // part that needs one of those (after_yours: they hand it over once theirs is done); a part that needs

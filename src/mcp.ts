@@ -65,6 +65,7 @@ export const TOOLS = [
         split: { type: "string", enum: ["auto", "rules"], description: "auto (the default): a model the user ticked splits it. rules: Leanfare splits it by rules, with no model call." },
         private: { type: "boolean", description: "true keeps the whole plan on the user's computer: the split and every Leanfare part go only to models there (Ollama), and a part none of them can take stays with you. Use it for anything sensitive or personal, or when the user asks." },
         your_model: { type: "string", description: "The model you run on, as your own instructions name it (for example claude-opus-5-5). Leanfare names it for the work that stays with you, and the report shows it as the prompt's main model." },
+        your_effort: { type: "string", enum: ["low", "medium", "high", "xhigh", "max"], description: "The thinking effort you run at, when you know it. The report shows it with your model." },
         level: { type: "integer", minimum: 1, maximum: 5, description: "The Leanfare level for this chat or session, as the level tool or Leanfare's prompt line gave it. Leave it out when none was given." },
         run: { type: "boolean", description: "false: only split the task; Leanfare runs nothing. By default Leanfare starts its parts at once." },
         parts: { type: "array", minItems: 1, maxItems: 8, items: { type: "object", properties: {
@@ -178,6 +179,7 @@ export const TOOLS = [
         private: { type: "boolean", description: "true keeps this task on the user's computer: only models there (Ollama) take it, and its check too. Use it for anything sensitive or personal, or when the user asks." },
         max_tokens: { type: "integer", minimum: 1, maximum: 64000, description: "The longest answer to allow, in tokens (default 8,192)." },
         your_model: { type: "string", description: "The model you run on, as your own instructions name it (for example claude-opus-5-5). Leanfare names it for the work that stays with you, and the report shows it as the prompt's main model." },
+        your_effort: { type: "string", enum: ["low", "medium", "high", "xhigh", "max"], description: "The thinking effort you run at, when you know it. The report shows it with your model." },
         level: { type: "integer", minimum: 1, maximum: 5, description: "The Leanfare level for this chat or session, as the level tool or Leanfare's prompt line gave it. Leave it out when none was given." },
       },
       additionalProperties: false,
@@ -760,7 +762,7 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
     if (typeof files === "string") return failure(files);
     const t0 = Date.now();
     const project = sharedFolder(args.folder, ctx.cwd); // the project's checks are kept for it (0.14)
-    const { j } = await call("/api/plan", { method: "POST", json: { task: args.task, files, manager: ctx.client, split: args.split === "rules" ? "rules" : "auto", ...(args.run !== false ? { run: true } : {}), ...(args.private === true ? { private: true } : {}), ...(isLevel(args.level) ? { level: args.level } : {}), ...(typeof args.your_model === "string" ? { your_model: args.your_model } : {}), ...(project ? { folder: project } : {}), ...(args.checks !== undefined ? { checks: args.checks } : {}), ...(args.parts !== undefined ? { parts: args.parts } : {}) } }, signal);
+    const { j } = await call("/api/plan", { method: "POST", json: { task: args.task, files, manager: ctx.client, split: args.split === "rules" ? "rules" : "auto", ...(args.run !== false ? { run: true } : {}), ...(args.private === true ? { private: true } : {}), ...(isLevel(args.level) ? { level: args.level } : {}), ...(typeof args.your_model === "string" ? { your_model: args.your_model } : {}), ...(typeof args.your_effort === "string" ? { your_effort: args.your_effort } : {}), ...(project ? { folder: project } : {}), ...(args.checks !== undefined ? { checks: args.checks } : {}), ...(args.parts !== undefined ? { parts: args.parts } : {}) } }, signal);
     const note = j.split?.note ? `\n\n(${j.split.note})` : j.split?.model ? `\n\n(Split by ${j.split.model.label}${typeof j.split.cost === "number" ? `, ${usd(j.split.cost)}` : ""}.)` : "";
     const folder = sharedFolder(args.folder, ctx.cwd);
     const saved = folder ? writeShared(folder, j.id, { "plan.md": `# Plan ${j.id}\n\n${args.task.trim()}\n\n${j.table}\n\n${j.next}\n` }) : null;
@@ -819,7 +821,7 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
       const files = readForDelegate(args.files, args.folder, ctx.cwd);
       if (typeof files === "string") return failure(files);
       const body = { task: args.task, files, kind: args.kind ?? null, effort: args.effort ?? "medium", check: args.check ?? "auto", wait, ...(args.max_tokens !== undefined ? { max_tokens: args.max_tokens } : {}), ...(args.speed !== undefined ? { speed: args.speed } : {}), ...(args.private === true ? { private: true } : {}),
-        ...(ctx.client ? { app: ctx.client } : {}), ...(typeof args.your_model === "string" ? { your_model: args.your_model } : {}), ...(isLevel(args.level) ? { level: args.level } : {}) };
+        ...(ctx.client ? { app: ctx.client } : {}), ...(typeof args.your_model === "string" ? { your_model: args.your_model } : {}), ...(typeof args.your_effort === "string" ? { your_effort: args.your_effort } : {}), ...(isLevel(args.level) ? { level: args.level } : {}) };
       ({ j } = await call("/api/delegate", { method: "POST", json: body }, signal));
     }
     if (j.running) { const next = `Call delegate again with id "${j.id}" and nothing else to get the answer.`; return text(`Still working in Leanfare (${j.seconds} seconds so far). ${next}`, { running: true, id: j.id, seconds: j.seconds, next }); }
