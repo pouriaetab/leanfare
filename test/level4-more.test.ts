@@ -82,7 +82,7 @@ describe("level 4 sends more out", () => {
     const r = await plan(2, "Claude");
     const mine = r.parts.filter((p) => p.where === "you");
     expect(mine.length).toBeGreaterThan(0);
-    expect(r.next).toContain("start a helper (a subagent) with that model if your app can (model: opus, sonnet or haiku); if it cannot, do the part yourself.");
-    expect((await plan(2)).next).toContain("use a subagent with that model (model: opus, sonnet or haiku).");
+    expect(r.next).toContain("start a helper (a subagent) with that model if your app can (model: haiku, sonnet, opus or fable); if it cannot, do the part yourself.");
+    expect((await plan(2)).next).toContain("use a subagent with that model (model: haiku, sonnet, opus or fable).");
   });
 });

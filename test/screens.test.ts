@@ -874,7 +874,8 @@ describe("The Plan tab", () => {
     await waitFor(() => !!doc.querySelector("#planResult"));
     expect(doc.querySelectorAll("#planResult tbody tr").length).toBe(5);
     let t = doc.querySelector("#planResult").textContent;
-    expect(t).toContain("you (Claude Code)");
+    expect(t).toContain("Claude Sonnet 4.6 (platform model)"); // 0.15: the model in words, never "you"
+    expect(t).not.toContain("you (");
     expect(t).toContain("go to Leanfare. If they run, about");
     expect(t).toContain("Split by rules.");
     expect(t).toContain("One of Leanfare's parts waits for yours (see When)."); // part 5 reviews your changes
@@ -888,22 +889,22 @@ describe("The Plan tab", () => {
     await waitFor(() => toasts(doc).includes("Leanfare's parts are done."), 20000);
     t = doc.querySelector("#planResult").textContent;
     expect(t).toContain("done");
-    expect(t).toContain("yours to do");
-    expect(t).toContain("after yours");
+    expect(t).toContain("for the main model"); // 0.15: the parts that stay, by who runs them
+    expect(t).toContain("after the main model's");
     const labels = [...doc.querySelectorAll("#planResult button")].map((b: any) => b.textContent);
     expect(labels.some((x: string) => x.startsWith("Run"))).toBe(false); // what is left waits for yours: nothing more to run here
     expect(doc.querySelectorAll("#planResult .plan-answer").length).toBeGreaterThan(0);
     expect(doc.querySelector("#planResult .plan-answer .md")).toBeTruthy();
     expect(bad(doc)).toBe(false);
-    // Working in Codex instead: the same parts stay, named for Codex's models.
+    // 0.15: Claude is the platform: the apps to plan for are Claude's, or none.
     const works = doc.querySelector("#tab-plan select[aria-label='Works in']");
-    works.value = "Codex"; works.dispatchEvent(new win.Event("change"));
+    expect([...works.options].map((o: any) => o.textContent)).toEqual(["Claude Code", "Claude Desktop or Cowork", "No app (just you)"]);
+    works.value = "Claude"; works.dispatchEvent(new win.Event("change"));
     const before = doc.querySelector("#planResult");
     doc.querySelector("#planGo").click();
-    await waitFor(() => doc.querySelector("#planResult") !== before && doc.querySelector("#planResult").textContent.includes("you (Codex)"));
+    await waitFor(() => doc.querySelector("#planResult") !== before && !!doc.querySelector("#planResult"));
     t = doc.querySelector("#planResult").textContent;
-    expect(t).toContain("GPT-5 mini");
-    expect(t).not.toContain("Claude Sonnet 4.6");
+    expect(t).toContain("Claude Sonnet 4.6 (platform model)"); // Cowork's helpers run on Claude's models too
   }, 40000);
 });
 

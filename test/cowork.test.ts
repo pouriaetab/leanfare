@@ -33,9 +33,11 @@ describe("Cowork", () => {
     saveSettings({ plans: { claude: { name: "Claude Max", price: 100 } } });
     const p = await makePlan({ task: "Fix the login bug in the app and add a test", files: [], manager: "Cowork", split: "rules", yourModel: "claude-opus-5-5", signal: new AbortController().signal });
     expect(p.you).toEqual({ model: "claude-opus-5-5", label: "Claude Opus 5.5", plan: "Claude Max" });
-    const mine = p.table.split("\n").filter((l) => l.includes("you ("));
+    // 0.15: the model in words (the main model, or another of Claude's on a helper) and the plan's name as the cost.
+    const mine = p.table.split("\n").filter((l) => /\((main|platform) model\)/.test(l));
     expect(mine.length).toBeGreaterThan(0);
-    for (const l of mine) expect(l).toContain("you (Cowork, on your Claude Max plan)");
+    for (const l of mine) expect(l).toContain("| Claude Max |");
+    expect(p.table).not.toContain("you (");
   });
 
   test("hand offs saved under its old name read Cowork; others stay as they are", () => {

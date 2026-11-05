@@ -34,7 +34,7 @@ describe("a free tier is marked", () => {
     const out = plan.parts.filter((p) => p.where !== "you");
     expect(out.length).toBeGreaterThan(0);
     for (const p of out) expect(p.risk).toBe("people may read it");
-    expect(plan.table).toContain("Leanfare, free model (people may read it)");
+    expect(plan.table).toMatch(/\| [^|]+ \(free\), people may read it \|/); // 0.15: the model in words, then the risk
     expect(plan.table).toContain("Parts on a free tier: people may read it. For anything private, plan it with private: it stays on this computer.");
   });
 });

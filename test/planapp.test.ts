@@ -71,8 +71,9 @@ describe("the plan inside the chat (an MCP App)", () => {
     const t = doc.body.textContent;
     expect(t).toContain("Read the logs");
     expect(t).toContain("GPT-5 mini");
-    expect(t).toContain("your model");
-    expect(t).toContain("in your plan");
+    expect(t).toContain("the app's model (main model)"); // 0.15: the model and its role, never "you"
+    expect(t).not.toMatch(/\byour\b/);
+    expect(t).toContain("the Claude subscription"); // the cost of a part the app keeps: the subscription it counts in
     expect(t).toContain("running…");
     await until(() => doc.body.textContent.includes("Claude picks up their answers next"), 6000);
     expect(doc.querySelector("details pre").textContent).toBe("Three timeouts at 10:02.");
@@ -123,8 +124,8 @@ describe("the plan inside the chat (an MCP App)", () => {
     ];
     push("ui/notifications/tool-result", { structuredContent: { id: "p2", parts, totals: { parts: 3, out: 2, later: 1, kept: 31000, used: 5000, seconds: null, after: 12, cost: 0.04 },
       run: { running: false, cost_usd: 0, asks: { parts: [3], estimate: 0.04, cap: 0 }, parts: [{ n: 1, title: "Decide", status: "yours" }, { n: 2, title: "Read after", status: "after_yours" }, { n: 3, title: "Search", status: "asks" }] } } });
-    await until(() => doc.body.textContent.includes("waits for yours"));
-    expect(doc.body.textContent).toContain("Part 2 waits for yours: once yours are done, Claude hands it to Leanfare.");
+    await until(() => doc.body.textContent.includes("waits for the main model's parts"));
+    expect(doc.body.textContent).toContain("Part 2 waits for the main model's parts: once those are done, Claude hands it to Leanfare.");
     expect(doc.body.textContent).toContain("Part 3 is paid (about $0.04) and waits for your yes: Claude asks you in the chat.");
     expect(doc.body.textContent).toContain("waits for a yes");
     expect(doc.querySelectorAll("button").length).toBe(0);
