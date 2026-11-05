@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.1
+
+- Fewer questions in Cowork. Cowork can ask you before each helper starts, and a plan used to ask for a helper per part. Now Settings, Claude's own models, Helpers, says how many: one per prompt (the default), one per part, or none. One per prompt gives one helper the parts that need a stronger model than the chat's own, on the strongest of them, and the rest run in the chat; none runs every part in the chat.
+- A part's files are kept however your app names them: by full path, with ~, inside the project's folder, or as a folder for every file in it. Before, a part that named its files by full path went out with none.
+- A shorter README with new pictures, and what is inside: the MCP server's source, its tools, and how to build it.
+
 ## 0.15.0
 
 - Claude is the platform. Leanfare lives in Claude Desktop, Cowork and Claude Code only; an earlier install in Cursor, Codex, Gemini CLI or another app shows in Settings with Take it out. Codex and Gemini CLI still take Leanfare's parts as outside models, with the free and paid models you pick.
