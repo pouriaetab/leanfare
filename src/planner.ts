@@ -41,8 +41,8 @@ import { mayTake, modelOn, platformOn, readRisk, whereStop, whereWhy } from "./p
 import { planView, windowsNow } from "./plans";
 import { DELEGATE_LIMITS, readForDelegate, sizesForPlan, PLAN_FILES } from "./readfiles";
 import { guessTask, pickModel, type Msg } from "./router";
-import { JOB_DEFAULTS, settings, type JobKind } from "./settings";
-import { pickClaude } from "./claudeladder";
+import { JOB_DEFAULTS, settings, type HelperStarts, type JobKind } from "./settings";
+import { claudeRungs, helperRules, pickClaude } from "./claudeladder";
 import { UserError } from "./upstream";
 import { now, randomId, secondsText } from "./util";
 
@@ -110,6 +110,8 @@ export interface PlanResult {
   gemini?: string | null; // 0.14.1: why Gemini CLI took no part, when it is turned on and could not
   private?: boolean; // stays on this computer: its parts go only to models here, or stay with you
   you?: { model: string | null; label: string | null; plan: string | null; effort?: string }; // the app's own model and effort, as it said, and your plan for it
+  starts?: HelperStarts; // 0.15.1: how many helpers a Claude app starts for the parts it keeps (Settings: Helpers)
+  batch?: HelperBatch | null; // 0.15.1: the parts that go to one helper together, on the model of the lead part
   level?: number; // 0.12: the level it was made at (level.ts); its parts run at it
   folder?: string | null; // 0.14: the project it was made in, when known: its checks (checks.ts) go with it
   checks?: Check[]; // 0.14: the project's checks when it was made
@@ -496,6 +498,31 @@ export function timeLine(t: { seconds: number | null; after: number | null }): s
 // Claude Code, and Claude (Desktop and Cowork; 0.14): Cowork starts helpers on another model too (its Agent tool takes
 // model: opus, sonnet, haiku or fable); the Desktop app's chat cannot, and is told to do the part itself then.
 export const picksPerPart = (manager: string) => /claude code/i.test(manager) || /^(claude|cowork)$/i.test(manager.trim());
+// How many helpers (0.15.1). Where the app asks you before each helper it starts (Cowork can), a helper for each part
+// is a question for each part. Settings, Claude's own models, Helpers: each, a helper for each part on another of
+// Claude's models; once (the default), one helper a prompt: for the parts that need a stronger model than yours, on the
+// strongest they need (the others run in the chat, on yours), or, when none do, for the parts a lighter model can do, on
+// the strongest of those; never, every part in this chat, on the model you run on.
+export interface HelperBatch { parts: number[]; lead: number }
+export function helperStarts(placed: Part[], you: PlanResult["you"], manager: string): { starts: HelperStarts; batch: HelperBatch | null } {
+  const starts = helperRules().starts;
+  if (!picksPerPart(manager) || starts === "each") return { starts, batch: null };
+  const main = you?.label ?? null;
+  const off = placed.filter((p) => p.where === "you" && !p.keep && p.use && p.use.label !== main);
+  if (!off.length) return { starts, batch: null };
+  const inChat = (p: Part, why: string) => { p.use = main ? { id: you?.model ?? p.use!.id, label: main, alias: CLAUDE_ALIAS.exec(main)?.[1]?.toLowerCase() ?? null, why } : null; };
+  if (starts === "never") { for (const p of off) inChat(p, "no helpers (Settings, Claude's own models), so in this chat"); return { starts, batch: null }; }
+  // Leanfare's order of Claude's models (claudeladder.ts): the strongest first.
+  const order = claudeRungs().map((r) => r.label);
+  const rank = (label: string | null | undefined) => { const i = label ? order.indexOf(label) : -1; return i < 0 ? order.length : i; };
+  const mine = main && order.includes(main) ? rank(main) : null;
+  const stronger = mine === null ? off : off.filter((p) => rank(p.use!.label) < mine);
+  const group = stronger.length ? stronger : off;
+  for (const p of off) if (!group.includes(p)) inChat(p, "in this chat: the one helper of this prompt takes the parts that need a stronger model");
+  const lead = [...group].sort((a, b) => rank(a.use!.label) - rank(b.use!.label) || Number(!!b.top) - Number(!!a.top) || a.n - b.n)[0];
+  for (const p of group) if (p !== lead) p.use = { ...lead.use!, why: `on one helper with part ${lead.n}, on the strongest model these parts need` };
+  return { starts, batch: { parts: group.map((p) => p.n), lead: lead.n } };
+}
 // 0.15: a part's model in words, its version and its role, never "you": Claude Opus 5.5 (main model), Claude Sonnet 5.5
 // (platform model: another of the app's own models, on a helper), NVIDIA Nemotron 3 Ultra (free), DeepSeek V4 (paid),
 // qwen3:8b (this computer), Codex (ChatGPT subscription), Gemini CLI (Google subscription).
@@ -571,6 +598,15 @@ function nextOf(r: Omit<PlanResult, "table" | "next" | "id">, started: Set<numbe
   if (!started && later.length) s.push(`Then ${list(later.map((p) => p.n))}, each once the parts it needs are back, with their answers in its task.`);
   if (!started && out.some((p) => p.kind === "search")) s.push("A search part goes to ask with the model in the table.");
   if (mine.length && mine.every((p) => p.keep)) s.push(mine.some((p) => p.keepWhy) ? `Answer ${out.length ? "the questions" : "it"} yourself${out.length ? " once the facts are back" : ""}: ${QUESTIONS_WHY}.` : "Answer it yourself: it is too small to hand off.");
+  else if (mine.length && picksPerPart(r.manager) && r.starts === "never") s.push(`Do ${mine.length === 1 ? "it" : "these"} yourself in this chat, without a helper (Leanfare's setting): ${list(mine.map((p) => p.n))}.`);
+  else if (mine.length && picksPerPart(r.manager) && r.batch) {
+    const b = r.batch, lead = mine.find((p) => p.n === b.lead), rest = mine.filter((p) => !b.parts.includes(p.n));
+    const model = lead?.use ? `${lead.use.label}${lead.use.alias ? ` (model: ${lead.use.alias})` : ""}` : "the model in the table";
+    const one = b.parts.length === 1, waits = mine.some((p) => b.parts.includes(p.n) && p.needs.length) ? `, once the parts ${one ? "it needs" : "they need"} are back` : "";
+    const what = one ? `${list(b.parts)}, on ${model}, with the part's title and task in its prompt${waits}` : `${list(b.parts)} together, on ${model}, with each part's title and task in its prompt${waits}`;
+    const start = /claude code/i.test(r.manager) ? `Use one subagent for ${what}.` : `Start one helper (a subagent) for ${what}; if your app cannot start one, do ${one ? "it" : "them"} yourself.`;
+    s.push(`${start}${rest.length ? ` Do ${list(rest.map((p) => p.n))} yourself in this chat.` : ""}`);
+  }
   else if (mine.length) {
     const on = mine.map((p) => `part ${p.n}${picksPerPart(r.manager) || !r.you?.label ? ` on ${p.use?.label ?? "your strongest model"}` : ""}`);
     // Claude Code runs a part on another model with a subagent (its Agent tool takes model: opus, sonnet, haiku or fable).
@@ -611,6 +647,32 @@ export function planFor(manager: string): string | null {
   return null;
 }
 const FULL_PATH = /^(~|\/|[A-Za-z]:[\\/]|\\\\)/; // ~/..., /..., C:\..., \\server
+// 0.15.1: a part's files as the app wrote them, matched to the plan's own names: the name itself, the full path (also
+// with ~ for the home folder), the path inside the project's folder, or the end of exactly one file's path; a folder
+// stands for every file in it. Before, a part that named its files by their full path lost them, and went out with none.
+export function fileMatcher(files: PlanFile[], folder: string | null): (given: string) => string[] {
+  const norm = (x: string) => x.trim().replace(/^file:\/\//i, "").replace(/\\/g, "/").replace(/\/+$/, "");
+  const home = norm(homedir());
+  const full = (x: string) => { const t = norm(x); return t === "~" ? home : t.startsWith("~/") ? `${home}${t.slice(1)}` : t; };
+  const by = new Map<string, string>();
+  for (const f of files) { by.set(norm(f.name), f.name); if (f.path) by.set(full(f.path), f.name); }
+  const base = folder ? full(folder) : null;
+  const absolute = (t: string) => t.startsWith("/") || /^[A-Za-z]:\//.test(t);
+  const where = (f: PlanFile) => (f.path ? full(f.path) : `/${norm(f.name)}`);
+  return (given) => {
+    if (typeof given !== "string" || !given.trim()) return [];
+    const t = full(given), rel = t.replace(/^\.\//, "");
+    const inBase = base && !absolute(t) ? `${base}/${rel}` : null;
+    const hit = by.get(norm(given)) ?? by.get(t) ?? by.get(rel) ?? (inBase ? by.get(inBase) : undefined);
+    if (hit) return [hit];
+    // A folder: every file in it, by its full path, its path in the project's folder, or its name.
+    const under = files.filter((f) => [t, inBase].some((d) => d && absolute(d) && where(f).startsWith(`${d}/`)) || (!absolute(t) && norm(f.name).startsWith(`${rel}/`)));
+    if (under.length) return under.map((f) => f.name);
+    const tail = `/${rel.replace(/^\/+/, "")}`;
+    const ends = files.filter((f) => where(f).endsWith(tail));
+    return ends.length === 1 ? [ends[0].name] : [];
+  };
+}
 
 // The request body of POST /api/plan, checked: the input, or one sentence saying what is wrong.
 // trusted: the MCP door (it holds the control token), which measured the files itself and may say
@@ -653,7 +715,9 @@ export function checkPlan(b: any, trusted = false): Omit<PlanInput, "signal"> | 
   let parts: GivenPart[] | undefined;
   if (b.parts !== undefined && b.parts !== null) {
     if (!Array.isArray(b.parts) || !b.parts.length || b.parts.length > MAX_PARTS) return `parts must be a list of 1 to ${MAX_PARTS} parts, each with a title, a kind (read, write, reason, code, search or act), an effort, the parts it needs, its files and its task.`;
-    const got = readSplit(JSON.stringify({ parts: b.parts }), files.map((f) => f.name));
+    const match = fileMatcher(files, folder);
+    const named = b.parts.map((x: any) => (x && typeof x === "object" && Array.isArray(x.files) ? { ...x, files: x.files.flatMap((f: unknown) => { const m = typeof f === "string" ? match(f) : []; return m.length ? m : [f]; }) } : x));
+    const got = readSplit(JSON.stringify({ parts: named }), files.map((f) => f.name));
     if (!got) return "parts must each have a title or a task.";
     parts = got;
   }
@@ -755,11 +819,12 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
   const sg = wantsLocal ? suggestLocal().suggestion : null;
   const local = sg ? { name: sg.name, size: sg.size, like: sg.like, rating: sg.rating, fit: sg.fit } : null;
   const you = { model: input.yourModel ?? null, label: input.yourModel ? modelName(input.yourModel) : null, plan: planFor(manager), ...(input.yourEffort ? { effort: input.yourEffort } : {}) };
+  const helpers = helperStarts(placed, you, manager); // 0.15.1: one helper, a helper each, or none
   // The project's checks (0.14): set with this plan, or as set before for this folder.
   const folder = input.folder ?? null;
   if (folder && input.checks?.length) setChecks(folder, input.checks);
   const checks = checksFor(folder);
-  const base = { task: input.task, manager, parts: placed, totals, split, limits: known ? limits : null, local, codex: codex.why, ...(gem.why ? { gemini: gem.why } : {}), ...(input.private ? { private: true } : {}), you, level: lv.level, folder, checks };
+  const base = { task: input.task, manager, parts: placed, totals, split, limits: known ? limits : null, local, codex: codex.why, ...(gem.why ? { gemini: gem.why } : {}), ...(input.private ? { private: true } : {}), you, ...(picksPerPart(manager) ? { starts: helpers.starts, batch: helpers.batch } : {}), level: lv.level, folder, checks };
   const result: PlanResult = { id: randomId(), ...base, table: tableOf(base), next: `${nextOf(base)}${ownSplit ? ` ${OWN_SPLIT}` : ""}` };
   for (const p of result.parts) { const m = modelText(p, result); p.words = { model: m.text, role: m.role, cost: costText(p, result) }; }
   keep(result, new Map(input.files.filter((f) => f.path).map((f) => [f.name, { path: f.path!, size: f.size }])));
