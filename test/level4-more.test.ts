@@ -6,7 +6,7 @@ import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { forgetPlans, gradePart, makePlan, PATCH_ASK, picksPerPart, runView, startRun } from "../src/planner";
-import { JOB_DEFAULTS } from "../src/settings";
+import { HELPER_DEFAULTS, JOB_DEFAULTS, saveSettings } from "../src/settings";
 import { ALL_TICKED, boot, fake, keys, reset } from "./app";
 
 beforeAll(async () => { await boot(); });
@@ -82,6 +82,7 @@ describe("level 4 sends more out", () => {
 
   test("Claude Desktop and Cowork hear which of Claude's models a part that stays should run on, and to do it themselves when they cannot start a helper", async () => {
     expect([picksPerPart("Claude Code"), picksPerPart("Claude"), picksPerPart("Cowork"), picksPerPart("Codex")]).toEqual([true, true, true, false]);
+    saveSettings({ claudeHelpers: { ...HELPER_DEFAULTS, starts: "each" } }); // a helper for each part (0.15.1: one per prompt by default)
     const r = await plan(2, "Claude");
     const mine = r.parts.filter((p) => p.where === "you");
     expect(mine.length).toBeGreaterThan(0);

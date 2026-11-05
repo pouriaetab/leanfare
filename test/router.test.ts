@@ -2,13 +2,17 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { guessTask, pickModel, resolveModel } from "../src/router";
 import { getModel, loadCatalog, type Model } from "../src/data";
-import { FIXTURE } from "./app";
+import { FIXTURE, boot, reset } from "./app";
 
 const ask = (text: string) => [{ role: "user", content: text }];
 const none = () => null;
 let all: Model[] = [];
 
-beforeAll(() => {
+// Its own database and settings (0.15.1): run alone it had no database open, and after a file that turned a free plan on
+// it priced that provider's models at $0, so the picks changed with the order of the files.
+beforeAll(async () => {
+  await boot();
+  await reset();
   loadCatalog(FIXTURE);
   all = ["anthropic/claude-sonnet-4-6", "anthropic/claude-haiku-4-5", "openai/gpt-5-mini", "google/gemini-3.8-flash", "deepseek/deepseek-v4-flash", "xai/grok-4.20-beta", "mistral/mistral-large-4", "openai/gpt-4o", "openai/gpt-unrated"].map((id) => getModel(id)!);
 });

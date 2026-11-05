@@ -25,9 +25,12 @@ export const covers = (p: Plan, month: string) => (!p.since || p.since <= month)
 
 // Claude's own models for the parts a Claude app keeps (0.15, claudeladder.ts): on, Leanfare sets each helper's model;
 // top, the strongest one takes the hardest parts and the final check, while the week is under topUntil percent used
-// and for at most topPerDay helpers a day.
-export interface ClaudeHelpers { on: boolean; top: boolean; topUntil: number; topPerDay: number }
-export const HELPER_DEFAULTS: ClaudeHelpers = { on: true, top: true, topUntil: 80, topPerDay: 20 };
+// and for at most topPerDay helpers a day. starts (0.15.1): how many helpers a plan asks for, where the app asks you
+// before each one: a helper for each part on another model (each), one for all of them (once), or none (never).
+export type HelperStarts = "each" | "once" | "never";
+export const HELPER_STARTS: HelperStarts[] = ["each", "once", "never"];
+export interface ClaudeHelpers { on: boolean; top: boolean; topUntil: number; topPerDay: number; starts: HelperStarts }
+export const HELPER_DEFAULTS: ClaudeHelpers = { on: true, top: true, topUntil: 80, topPerDay: 20, starts: "once" };
 
 export interface Settings {
   mode: Mode;
@@ -223,11 +226,12 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
   }
   if ("claudeHelpers" in p) {
     const h = p.claudeHelpers;
-    if (h === null || typeof h !== "object" || Array.isArray(h)) return { error: "claudeHelpers must be an object like {\"on\": true, \"top\": true, \"topUntil\": 80, \"topPerDay\": 20}" };
+    if (h === null || typeof h !== "object" || Array.isArray(h)) return { error: "claudeHelpers must be an object like {\"on\": true, \"top\": true, \"topUntil\": 80, \"topPerDay\": 20, \"starts\": \"once\"}" };
     const next = { ...HELPER_DEFAULTS, ...(settings().claudeHelpers ?? {}) };
     for (const k of ["on", "top"] as const) if (k in h) { if (typeof h[k] !== "boolean") return { error: `claudeHelpers.${k} must be true or false` }; next[k] = h[k]; }
     if ("topUntil" in h) { if (!Number.isInteger(h.topUntil) || h.topUntil < 0 || h.topUntil > 100) return { error: "claudeHelpers.topUntil must be a whole percent from 0 to 100" }; next.topUntil = h.topUntil; }
     if ("topPerDay" in h) { if (!Number.isInteger(h.topPerDay) || h.topPerDay < 0 || h.topPerDay > 1000) return { error: "claudeHelpers.topPerDay must be a whole number from 0 to 1,000" }; next.topPerDay = h.topPerDay; }
+    if ("starts" in h) { if (!HELPER_STARTS.includes(h.starts)) return { error: "claudeHelpers.starts must be each, once or never" }; next.starts = h.starts; }
     out.claudeHelpers = next;
   }
   if ("sideBySide" in p) { if (![0, 5, 10, 20].includes(p.sideBySide)) return { error: "sideBySide must be 0 (off), 5, 10 or 20" }; out.sideBySide = p.sideBySide; }

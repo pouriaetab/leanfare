@@ -37,9 +37,12 @@ export function helperPick(a: HelperAsk): HelperAnswer {
   const found = partForHelper(words, a.app);
   const rungs = a.app === "Claude Code" ? claudeRungs().filter((r) => ALIASES.has(r.family)) : claudeRungs();
   let pick: ClaudePick | null = null, from: HelperAnswer["from"] = "guess", kind: string, effort: "low" | "medium" | "high", top: boolean;
-  if (found) {
-    ({ kind, effort } = found.part);
-    top = !!found.part.top;
+  // 0.15.1: a part that goes to one helper with others runs on the model of the batch's lead part, the strongest they need.
+  const b = found?.plan.batch && found.plan.batch.parts.includes(found.part.n) ? found.plan.batch : null;
+  const part = found ? (b ? found.plan.parts.find((p) => p.n === b.lead) ?? found.part : found.part) : null;
+  if (found && part) {
+    ({ kind, effort } = part);
+    top = !!part.top;
     pick = pickClaude(kind, effort, top, rungs);
     from = "plan";
   } else {
@@ -47,10 +50,10 @@ export function helperPick(a: HelperAsk): HelperAnswer {
     pick = pickClaude(kind, effort, top, rungs);
   }
   if (!pick) return { id: null, model: null, label: null, family: null, why: "llmledger's catalogue has no rated Claude model yet", from, top };
-  const why = from === "plan" ? `part ${found!.part.n} of plan ${found!.plan.id}: ${pick.why}` : `a ${kind} helper at ${effort} effort${top ? ", the final check" : ""}: ${pick.why}`;
+  const why = from === "plan" ? `${b ? `parts ${b.parts.join(", ")} of plan ${found!.plan.id}, on one helper` : `part ${found!.part.n} of plan ${found!.plan.id}`}: ${pick.why}` : `a ${kind} helper at ${effort} effort${top ? ", the final check" : ""}: ${pick.why}`;
   const day = localDay(), ts = now().toISOString();
   const r = db.query("INSERT INTO helpers(ts, day, app, session, plan, part, kind, effort, top, family, model, label, asked, why) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id")
-    .get(ts, day, a.app ?? "Claude", a.session ?? null, found?.plan.id ?? null, found?.part.n ?? null, kind, effort, top ? 1 : 0, pick.rung.family, pick.rung.id, pick.rung.label, a.asked ?? null, why) as { id: number };
+    .get(ts, day, a.app ?? "Claude", a.session ?? null, found?.plan.id ?? null, part?.n ?? null, kind, effort, top ? 1 : 0, pick.rung.family, pick.rung.id, pick.rung.label, a.asked ?? null, why) as { id: number };
   return { id: r.id, model: nameFor(pick), label: pick.rung.label, family: pick.rung.family, why, from, top: pick.top };
 }
 

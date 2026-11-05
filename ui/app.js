@@ -3585,9 +3585,10 @@
   // The helpers (subagents) Claude starts run on Leanfare's pick: the newest of each Claude family llmledger lists, in
   // the order the ratings and prices give, and your rules for the strongest one.
   async function loadClaudeModels() { try { S.claudeModels = await api("/api/claude-models"); } catch { S.claudeModels = { rungs: [], picks: {}, rules: null, today: [] }; } renderSettings(); }
+  const HELPER_STARTS = [["each", "One per part", "Helpers: one for each part on another model."], ["once", "One per prompt", "Helpers: one per prompt, for all the parts on other models."], ["never", "None", "Helpers: none. Claude does every part in the chat."]];
   function claudeModelsSettingEl(s) {
     if (S.claudeModels === undefined) { S.claudeModels = null; loadClaudeModels(); }
-    const v = S.claudeModels, rules = (v && v.rules) || s.claudeHelpers || { on: true, top: true, topUntil: 80, topPerDay: 20 };
+    const v = S.claudeModels, rules = { starts: "once", ...((v && v.rules) || s.claudeHelpers || { on: true, top: true, topUntil: 80, topPerDay: 20 }) };
     const save = (patch, done) => patchSettings({ claudeHelpers: { ...rules, ...patch } }, done).then(() => loadClaudeModels());
     const price = (r) => (r.input === null || r.output === null ? "" : `$${r.input} / $${r.output}`);
     const picks = v && v.picks && v.picks.code ? [["The hardest parts and final checks", v.picks.reason?.top], ["High effort", v.picks.reason?.high], ["Medium effort", v.picks.reason?.medium], ["Light code", v.picks.code?.low], ["Light reading", v.picks.read?.low]] : [];
@@ -3602,6 +3603,11 @@
       picks.length ? h("p", { class: "note cm-picks", text: picks.filter(([, m]) => m).map(([what, m]) => `${what}: ${m}`).join(" · ") }) : null,
       switchRow(rules.on !== false, "Leanfare sets each helper's model", "Off: a helper runs on the model Claude picks (the chat's own, unless the call names one).",
         (on) => save({ on }, on ? "Leanfare sets each helper's model." : "Claude picks its helpers' models again.")),
+      // 0.15.1: how many helpers a plan asks for (Cowork can ask you before each one).
+      h("div", { class: "job-row cm-starts" }, h("span", { class: "pname", text: "Helpers" }),
+        h("div", { class: "seg", role: "group", "aria-label": "Helpers for a plan's parts" }, ...HELPER_STARTS.map(([k, word, said]) =>
+          h("button", { type: "button", "aria-pressed": String(rules.starts === k), text: word, onclick: () => save({ starts: k }, said) })))),
+      h("p", { class: "note", text: "Cowork can ask you before each helper starts. One per prompt: one helper takes the parts that need a stronger model than the chat's (when none do, the light ones), and the rest run in the chat. None: Claude does every part in the chat, on its own model." }),
       switchRow(rules.top !== false, "The strongest one for the hardest parts and final checks", "When the votes cannot tell two models apart, the bigger one takes these; Claude does not say how much of one model is left, so the rules below hold it back.",
         (on) => save({ top: on }, on ? "The strongest model takes the hardest parts." : "The hardest parts take the next strongest.")),
       h("div", { class: "row cm-caps" }, h("span", { class: "note", text: "Only while the week is under" }), num(rules.topUntil, 0, 100, "Week used, at most (percent)", "topUntil"), h("span", { class: "note", text: "% used, and at most" }),
