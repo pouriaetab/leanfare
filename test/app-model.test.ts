@@ -31,8 +31,9 @@ describe("the model an app says it runs on", () => {
     expect(mine.length).toBeGreaterThan(0);
     for (const l of mine) expect(l).toContain("| Claude Max |"); // the subscription it counts in, by name
     expect(p.table).not.toMatch(/\byou \(|\byour\b/); // 0.15: the model and its role, never "you"
-    // 0.14: Cowork starts helpers on another of Claude's models, the Desktop app's chat cannot: told to do the part itself then
-    expect(p.next).toContain("start a helper (a subagent) with that model if your app can (model: haiku, sonnet, opus or fable); if it cannot, do the part yourself.");
+    // 0.14: Cowork starts helpers on another of Claude's models, the Desktop app's chat cannot: told to do the part itself then.
+    // 0.15.1: one helper for them all, by default.
+    expect(p.next).toMatch(/Start one helper \(a subagent\) for parts [\d, and]+ together, on Claude \w+ [\d.]+ \(model: \w+\), with each part's title and task in its prompt.*; if your app cannot start one, do them yourself\./);
   });
 
   test("Claude Code can run a part on another model in a subagent, so its plan still names the one to use", async () => {

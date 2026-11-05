@@ -2,9 +2,9 @@
 // table. The split by a model and by rules, where each part goes, and the plan's limits.
 import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { chainSeconds, checkPlan, forgetPlans, gradePart, keptPlan, makePlan, modelInYourApp, nothingOut, paidOf, readSplit, rulesSplit, runView, SIZE_TOKENS, SPLIT_SYSTEM, splitView, startRun, stopRun, tableOf, type Part } from "../src/planner";
+import { chainSeconds, checkPlan, fileMatcher, forgetPlans, gradePart, keptPlan, makePlan, modelInYourApp, nothingOut, paidOf, readSplit, rulesSplit, runView, SIZE_TOKENS, SPLIT_SYSTEM, splitView, startRun, stopRun, tableOf, type Part } from "../src/planner";
 import { saveSettings } from "../src/settings";
 import { saveSnap } from "../src/statusline";
 import { ALL_TICKED, boot, fake, keys, ledger, reset, ui } from "./app";
@@ -72,6 +72,30 @@ describe("reading the split", () => {
     expect(checkPlan({ task: "x", files: [{ name: "a" }] })).toBe("Each file needs a name and its size in bytes.");
     expect(checkPlan({ task: " do it ", files: [{ name: "a.ts", size: 10 }], manager: "Claude Code", split: "rules" })).toEqual({ task: "do it", files: [{ name: "a.ts", size: 10 }], manager: "Claude Code", split: "rules" });
   });
+
+  // 0.15.1: Leanfare names a plan's files relative to the folder it measured them in, and an app often names a part's
+  // files by their full path: those parts lost their files and went out with none.
+  test("a part's files as the app wrote them: the name, the full path, ~, the project's path or a folder, matched to the plan's names", () => {
+    const home = homedir().replace(/\\/g, "/");
+    const files = [{ name: "Users/you/app/src/a.ts", size: 10, path: "/Users/you/app/src/a.ts" }, { name: "Users/you/app/src/b.ts", size: 20, path: "/Users/you/app/src/b.ts" },
+      { name: "Users/you/app/README.md", size: 5, path: "/Users/you/app/README.md" }, { name: "~/notes/todo.md", size: 3, path: `${home}/notes/todo.md` }];
+    const m = fileMatcher(files, "/Users/you/app");
+    expect(m("/Users/you/app/src/a.ts")).toEqual(["Users/you/app/src/a.ts"]); // the full path
+    expect(m("Users/you/app/src/a.ts")).toEqual(["Users/you/app/src/a.ts"]); // the plan's own name
+    expect(m("src/b.ts")).toEqual(["Users/you/app/src/b.ts"]); // inside the project's folder
+    expect(m("./README.md")).toEqual(["Users/you/app/README.md"]);
+    expect(m("~/notes/todo.md")).toEqual(["~/notes/todo.md"]);
+    expect(m(`${home}/notes/todo.md`)).toEqual(["~/notes/todo.md"]);
+    expect(m("/Users/you/app/src")).toEqual(["Users/you/app/src/a.ts", "Users/you/app/src/b.ts"]); // a folder: every file in it
+    expect(m("src/")).toEqual(["Users/you/app/src/a.ts", "Users/you/app/src/b.ts"]);
+    expect(m("C:\\Users\\me\\app\\README.md")).toEqual([]); // not one of them
+    expect(m("/private/Users/you/app/src/a.ts")).toEqual([]);
+    expect(fileMatcher(files, null)("app/src/a.ts")).toEqual(["Users/you/app/src/a.ts"]); // the end of exactly one path
+    expect(fileMatcher(files, null)("a.md")).toEqual([]);
+    // The app's own split keeps them now.
+    const v = checkPlan({ task: "Fix it", files, folder: "/Users/you/app", parts: [{ title: "Read the code", kind: "read", effort: "low", files: ["/Users/you/app/src/a.ts", "src/b.ts", "/elsewhere/c.ts"], task: "Read it" }] }, true);
+    expect(typeof v === "string" ? v : v.parts![0].files).toEqual(["Users/you/app/src/a.ts", "Users/you/app/src/b.ts"]);
+  });
 });
 
 describe("where each part runs", () => {
@@ -97,7 +121,8 @@ describe("where each part runs", () => {
     expect(r.table).not.toMatch(/\byou \(|your plan/);
     expect(r.table).toContain("after 3");
     expect(r.next).toContain("Run part 1 now with delegate");
-    expect(r.next).toContain("Do these yourself: part 3 on Claude Sonnet 4.6, part 4 on Claude Sonnet 4.6");
+    // 0.15.1: one helper per prompt (the default) for the parts on another of Claude's models.
+    expect(r.next).toContain("Use one subagent for parts 3 and 4 together, on Claude Sonnet 4.6 (model: sonnet), with each part's title and task in its prompt");
     // The split itself is one answer in the ledger, as "plan", with no words.
     const rows = ledger().filter((x: any) => x.source === "plan");
     expect(rows.length).toBe(1);
@@ -448,7 +473,7 @@ describe("the model to pick in your app", () => {
     expect(plan.table).toContain("| 1 | Look up how its router works | search, medium | Claude Sonnet 4.6 (platform model) |");
     expect(plan.table).not.toContain("your model");
     expect(plan.table).toContain("Nothing goes to Leanfare: tick Perplexity Sonar in Leanfare and the searches go out; name the files or folder it is about and the reading goes out.");
-    expect(plan.next).toContain("Do these yourself: part 1 on Claude Sonnet 4.6, part 2 on Claude Sonnet 4.6, part 3 on Claude Sonnet 4.6. For a part on another model than the one you run on, use a subagent with that model (model: haiku, sonnet, opus or fable).");
+    expect(plan.next).toContain("Use one subagent for parts 1, 2 and 3 together, on Claude Sonnet 4.6 (model: sonnet), with each part's title and task in its prompt, once the parts they need are back.");
     expect(nothingOut([{ kind: "code", where: "you", files: ["a.ts"] }])).toBe("Nothing goes to Leanfare: every part changes the project or needs the hardest judgement.");
   });
 

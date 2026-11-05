@@ -41,7 +41,7 @@ test("the order today, each kind's pick, and the switches", async () => {
   expect(sw("Leanfare sets each helper's model").getAttribute("aria-checked")).toBe("true");
   sw("The strongest one for the hardest parts and final checks").click();
   await waitFor(() => settings().claudeHelpers?.top === false);
-  expect(settings().claudeHelpers).toEqual({ on: true, top: false, topUntil: 80, topPerDay: 20 });
+  expect(settings().claudeHelpers).toEqual({ on: true, top: false, topUntil: 80, topPerDay: 20, starts: "once" });
   // With the strongest turned off, the hardest parts show the next strongest.
   await waitFor(() => !!doc.querySelector(".cm-picks")?.textContent.startsWith("The hardest parts and final checks: Claude Opus 5.5"));
   expect(doc.querySelector(".cm-picks").textContent).toStartWith("The hardest parts and final checks: Claude Opus 5.5");
@@ -61,5 +61,19 @@ test("your caps for the strongest one: the week's percent and how many a day", a
   expect(settings().claudeHelpers?.topPerDay).toBe(20);
   doc.querySelector(`#claudeModelsSetting [aria-label="Leanfare sets each helper's model"]`).click();
   await waitFor(() => settings().claudeHelpers?.on === false);
-  expect(settings().claudeHelpers).toEqual({ on: false, top: true, topUntil: 65, topPerDay: 20 });
+  expect(settings().claudeHelpers).toEqual({ on: false, top: true, topUntil: 65, topPerDay: 20, starts: "once" });
+});
+
+// 0.15.1: Cowork can ask before each helper starts, so you choose how many a plan asks for.
+test("Helpers: one per part, one per prompt (the default) or none, saved with one press", async () => {
+  const doc = await card();
+  const seg = doc.querySelector('#claudeModelsSetting .seg[aria-label="Helpers for a plan\'s parts"]');
+  const buttons = () => [...seg.querySelectorAll("button")].map((b: any) => [b.textContent, b.getAttribute("aria-pressed")]);
+  expect(buttons()).toEqual([["One per part", "false"], ["One per prompt", "true"], ["None", "false"]]);
+  expect(doc.querySelector("#claudeModelsSetting .cm-starts + .note").textContent).toStartWith("Cowork can ask you before each helper starts.");
+  [...seg.querySelectorAll("button")].find((b: any) => b.textContent === "None").click();
+  await waitFor(() => settings().claudeHelpers?.starts === "never");
+  expect(settings().claudeHelpers).toEqual({ on: true, top: true, topUntil: 80, topPerDay: 20, starts: "never" });
+  await waitFor(() => doc.querySelector('#claudeModelsSetting .seg[aria-label="Helpers for a plan\'s parts"] button[aria-pressed="true"]')?.textContent === "None");
+  expect(doc.querySelector('#claudeModelsSetting .seg[aria-label="Helpers for a plan\'s parts"] button[aria-pressed="true"]').textContent).toBe("None");
 });

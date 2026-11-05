@@ -178,6 +178,7 @@ describe("a helper's model, as the mod and Claude Code's hook ask for it", () =>
 
   test("a helper for a part of the plan: the part's own kind and effort, and the plan and part kept with it", async () => {
     addClaude();
+    saveSettings({ claudeHelpers: { ...HELPER_DEFAULTS, starts: "each" } }); // a helper for each part (0.15.1: one per prompt by default)
     const r = await makePlan({ task: "Fix the failing tests in the parser", files: [], manager: "Claude Code", split: "rules", signal: new AbortController().signal });
     const part = r.parts.find((p) => p.title === "Make the changes and run the tests")!;
     expect(part.where).toBe("you");
@@ -187,6 +188,70 @@ describe("a helper's model, as the mod and Claude Code's hook ask for it", () =>
     expect(db.query("SELECT plan, part, kind, effort FROM helpers WHERE id = ?").get(a.json.id)).toEqual({ plan: r.id, part: part.n, kind: "code", effort: "high" });
     // Another app's plan is not this helper's.
     expect((await ui(url, "/api/helper", { app: "Codex", description: "Make the changes and run the tests" })).json.from).toBe("guess");
+  });
+
+  // 0.15.1: Cowork can ask before each helper starts, so by default a plan asks for one helper: the parts on other
+  // models than yours go to it together, on the strongest model they need; or none, every part in the chat.
+  const coding = () => makePlan({ task: "Fix the failing tests in the parser", files: [], manager: "Claude", split: "rules", yourModel: "claude-sonnet-5-5", signal: new AbortController().signal });
+  test("one helper per prompt (the default): the parts that need a stronger model than yours go to one helper, on the strongest they need; the others run in the chat", async () => {
+    addClaude();
+    expect(settings().claudeHelpers?.starts).toBe("once");
+    const r = await coding(); // you run on Sonnet 5.5
+    const on = (label: string) => r.parts.filter((p) => p.where === "you" && p.use?.label === label).map((p) => p.n);
+    const strong = on("Claude Fable 5.1"), light = on("Claude Sonnet 5.5");
+    expect(strong.length).toBeGreaterThan(1); // the hardest part on Fable 5.1, and the high effort ones (Opus 5.5 on their own) with it
+    expect(light.length).toBeGreaterThan(0); // the light ones stay with Sonnet 5.5, in the chat
+    expect(on("Claude Opus 5.5")).toEqual([]);
+    expect(r.batch).toEqual({ parts: strong, lead: r.parts.find((p) => p.top)!.n }); // the hardest part leads
+    expect(r.table).toContain("Claude Fable 5.1 (platform model)");
+    expect(r.table).toContain("Claude Sonnet 5.5 (main model)");
+    const names = (ns: number[]) => (ns.length === 1 ? `part ${ns[0]}` : `parts ${ns.slice(0, -1).join(", ")} and ${ns.at(-1)}`);
+    expect(r.next).toContain(`Start one helper (a subagent) for ${names(strong)} together, on Claude Fable 5.1 (model: fable), with each part's title and task in its prompt`);
+    expect(r.next).toContain(`Do ${names(light)} yourself in this chat.`);
+    // The helper's words name a part of the batch: it runs on the batch's model, and the row keeps the lead part.
+    const lead = r.parts.find((p) => p.n === r.batch!.lead)!, other = r.parts.find((p) => p.n === strong.find((n) => n !== lead.n))!;
+    const a = await ui(url, "/api/helper", { app: "Claude", description: "Parts of the plan", task: `${other.title}: ${other.task}\n${lead.title}: ${lead.task}` });
+    expect(a.json).toMatchObject({ model: "fable", label: "Claude Fable 5.1", from: "plan", top: true });
+    expect(a.json.why).toStartWith(`parts ${strong.join(", ")} of plan ${r.id}, on one helper: `);
+    expect(db.query("SELECT plan, part FROM helpers WHERE id = ?").get(a.json.id)).toEqual({ plan: r.id, part: lead.n });
+    // On Opus 5.5 only the hardest part needs a stronger model: one helper for it, the rest in the chat on Opus.
+    const opus = await makePlan({ task: "Fix the failing tests in the parser", files: [], manager: "Claude", split: "rules", yourModel: "claude-opus-5-5", signal: new AbortController().signal });
+    const top = opus.parts.find((p) => p.top)!;
+    expect(opus.batch).toEqual({ parts: [top.n], lead: top.n });
+    expect(opus.parts.filter((p) => p !== top).every((p) => p.use?.label === "Claude Opus 5.5")).toBe(true);
+    expect(opus.next).toContain(`Start one helper (a subagent) for part ${top.n}, on Claude Fable 5.1 (model: fable), with the part's title and task in its prompt, once the parts it needs are back; if your app cannot start one, do it yourself.`);
+    // On Fable 5.1 none does: the one helper takes the parts a lighter model can do, on the strongest of those.
+    const fable = await makePlan({ task: "Fix the failing tests in the parser", files: [], manager: "Claude", split: "rules", yourModel: "claude-fable-5-1", signal: new AbortController().signal });
+    expect(fable.batch!.parts).toEqual(fable.parts.filter((p) => !p.top).map((p) => p.n));
+    expect(fable.next).toContain("together, on Claude Opus 5.5 (model: opus)");
+    expect(fable.next).toContain(`Do part ${fable.parts.find((p) => p.top)!.n} yourself in this chat.`);
+  });
+
+  test("a helper for each part, or none: each part on its own model, or every part in the chat on yours", async () => {
+    addClaude();
+    saveSettings({ claudeHelpers: { ...HELPER_DEFAULTS, starts: "each" } });
+    const each = await coding();
+    expect(each.batch).toBeNull();
+    expect(new Set(each.parts.filter((p) => p.where === "you" && !p.keep).map((p) => p.use?.label)).size).toBeGreaterThan(1);
+    expect(each.next).toContain("start a helper (a subagent) with that model if your app can");
+    saveSettings({ claudeHelpers: { ...HELPER_DEFAULTS, starts: "never" } });
+    const none = await coding();
+    const mine = none.parts.filter((p) => p.where === "you");
+    expect(none.batch).toBeNull();
+    for (const p of mine) expect(p.use?.label ?? "Claude Sonnet 5.5").toBe("Claude Sonnet 5.5");
+    expect(none.table).not.toContain("(platform model)");
+    expect(none.table).toContain("Claude Sonnet 5.5 (main model)");
+    expect(none.next).toContain(`Do these yourself in this chat, without a helper (Leanfare's setting): parts ${mine.map((p) => p.n).slice(0, -1).join(", ")} and ${mine.at(-1)!.n}.`);
+    expect(none.next).not.toContain("helper (a subagent)");
+    // Claude Code's plans follow it too; the other apps run one model a chat, as before.
+    expect((await makePlan({ task: "Fix the failing tests in the parser", files: [], manager: "Claude Code", split: "rules", signal: new AbortController().signal })).next).toContain("yourself in this chat, without a helper");
+    expect((await makePlan({ task: "Fix the failing tests in the parser", files: [], manager: "Codex", split: "rules", signal: new AbortController().signal })).starts).toBeUndefined();
+  });
+
+  test("Settings, Helpers: each, once or never, checked", async () => {
+    expect((await ui(url, "/api/settings", { claudeHelpers: { starts: "always" } })).json.error).toBe("claudeHelpers.starts must be each, once or never");
+    expect((await ui(url, "/api/settings", { claudeHelpers: { starts: "never" } })).status).toBe(200);
+    expect(settings().claudeHelpers?.starts).toBe("never");
   });
 
   test("a new family above Fable: the mod gets its full id; Claude Code, whose Agent tool takes haiku, sonnet, opus or fable, gets the strongest it can name", async () => {
@@ -236,7 +301,7 @@ describe("a helper's model, as the mod and Claude Code's hook ask for it", () =>
     }
     expect((await ui(url, "/api/settings", { claudeHelpers: { topUntil: 70 } })).status).toBe(200);
     expect((await ui(url, "/api/settings", { claudeHelpers: { top: false } })).status).toBe(200);
-    expect(settings().claudeHelpers).toEqual({ on: true, top: false, topUntil: 70, topPerDay: 20 });
+    expect(settings().claudeHelpers).toEqual({ on: true, top: false, topUntil: 70, topPerDay: 20, starts: "once" });
   });
 });
 
