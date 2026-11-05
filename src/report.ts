@@ -7,10 +7,15 @@
 // Tokens an app used are counted as new tokens: its input not read again from its cache, its cache writes and its
 // output. Re-reads from the cache are shown apart: each turn reads the whole conversation again, and counting those
 // would bury everything else. A file Leanfare read instead would have been new input for the app.
+//
+// 0.15: each prompt also has its main model's own tokens and its effort where the app says it, and Claude's helpers
+// (subagents) with theirs: Claude Code's from its subagents' files, Cowork's and Claude Desktop's as the leanfare-level
+// mod says them (helpers.ts). There each main turn the mod reports is a prompt, with the hand offs made during it.
 import { basename } from "node:path";
 import { CODEX_ID } from "./codex";
 import { getModel } from "./data";
 import { db } from "./db";
+import { familyOf } from "./claudeladder";
 import { modelStats, type ModelStat } from "./modelstats";
 import { modelName, planFor } from "./planner";
 import { recentEntries, recentPrompts } from "./plans";
@@ -52,6 +57,9 @@ export interface AloneSample { model: string; label: string; verdict: "same" | "
 // a thinking text, about four characters a token. calls: answers, second tries, checks and side by side, failed ones too.
 export interface Used { read: number; thought: number | null; wrote: number; calls: number; failed: number; estimated: boolean; byRole: Partial<Record<"answer" | "check" | "side", { read: number; thought: number | null; wrote: number; calls: number }>> }
 export interface Own { fresh: number; cached: number; input: number; output: number }
+// One of Claude's own models on helpers in a prompt (0.15): its model, its effort and kind of work where known, how many
+// helpers ran on it, and their tokens counted as the app's are (fresh: new input and written; cached apart).
+export interface HelperUse { model: string; label: string; effort: string | null; kind: string | null; n: number; fresh: number; cached: number; input: number; output: number }
 export interface ReportPrompt {
   key: string; // what the id is kept under: the session's file and the prompt's time, or a group's first hand off
   id: string | null; // PRM-41: given once and kept (prompts); null only when the database could not be written
@@ -64,7 +72,11 @@ export interface ReportPrompt {
   both: { alone: Est; spent: number; saved: Est } | null; // its parts' both sides, summed (null: nothing handed off)
   together: Grade | null; togetherBy: "app" | "you" | null; // its whole result, the app and the hand offs together
   alone: { grade: Grade | null; samples: number } | null; // the app alone, from its parts' samples (null: none sampled)
+  effort: string | null; // 0.15: the main model's thinking effort, as the app said it (null: not said)
+  main: Own | null; // 0.15: the main model's own tokens, helpers apart (null: the app does not say)
+  helpers: HelperUse[]; // 0.15: Claude's helpers, by model and kind
 }
+export const PROMPTS_MAX = 5000; // the prompts a report sends at most (it was 200): the page shows them a page at a time
 
 // From and to of a range, by this computer's clock: today starts at local midnight.
 export function rangeOf(r: Range, at = now().getTime()): { from: number; to: number } {
@@ -177,11 +189,11 @@ function sampleTokens(from: number, to: number): Map<string, number> {
 }
 
 // The hand offs and plan parts in a span (finished ones), each with its grade: the app's, else the check's verdict.
-function partsIn(from: number, to: number): (ReportPart & { app: string | null; appModel: string | null; at: number })[] {
+function partsIn(from: number, to: number): (ReportPart & { app: string | null; appModel: string | null; appEffort: string | null; at: number })[] {
   const used = usedIn(from, to);
   const samples = sampleTokens(from, to);
   const rows = db.query(`SELECT d.id, d.ts, d.kind, d.model, d.rerun, d.cost, d.check_cost, d.rerun_cost, d.file_tokens, d.task_tokens, d.answer_tokens, d.verdict, d.checker, d.grade, d.plan, d.app, d.app_model, d.ms, d.job,
-      d.ask_tokens, d.reply_tokens, d.together, d.together_by, d.level, d.fixed, d.fix_of, (SELECT 1 FROM words w WHERE w.handoff = d.id) AS kept_words,
+      d.ask_tokens, d.reply_tokens, d.together, d.together_by, d.level, d.fixed, d.fix_of, d.app_effort, (SELECT 1 FROM words w WHERE w.handoff = d.id) AS kept_words,
       c.verdict AS side, COALESCE(c.top_cost, 0) + COALESCE(c.judge_cost, 0) AS side_cost, c.app_alone, c.top_model
     FROM delegations d LEFT JOIN comparisons c ON c.handoff = d.id AND c.verdict IN ('same', 'better', 'worse')
     WHERE d.status = 'ok' AND d.ts >= ? AND d.ts < ? ORDER BY d.ts, d.id`).all(new Date(from).toISOString(), new Date(to).toISOString()) as any[];
@@ -198,7 +210,7 @@ function partsIn(from: number, to: number): (ReportPart & { app: string | null; 
       cost: r.cost === null && !parts.length ? null : parts.reduce((a, b) => a + b, 0) + (r.side_cost ?? 0), ms: r.ms ?? null,
       grade, gradedBy: grade === null ? null : ["good", "partly", "wrong"].includes(r.grade) ? "app" : "check",
       check: r.verdict === "pass" || r.verdict === "fail" ? r.verdict : null, checker: r.checker ? labelOf(r.checker) : null,
-      side: r.side ?? null, plan: r.plan ? String(r.plan).split(":")[0] : null, app: r.app ?? null, appModel: r.app_model ?? null,
+      side: r.side ?? null, plan: r.plan ? String(r.plan).split(":")[0] : null, app: r.app ?? null, appModel: r.app_model ?? null, appEffort: r.app_effort ?? null,
       used: used1,
       both: bothOf({ read, back, used: used1, ask: r.ask_tokens ?? null, reply: r.reply_tokens ?? null }),
       together: ["good", "partly", "wrong"].includes(r.together) ? r.together : null, togetherBy: r.together ? (r.together_by === "you" ? "you" : "app") : null,
@@ -211,6 +223,45 @@ function partsIn(from: number, to: number): (ReportPart & { app: string | null; 
 }
 
 const KIND_ORDER = ["read", "write", "reason", "search", "other"];
+
+// ---- 0.15: the main model's own tokens, Claude's helpers and the main turns of Cowork and Claude Desktop ---------
+const zeroOwn = (): Own => ({ fresh: 0, cached: 0, input: 0, output: 0 });
+function addOwn(o: Own, u: { uncached: number; cacheWrite: number; cacheWrite1h?: number; cacheRead: number; output: number }) {
+  o.fresh += freshOf(u); o.cached += u.cacheRead; o.input += u.uncached + u.cacheWrite + (u.cacheWrite1h ?? 0); o.output += u.output;
+}
+const sumOwn = (os: Own[]): Own => os.reduce((a, o) => ({ fresh: a.fresh + o.fresh, cached: a.cached + o.cached, input: a.input + o.input, output: a.output + o.output }), zeroOwn());
+// The most common of some words, or null when there are none.
+function most(xs: (string | null | undefined)[]): string | null {
+  const n = new Map<string, number>();
+  for (const x of xs) if (x) n.set(x, (n.get(x) ?? 0) + 1);
+  return [...n.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+}
+function rowsOf<T>(sql: string, from: number, to: number): T[] {
+  try { return db.query(sql).all(new Date(from).toISOString(), new Date(to).toISOString()) as T[]; } catch { return []; } // the database busy
+}
+interface HelperRow { id: number; ts: string; app: string; session: string | null; kind: string | null; effort: string | null; family: string | null; model: string; label: string | null; input: number; cached: number; output: number }
+interface TurnRow { id: number; ts: string; app: string; session: string | null; model: string; effort: string | null; input: number; cached: number; output: number }
+// Helpers by model and kind of work, with their tokens.
+function helperUses(rows: HelperRow[]): HelperUse[] {
+  const by = new Map<string, HelperRow[]>();
+  for (const r of rows) { const k = `${r.model}|${r.kind ?? ""}`; by.set(k, [...(by.get(k) ?? []), r]); }
+  return [...by.values()].map((rs) => {
+    const input = rs.reduce((n, r) => n + (r.input ?? 0), 0), cached = rs.reduce((n, r) => n + (r.cached ?? 0), 0), output = rs.reduce((n, r) => n + (r.output ?? 0), 0);
+    return { model: rs[0].model, label: modelName(rs[0].model), effort: most(rs.map((r) => r.effort)), kind: rs[0].kind, n: rs.length, fresh: input + output, cached, input, output };
+  }).sort((a, b) => b.fresh - a.fresh || b.n - a.n);
+}
+// The main turns the mod said for Cowork and Claude Desktop: each a prompt, ending when its turn did. A hand off or a
+// helper of that app after the turn before it, up to its end, was made during it.
+function turnsIn(from: number, to: number): (ReportPrompt & { end: number; after: number; rows: HelperRow[] })[] {
+  const last = new Map<string, number>();
+  return rowsOf<TurnRow>("SELECT id, ts, app, session, model, effort, input, cached, output FROM app_turns WHERE ts >= ? AND ts < ? ORDER BY ts, id", from, to).map((r) => {
+    const end = Date.parse(r.ts), after = last.get(r.app) ?? end - ATTACH;
+    last.set(r.app, end);
+    return { key: `t:${r.id}`, id: null, ts: r.ts, app: r.app, thread: null, project: null, model: { id: r.model, label: modelName(r.model) }, plan: planFor(r.app), prompt: null, own: null,
+      parts: [], kept: 0, back: 0, cost: 0, saved: null, grade: null, used: null, both: null, together: null, togetherBy: null, alone: null,
+      effort: r.effort, main: { fresh: r.input + r.output, cached: r.cached, input: r.input, output: r.output }, helpers: [], end, after, rows: [] };
+  });
+}
 const worst = (gs: (Grade | null)[]): Grade | null => (gs.includes("wrong") ? "wrong" : gs.includes("partly") ? "partly" : gs.includes("good") ? "good" : null);
 // A prompt's whole result: the last grade kept with any of its parts. The app alone: the lowest of its parts' samples.
 const togetherOf = (ps: ReportPart[]) => { const x = [...ps].reverse().find((p) => p.together); return { together: x?.together ?? null, togetherBy: x?.togetherBy ?? null }; };
@@ -227,12 +278,13 @@ export async function report(q: ReportQuery, inner = false): Promise<Report> {
   // Each Claude Code prompt runs until the next one of the same session.
   const bySession = new Map<string, typeof prompts>();
   for (const p of prompts) bySession.set(p.file, [...(bySession.get(p.file) ?? []), p]);
-  const cc: (ReportPrompt & { start: number; end: number; models: Map<string, number> })[] = [];
+  const cc: (ReportPrompt & { start: number; end: number; models: Map<string, number>; subs: Map<string, { own: Own; files: Set<string> }> })[] = [];
   for (const [file, ps] of bySession) {
     ps.forEach((p, i) => cc.push({
       key: `cc:${basename(file)}:${p.ts}`, id: null, ts: new Date(p.ts).toISOString(), app: "Claude Code", thread: sessionOf(file), project: p.project,
-      model: null, plan: ccPlan, prompt: Math.ceil(p.chars / 4), own: { fresh: 0, cached: 0, input: 0, output: 0 }, parts: [], kept: 0, back: 0, cost: 0, saved: null, grade: null, used: null, both: null, together: null, togetherBy: null, alone: null,
-      start: p.ts, end: ps[i + 1]?.ts ?? Infinity, models: new Map(),
+      model: null, plan: ccPlan, prompt: Math.ceil(p.chars / 4), own: zeroOwn(), parts: [], kept: 0, back: 0, cost: 0, saved: null, grade: null, used: null, both: null, together: null, togetherBy: null, alone: null,
+      effort: null, main: zeroOwn(), helpers: [],
+      start: p.ts, end: ps[i + 1]?.ts ?? Infinity, models: new Map(), subs: new Map(),
     }));
   }
   const sessionPrompts = new Map<string, typeof cc>();
@@ -241,39 +293,65 @@ export async function report(q: ReportQuery, inner = false): Promise<Report> {
   for (const e of entries) {
     const p = promptOf(e);
     if (!p) continue;
-    p.own!.fresh += freshOf(e.u); p.own!.cached += e.u.cacheRead;
-    p.own!.input += e.u.uncached + e.u.cacheWrite + (e.u.cacheWrite1h ?? 0); p.own!.output += e.u.output;
-    if (!bySubagent(e.file)) p.models.set(e.model, (p.models.get(e.model) ?? 0) + e.u.output + 1); // the main model: the session's own, not a subagent's
+    addOwn(p.own!, e.u);
+    if (!bySubagent(e.file)) { addOwn(p.main!, e.u); p.models.set(e.model, (p.models.get(e.model) ?? 0) + e.u.output + 1); } // the main model: the session's own, not a subagent's
+    else { const sub = p.subs.get(e.model) ?? { own: zeroOwn(), files: new Set<string>() }; addOwn(sub.own, e.u); sub.files.add(e.file); p.subs.set(e.model, sub); } // 0.15: a helper's
   }
+  // Each helper's effort and kind of work, from the model Leanfare picked for it in that session (Claude Code's hook).
+  const helperRows = rowsOf<HelperRow>("SELECT id, ts, app, session, kind, effort, family, model, label, input, cached, output FROM helpers WHERE ts >= ? AND ts < ? ORDER BY ts, id", q.from - DAY, q.to + ATTACH);
   for (const p of cc) {
     const top = [...p.models.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
     if (top) p.model = { id: top, label: modelName(top) };
+    const picked = helperRows.filter((h) => h.app === "Claude Code" && h.session === p.thread && Date.parse(h.ts) >= p.start && Date.parse(h.ts) < p.end);
+    p.helpers = [...p.subs.entries()].map(([model, sub]) => {
+      const mine = picked.filter((h) => h.family === familyOf(model)?.family);
+      return { model, label: modelName(model), effort: most(mine.map((h) => h.effort)), kind: most(mine.map((h) => h.kind)), n: sub.files.size, ...sub.own };
+    }).sort((a, b) => b.fresh - a.fresh);
   }
 
-  // The hand offs: a Claude Code one goes to its prompt; the others, a plan's parts together, are grouped by time.
+  // The hand offs: a Claude Code one goes to its prompt; another app's to the main turn it was made in, when the
+  // leanfare-level mod says that app's turns (0.15); the rest, a plan's parts together, are grouped by time. Claude's
+  // helpers outside Claude Code go the same way.
   const parts = partsIn(q.from - ATTACH, q.to);
   const ccStarts = [...cc].sort((a, b) => a.start - b.start);
-  const others: ReportPrompt[] = [];
-  let open: (ReportPrompt & { last: number; appModel: string | null }) | null = null;
-  for (const part of parts) {
-    if (part.app === "Claude Code") {
+  const turns = turnsIn(q.from - DAY, q.to + ATTACH);
+  const turnFor = (app: string, at: number) => turns.find((t) => t.app === app && at > t.after && at <= t.end);
+  const others: (ReportPrompt & { rows: HelperRow[] })[] = [];
+  let open: (ReportPrompt & { last: number; rows: HelperRow[] }) | null = null;
+  const events = [...parts.map((part) => ({ at: part.at, part, row: null })),
+    ...helperRows.filter((h) => h.app !== "Claude Code").map((row) => ({ at: Date.parse(row.ts), part: null, row }))].sort((a, b) => a.at - b.at);
+  for (const { at, part, row } of events) {
+    if (part?.app === "Claude Code") {
       let host: (typeof cc)[number] | undefined;
       for (const p of ccStarts) { if (p.start <= part.at) host = p; else break; }
       if (host && part.at - host.start <= ATTACH) { host.parts.push(part); continue; }
     }
-    const app = part.app ?? "Unknown app"; // an older Leanfare, or an app that does not say its name
-    const samePlan = open && part.plan && open.parts.some((x) => x.plan === part.plan);
-    if (!open || open.app !== app || (!samePlan && part.at - open.last > GAP)) {
-      open = { key: `h:${part.id}`, id: null, ts: part.ts, app, thread: null, project: null, model: part.appModel ? { id: part.appModel, label: modelName(part.appModel) } : null,
-        plan: planFor(app), prompt: null, own: null, parts: [], kept: 0, back: 0, cost: 0, saved: null, grade: null, used: null, both: null, together: null, togetherBy: null, alone: null, last: part.at, appModel: part.appModel };
+    const app = part ? part.app ?? "Unknown app" : row!.app || "Claude"; // an older Leanfare, or an app that does not say its name
+    const turn = turnFor(app, at);
+    if (turn) { if (part) turn.parts.push(part); else turn.rows.push(row!); continue; }
+    if (!part && at >= q.to) continue;
+    const samePlan = !!(open && part?.plan && open.parts.some((x) => x.plan === part.plan));
+    if (!open || open.app !== app || (!samePlan && at - open.last > GAP)) {
+      const appModel = part?.appModel ?? null;
+      open = { key: part ? `h:${part.id}` : `hh:${row!.id}`, id: null, ts: part ? part.ts : row!.ts, app, thread: null, project: null, model: appModel ? { id: appModel, label: modelName(appModel) } : null,
+        plan: planFor(app), prompt: null, own: null, parts: [], kept: 0, back: 0, cost: 0, saved: null, grade: null, used: null, both: null, together: null, togetherBy: null, alone: null,
+        effort: null, main: null, helpers: [], last: at, rows: [] };
       others.push(open);
     }
-    open.parts.push(part); open.last = part.at;
-    if (!open.model && part.appModel) open.model = { id: part.appModel, label: modelName(part.appModel) };
+    if (part) { open.parts.push(part); if (!open.model && part.appModel) open.model = { id: part.appModel, label: modelName(part.appModel) }; }
+    else open.rows.push(row!);
+    open.last = at;
   }
+  // Each prompt's helpers and its effort; a turn's own use, its main model's and its helpers', from its first step.
+  for (const p of [...others, ...turns]) p.helpers = helperUses(p.rows);
+  for (const t of turns) {
+    t.own = sumOwn([t.main!, ...t.helpers]);
+    t.ts = new Date(Math.min(t.end, ...t.parts.map((x) => Date.parse(x.ts)), ...t.rows.map((h) => Date.parse(h.ts)))).toISOString();
+  }
+  for (const p of [...cc, ...others, ...turns]) p.effort ??= most(p.parts.map((x) => (x as { appEffort?: string | null }).appEffort));
 
   // Every prompt that began in the span, then the filters.
-  const all: ReportPrompt[] = [...cc, ...others].filter((p) => { const t = Date.parse(p.ts); return t >= q.from && t < q.to; });
+  const all: ReportPrompt[] = [...cc, ...others, ...turns].filter((p) => { const t = Date.parse(p.ts); return t >= q.from && t < q.to; });
   const ids = idsFor(all);
   for (const p of all) { p.id = ids.get(p.key) ?? null; p.parts.forEach((x, i) => { x.ref = p.id ? `${p.id}.${i + 1}` : null; }); }
   const options = {
@@ -293,6 +371,7 @@ export async function report(q: ReportQuery, inner = false): Promise<Report> {
     .map((p) => {
       const kept = p.parts.reduce((n, x) => n + x.read, 0), back = p.parts.reduce((n, x) => n + x.back, 0);
       const out: ReportPrompt = { key: p.key, id: p.id, ts: p.ts, app: p.app, thread: p.thread, project: p.project, model: p.model, plan: p.plan, prompt: p.prompt, own: p.own, parts: p.parts,
+        effort: p.effort, main: p.main, helpers: p.helpers,
         kept, back, cost: p.parts.reduce((n, x) => n + (x.cost ?? 0), 0), saved: p.own ? (kept + p.own.fresh > 0 ? kept / (kept + p.own.fresh) : null) : null, grade: worst(p.parts.map((x) => x.grade)),
         used: sumUsed(p.parts.map((x) => x.used)),
         both: p.parts.length ? { alone: sumRanges(p.parts.map((x) => x.both.alone)), spent: p.parts.reduce((n, x) => n + x.both.spent, 0), saved: sumRanges(p.parts.map((x) => x.both.saved)) } : null,
@@ -395,13 +474,13 @@ export async function report(q: ReportQuery, inner = false): Promise<Report> {
   const speed: SpeedRow[] = modelStats({ from: q.from, to: q.to, provider: q.provider, model: q.model })
     .map((m) => { const b = byModel.find((x) => x.id === m.id); return { ...m, graded: b?.graded ?? 0, goodShare: b?.goodShare ?? null, score: b?.score ?? null }; });
 
-  return { from: new Date(q.from).toISOString(), to: new Date(q.to).toISOString(), step, tiles, series, byModel, byKind, byLevel, speed, prompts: shown.slice(0, 200), more: Math.max(0, shown.length - 200), options };
+  return { from: new Date(q.from).toISOString(), to: new Date(q.to).toISOString(), now: now().toISOString(), step, tiles, series, byModel, byKind, byLevel, speed, prompts: shown.slice(0, PROMPTS_MAX), more: Math.max(0, shown.length - PROMPTS_MAX), options };
 }
 
 export type SpeedRow = ModelStat & { graded: number; goodShare: number | null; score: ReturnType<typeof scoreOf> };
 // Good, partly and wrong among some grades (the rest not graded).
 const countOf = (gs: (string | null | undefined)[]) => ({ good: gs.filter((g) => g === "good").length, partly: gs.filter((g) => g === "partly").length, wrong: gs.filter((g) => g === "wrong").length });
-export type Report = { from: string; to: string; step: number; tiles: any; series: { at: string; kept: number; used: number }[]; byModel: any[]; byKind: any[]; byLevel: { levels: any[]; before: any | null; all: any }; speed: SpeedRow[]; prompts: ReportPrompt[]; more: number; options: any };
+export type Report = { from: string; to: string; now: string; step: number; tiles: any; series: { at: string; kept: number; used: number }[]; byModel: any[]; byKind: any[]; byLevel: { levels: any[]; before: any | null; all: any }; speed: SpeedRow[]; prompts: ReportPrompt[]; more: number; options: any };
 
 // Prompt ids: PRM and a number (PRM-1042), one count for every app, in the order of the prompts' times. Each is given
 // once and kept (the prompts table), so a prompt has the same id in every span and filter, and two prompts alike in
