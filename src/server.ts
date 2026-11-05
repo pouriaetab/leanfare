@@ -17,6 +17,7 @@ import * as extra from "./providers";
 import { UI_FILES } from "./assets";
 import { findKeys, readFound, recognize } from "./findkeys";
 import { archived, ARCHIVED_SAYS, appsView, useApp } from "./apps";
+import { appTurn, claudeModelsView, helperDone, helperPick } from "./helpers";
 import { SUBSCRIPTIONS } from "./subscriptions";
 import { db, lastRepair } from "./db";
 import { allKeys, getKey, keyWhere, keychainNote, removeKey, saveKey, storeName } from "./keys";
@@ -781,6 +782,24 @@ async function api(req: Request, url: URL): Promise<Response> {
     }
     return json({ results, state: state() });
   }
+  // Claude's own models for helpers (0.15, helpers.ts): the leanfare-level mod and Claude Code's hook ask which model a
+  // helper runs on, then say what it used (numbers only); the main model's own turns where no log file shows them.
+  if (p === "/api/helper" && m === "POST") {
+    const b = await readBody(req);
+    const str = (v: unknown, n: number) => (typeof v === "string" ? v.slice(0, n) : null);
+    return json(helperPick({ app: str(b.app, 40), session: str(b.session, 80), task: str(b.task, 8000), description: str(b.description, 400), agent: str(b.agent, 60), asked: str(b.asked, 80) }));
+  }
+  if (p === "/api/helper/done" && m === "POST") {
+    const b = await readBody(req);
+    if (!Number.isInteger(b.id)) return json({ error: "id is the number /api/helper answered with" }, 400);
+    return json(helperDone(b));
+  }
+  if (p === "/api/app-turn" && m === "POST") {
+    const b = await readBody(req);
+    const r = appTurn(b);
+    return r.ok ? json(r) : json({ error: "model is the model id the app reported" }, 400);
+  }
+  if (p === "/api/claude-models" && m === "GET") return json(claudeModelsView());
   // Use Leanfare in your apps: its MCP server in Claude Desktop (with Cowork) and Claude Code (apps.ts); from an archived
   // app (0.15: Leanfare lives in Claude only) it is only taken out.
   if (p === "/api/apps" && m === "GET") return json({ apps: appsView() });
