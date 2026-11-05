@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.15.0
+
+- Claude is the platform. Leanfare lives in Claude Desktop, Cowork and Claude Code only; an earlier install in Cursor, Codex, Gemini CLI or another app shows in Settings with Take it out. Codex and Gemini CLI still take Leanfare's parts as outside models, with the free and paid models you pick.
+- Each helper Claude starts runs on the Claude model Leanfare picks, as an order: the leanfare-level mod sets it in Cowork and Claude Desktop, and a hook in Claude Code. The order comes from llmledger's ratings and prices, so a new model takes its place the day it is listed and a retired one drops out. As the ratings stand: Fable 5.1 for the hardest parts and final checks, Opus 5.5 for high effort, Sonnet 5.5 for medium, Haiku 5.5 for light code. Your rules hold Fable back (Settings, Claude's own models): only while the week is under 80% used, at most 20 helpers a day, and not for an hour after a helper on it failed.
+- The plan names each model with what it is to you: the main model, a platform model (another of Claude's, on a helper), free, paid, this computer, or the subscription it counts in. A change that names no files stays with your app at level 4, since there is nothing to draft a patch against.
+- The Usage report's prompts are one table, By prompt or By model: a prompt opens to its main model, each of Claude's helpers and each outside model, in the same columns. The span comes from a calendar (one day or a range, or a quick pick), columns move and hide, and you pick the rows per page. Each prompt shows the main model and its effort, Claude's helpers and the outside models with their tokens by kind, and their totals. Cowork's and Claude Desktop's own tokens count too, as the mod says them.
+
 ## 0.14.2
 
 - Smaller and tighter everywhere: text a size below Claude Desktop's (20, 14, 13, 12 and 11 px; chat messages stay 16), less space around cards, rows and buttons, and thin bars in Work by model, Quality by kind and by level, the tiles, the meters and Live activity.
