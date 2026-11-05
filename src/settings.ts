@@ -23,6 +23,12 @@ export const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 // Whether a plan covers a month.
 export const covers = (p: Plan, month: string) => (!p.since || p.since <= month) && (!p.until || p.until >= month);
 
+// Claude's own models for the parts a Claude app keeps (0.15, claudeladder.ts): on, Leanfare sets each helper's model;
+// top, the strongest one takes the hardest parts and the final check, while the week is under topUntil percent used
+// and for at most topPerDay helpers a day.
+export interface ClaudeHelpers { on: boolean; top: boolean; topUntil: number; topPerDay: number }
+export const HELPER_DEFAULTS: ClaudeHelpers = { on: true, top: true, topUntil: 80, topPerDay: 20 };
+
 export interface Settings {
   mode: Mode;
   usual: string | null; // the model you would use without Leanfare; null: the best rated ticked model
@@ -46,6 +52,7 @@ export interface Settings {
   planAuto: number; // a plan's paid parts run without asking while their estimate is at most this many US dollars (0: always ask)
   codexPlan: boolean; // a plan's reading, drafting and working out parts may run on your ChatGPT plan through Codex (codex.ts); off until you turn it on
   geminiCliPlan?: boolean; // 0.14.1: and on your Google account through Gemini CLI (geminicli.ts); off until you turn it on
+  claudeHelpers?: ClaudeHelpers; // 0.15: Claude's own models for helpers (claudeladder.ts)
   setupDone: boolean; // the first run's Set up was done (setup.ts); until then the app opens on it
   appsOff: string[]; // platforms plans and the delegate leave out (platforms.ts): provider ids, "chatgpt" (OpenAI and Codex), "local"
   filesTo: "any" | "notFree" | "local"; // before 0.12: where your projects' files may go; read only while where is not set
@@ -103,6 +110,7 @@ export const DEFAULTS: Settings = {
   planAuto: 0,
   codexPlan: false,
   geminiCliPlan: false,
+  claudeHelpers: HELPER_DEFAULTS,
   setupDone: false,
   appsOff: [],
   filesTo: "any",
@@ -212,6 +220,15 @@ export function validatePatch(p: any): { patch: Partial<Settings> } | { error: s
     if (!(k in p)) continue;
     if (typeof p[k] !== "boolean") return { error: `${k} must be true or false` };
     out[k] = p[k];
+  }
+  if ("claudeHelpers" in p) {
+    const h = p.claudeHelpers;
+    if (h === null || typeof h !== "object" || Array.isArray(h)) return { error: "claudeHelpers must be an object like {\"on\": true, \"top\": true, \"topUntil\": 80, \"topPerDay\": 20}" };
+    const next = { ...HELPER_DEFAULTS, ...(settings().claudeHelpers ?? {}) };
+    for (const k of ["on", "top"] as const) if (k in h) { if (typeof h[k] !== "boolean") return { error: `claudeHelpers.${k} must be true or false` }; next[k] = h[k]; }
+    if ("topUntil" in h) { if (!Number.isInteger(h.topUntil) || h.topUntil < 0 || h.topUntil > 100) return { error: "claudeHelpers.topUntil must be a whole percent from 0 to 100" }; next.topUntil = h.topUntil; }
+    if ("topPerDay" in h) { if (!Number.isInteger(h.topPerDay) || h.topPerDay < 0 || h.topPerDay > 1000) return { error: "claudeHelpers.topPerDay must be a whole number from 0 to 1,000" }; next.topPerDay = h.topPerDay; }
+    out.claudeHelpers = next;
   }
   if ("sideBySide" in p) { if (![0, 5, 10, 20].includes(p.sideBySide)) return { error: "sideBySide must be 0 (off), 5, 10 or 20" }; out.sideBySide = p.sideBySide; }
   if ("sideBySideCap" in p) {

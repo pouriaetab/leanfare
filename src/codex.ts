@@ -19,7 +19,7 @@ import { UserError } from "./upstream";
 import { redact } from "./util";
 
 export const CODEX_ID = "codex";
-export const CODEX_LABEL = "Codex (your ChatGPT plan)";
+export const CODEX_LABEL = "Codex (ChatGPT subscription)"; // 0.15: named by its subscription, never "your"
 export const CODEX_WAIT_MS = 15 * 60_000; // the longest one part may take
 const NEAR = 85; // percent of a ChatGPT window used: from here on, Codex is left alone
 const home = () => (process.platform === "win32" ? homedir() : process.env.HOME || homedir());

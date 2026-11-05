@@ -1082,3 +1082,10 @@ tr.wd td { background: var(--panel-2); }
 #tab-savings .btn { min-height: 26px; padding: 2px 10px; font-size: var(--fs-small); }
 #tab-savings .btn.small { min-height: 22px; padding: 1px 8px; font-size: var(--fs-tiny); }
 #tab-savings select { min-height: 26px; padding-top: 2px; padding-bottom: 2px; font-size: var(--fs-small); }
+/* Claude's own models (0.15): the order, the picks, and the rules for the strongest one */
+.claude-models .cm-table { width: 100%; border-collapse: collapse; font-size: var(--fs-small); margin: 4px 0; }
+.claude-models .cm-table th, .claude-models .cm-table td { text-align: left; padding: 2px 6px; border-bottom: 1px solid var(--line); }
+.claude-models .cm-table th { font-weight: var(--fw-label); color: var(--muted); }
+.claude-models .cm-picks { margin: 4px 0; }
+.claude-models .cm-caps { gap: 6px; flex-wrap: wrap; align-items: center; }
+.claude-models .num-in { width: 56px; min-height: 24px; padding: 1px 4px; font-size: var(--fs-small); }

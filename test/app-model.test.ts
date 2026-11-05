@@ -27,12 +27,12 @@ describe("the model an app says it runs on", () => {
     saveSettings({ plans: { claude: { name: "Claude Max", price: 100 } } });
     const p = await makePlan({ task: "Fix the login bug in the app and add a test", files: [], manager: "Claude", split: "rules", yourModel: "claude-opus-5-5", signal: new AbortController().signal });
     expect(p.you).toEqual({ model: "claude-opus-5-5", label: "Claude Opus 5.5", plan: "Claude Max" });
-    const mine = p.table.split("\n").filter((l) => l.includes("you ("));
+    const mine = p.table.split("\n").filter((l) => /\((main|platform) model\)/.test(l));
     expect(mine.length).toBeGreaterThan(0);
-    for (const l of mine) expect(l).toContain("you (Claude, on your Claude Max plan)");
-    expect(p.table).not.toContain("your model");
+    for (const l of mine) expect(l).toContain("| Claude Max |"); // the subscription it counts in, by name
+    expect(p.table).not.toMatch(/\byou \(|\byour\b/); // 0.15: the model and its role, never "you"
     // 0.14: Cowork starts helpers on another of Claude's models, the Desktop app's chat cannot: told to do the part itself then
-    expect(p.next).toContain("start a helper (a subagent) with that model if your app can (model: opus, sonnet or haiku); if it cannot, do the part yourself.");
+    expect(p.next).toContain("start a helper (a subagent) with that model if your app can (model: haiku, sonnet, opus or fable); if it cannot, do the part yourself.");
   });
 
   test("Claude Code can run a part on another model in a subagent, so its plan still names the one to use", async () => {
@@ -45,7 +45,8 @@ describe("the model an app says it runs on", () => {
   test("without it, the plan says what it said before", async () => {
     const p = await makePlan({ task: "Fix the login bug in the app and add a test", files: [], manager: "Claude", split: "rules", signal: new AbortController().signal });
     expect(p.you).toEqual({ model: null, label: null, plan: null });
-    expect(p.table).toContain("you (Claude)");
+    expect(p.table).toMatch(/\((main|platform) model\)/);
+    expect(p.table).not.toContain("you (");
   });
 
   test("only a short name", () => {

@@ -18,6 +18,7 @@ import { selfCommand } from "./self";
 import { quote } from "./statusline";
 import { remindersLately } from "./readhook";
 import { FIRST_MATCHER } from "./firsthook";
+import { HELPER_MATCHER } from "./helperhook";
 
 const home = () => (process.platform === "win32" ? homedir() : process.env.HOME || homedir());
 const claudeDir = () => process.env.CLAUDE_CONFIG_DIR?.split(",")[0]?.trim() || join(home(), ".claude");
@@ -152,12 +153,15 @@ export const stopHookCommand = () => { const c = selfCommand(); return [c.comman
 export const firstHookCommand = (app?: string) => { const c = selfCommand(); return [c.command, ...c.args].map(quote).join(" ") + ` hook first${app ? ` --app ${app}` : ""}`; };
 export const promptHookCommand = (app: string) => { const c = selfCommand(); return [c.command, ...c.args].map(quote).join(" ") + ` hook prompt --app ${app}`; };
 export const HANDOFF_MATCHER = "mcp__.*leanfare.*__(delegate|plan|plan_run|plan_status|grade|level)";
-const ourHook = (what: "prompt" | "read" | "handoff" | "stop" | "first") => (cmd: unknown) => typeof cmd === "string" && new RegExp(`(^|[\\s'"/\\\\])(leanfare(\\.exe)?|cli\\.ts)['"]?\\s+hook\\s+${what}\\b`, "i").test(cmd);
-const isOurHook = ourHook("prompt"), isOurReadHook = ourHook("read"), isOurHandoffHook = ourHook("handoff"), isOurStopHook = ourHook("stop"), isOurFirstHook = ourHook("first");
+// 0.15: the model of a helper Claude Code starts, Leanfare's pick (helperhook.ts).
+export const helperHookCommand = () => { const c = selfCommand(); return [c.command, ...c.args].map(quote).join(" ") + " hook helper"; };
+const ourHook = (what: "prompt" | "read" | "handoff" | "stop" | "first" | "helper") => (cmd: unknown) => typeof cmd === "string" && new RegExp(`(^|[\\s'"/\\\\])(leanfare(\\.exe)?|cli\\.ts)['"]?\\s+hook\\s+${what}\\b`, "i").test(cmd);
+const isOurHook = ourHook("prompt"), isOurReadHook = ourHook("read"), isOurHandoffHook = ourHook("handoff"), isOurStopHook = ourHook("stop"), isOurFirstHook = ourHook("first"), isOurHelperHook = ourHook("helper");
 const HOOKS = [
   { event: "UserPromptSubmit", ours: isOurHook, entry: () => ({ hooks: [{ type: "command", command: hookCommand(), timeout: 5 }] }), command: hookCommand },
   { event: "PreToolUse", ours: isOurReadHook, entry: () => ({ matcher: "Read", hooks: [{ type: "command", command: readHookCommand(), timeout: 5 }] }), command: readHookCommand },
   { event: "PreToolUse", ours: isOurFirstHook, entry: () => ({ matcher: FIRST_MATCHER, hooks: [{ type: "command", command: firstHookCommand(), timeout: 5 }] }), command: () => firstHookCommand() },
+  { event: "PreToolUse", ours: isOurHelperHook, entry: () => ({ matcher: HELPER_MATCHER, hooks: [{ type: "command", command: helperHookCommand(), timeout: 5 }] }), command: helperHookCommand },
   { event: "PostToolUse", ours: isOurHandoffHook, entry: () => ({ matcher: HANDOFF_MATCHER, hooks: [{ type: "command", command: handoffHookCommand(), timeout: 5 }] }), command: handoffHookCommand },
   { event: "Stop", ours: isOurStopHook, entry: () => ({ hooks: [{ type: "command", command: stopHookCommand(), timeout: 10 }] }), command: stopHookCommand },
 ];

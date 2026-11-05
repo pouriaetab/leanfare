@@ -122,11 +122,11 @@ describe("in a plan", () => {
       expect(r.status).toBe(200);
       const viaCodex = r.json.parts.filter((x: any) => x.where === "codex");
       expect(viaCodex.length).toBeGreaterThan(0);
-      expect(viaCodex[0]).toMatchObject({ model: { id: "codex", label: "Codex (your ChatGPT plan)" }, cost: 0 });
+      expect(viaCodex[0]).toMatchObject({ model: { id: "codex", label: "Codex (ChatGPT subscription)" }, cost: 0 });
       expect(viaCodex[0].why).toContain("your ChatGPT plan through Codex, not pay per use");
       expect(r.json.parts.some((x: any) => x.where === "paid")).toBe(false);
-      expect(r.json.table).toContain("| Leanfare, through Codex | Codex (your ChatGPT plan) |");
-      expect(r.json.table).toContain("| in your ChatGPT plan |");
+      expect(r.json.table).toContain("| Codex (ChatGPT subscription) |");
+      expect(r.json.table).toContain("| ChatGPT subscription, $0 |");
       expect(r.json.next).toMatch(/run(s)? on Codex with your ChatGPT plan: start (it|them) with plan_run \(delegate cannot run (it|them)\)\./);
       expect(r.json.local ?? null).toBeNull(); // nothing goes to pay per use: no local model to suggest
     } finally { rmSync(p, { recursive: true, force: true }); }
@@ -172,8 +172,8 @@ describe("running a part on Codex", () => {
       const part = r.json.parts.find((x: any) => x.where === "codex");
       const v = await runAndWait(r.json.id);
       const got = v.parts.find((x: any) => x.n === part.n);
-      expect(got).toMatchObject({ status: "done", model: "Codex (your ChatGPT plan)", cost: 0, answer: `Codex read it. Part ${part.n}: ${part.title}` });
-      expect(got.receipt).toContain("Codex (your ChatGPT plan), read only");
+      expect(got).toMatchObject({ status: "done", model: "Codex (ChatGPT subscription)", cost: 0, answer: `Codex read it. Part ${part.n}: ${part.title}` });
+      expect(got.receipt).toContain("Codex (ChatGPT subscription), read only");
       expect(got.receipt).toContain("nothing to pay here");
       const exec = calls().find((c) => c.includes("|exec "))!;
       const [cwd, args] = exec.split("|");
@@ -188,7 +188,7 @@ describe("running a part on Codex", () => {
       expect(fake.seen.some((s) => s.path.endsWith("/chat/completions") && JSON.stringify(s.body).includes("disk full"))).toBe(false); // no model got the files
       // In Savings: the part on your ChatGPT plan, its files counted as kept out of the app that asked.
       const w = (await ui(url, "/api/savings")).json.work;
-      expect(w.where.plan).toBe(v.parts.filter((x: any) => x.status === "done" && x.model === "Codex (your ChatGPT plan)").length);
+      expect(w.where.plan).toBe(v.parts.filter((x: any) => x.status === "done" && x.model === "Codex (ChatGPT subscription)").length);
       expect(w.recent[0].models).toContainEqual({ label: "Codex", where: "plan" });
       expect(w.recent[0].files).toBeGreaterThan(0);
       expect(w.kept).toBeGreaterThan(0);

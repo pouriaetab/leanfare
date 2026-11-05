@@ -42,6 +42,7 @@ import { planView, windowsNow } from "./plans";
 import { DELEGATE_LIMITS, readForDelegate, sizesForPlan, PLAN_FILES } from "./readfiles";
 import { guessTask, pickModel, type Msg } from "./router";
 import { JOB_DEFAULTS, settings, type JobKind } from "./settings";
+import { pickClaude } from "./claudeladder";
 import { UserError } from "./upstream";
 import { now, randomId, secondsText } from "./util";
 
@@ -81,7 +82,7 @@ export interface Part {
   size: Size;
   where: Where; // you: the app you work in; local, free, paid: Leanfare, on that kind of model; codex: Leanfare, through Codex
   model: { id: string; label: string } | null; // Leanfare's pick; null when it stays with you
-  use: { id: string; label: string; alias: string | null } | null; // for a part that stays with you: the model to pick for it in your app (alias: Claude Code's name for it)
+  use: { id: string; label: string; alias: string | null; why?: string } | null; // for a part that stays with you: the model to pick for it in your app (alias: Claude's name for it)
   seconds: number | null; // about how long Leanfare's model takes; null when it stays with you
   tokens: number; // about how many it reads and writes
   cost: number | null; // on pay per use; 0 on a local or free model; null when it stays with you, or not known
@@ -91,8 +92,10 @@ export interface Part {
   keep?: boolean; // the whole task is small enough to answer yourself: it is not split
   keepWhy?: string; // why a part stays with you when it is not for its size: questions are answered where the context is
   patch?: boolean; // 0.14: a change to the project drafted outside as a patch, at level 4 and up; the app reads it and applies it
+  top?: boolean; // 0.15: the hardest judgement or the final check: kept with a Claude app, it runs on Claude's strongest model (claudeladder.ts)
+  words?: { model: string; role: Role; cost: string }; // 0.15: the model with its role and the cost, in words (the card and the Plan tab show them)
 }
-type Split = Omit<Part, "where" | "model" | "use" | "seconds" | "tokens" | "cost" | "why" | "risk" | "guess">;
+type Split = Omit<Part, "where" | "model" | "use" | "seconds" | "tokens" | "cost" | "why" | "risk" | "guess" | "words">;
 export type GivenPart = Split; // a part of the app's own split (0.14)
 export interface PlanResult {
   id: string; // kept here (the last 20), so it can run
@@ -182,11 +185,12 @@ export function readSplit(text: string, given: (PlanFile | Shown | string)[]): S
     const n = out.length + 1;
     renumbered.set(i + 1, n);
     const kind: PartKind = PART_KINDS.includes(raw.kind) ? raw.kind : "reason";
-    const effort: Effort = EFFORTS.includes(raw.effort) ? raw.effort : "medium";
+    const effort: Effort = EFFORTS.includes(raw.effort) ? raw.effort : raw.effort === "max" || raw.effort === "xhigh" ? "high" : "medium";
+    const top = raw.effort === "max" || raw.top === true; // 0.15: the hardest judgement or the final check
     const size: Size = SIZES.includes(raw.size) ? raw.size : "small";
     const needs: number[] = Array.isArray(raw.needs) ? [...new Set<number>(raw.needs.map(Number).map((x: number) => renumbered.get(x)).filter((x: number | undefined): x is number => x !== undefined && x < n))] : [];
     const fl = Array.isArray(raw.files) ? [...new Set(raw.files.filter((f: unknown) => typeof f === "string" && names.has(f)))] as string[] : [];
-    out.push({ n, title: title || task.slice(0, 60), kind, effort, needs: needs.sort((a, b) => a - b), task: task || title, files: fl, size });
+    out.push({ n, title: title || task.slice(0, 60), kind, effort, needs: needs.sort((a, b) => a - b), task: task || title, files: fl, size, ...(top ? { top } : {}) });
   });
   return out.length ? out : null;
 }
@@ -208,8 +212,8 @@ export function rulesSplit(task: string, files: (PlanFile | Shown)[]): Split[] {
   const coding = guessTask([{ role: "user", content: task }]).task === "coding";
   const all = files.map((f) => f.name);
   const big: Size = files.length ? "medium" : "large";
-  const p = (n: number, title: string, kind: PartKind, effort: Effort, needs: number[], size: Size, what: string, fl: string[] = []) =>
-    ({ n, title, kind, effort, needs, size, files: fl, task: `${what}\n\n${CONTEXT} ${task}` });
+  const p = (n: number, title: string, kind: PartKind, effort: Effort, needs: number[], size: Size, what: string, fl: string[] = [], top = false) =>
+    ({ n, title, kind, effort, needs, size, files: fl, task: `${what}\n\n${CONTEXT} ${task}`, ...(top ? { top } : {}) });
   if (isQuestions(task) && !RESEARCH.test(task)) return files.length ? [
     p(1, "Gather the facts the questions need", "read", "low", [], big, "From the files, pull out the facts each question needs, each with its file and line number. Say which question each fact is for, and say so when no file holds one.", all),
     { ...p(2, "Answer the questions", "reason", "medium", [1], "small", "Answer each question in order from the facts, with the reasoning, and a recommendation where one is asked."), keep: true, keepWhy: QUESTIONS_WHY },
@@ -218,20 +222,20 @@ export function rulesSplit(task: string, files: (PlanFile | Shown)[]): Split[] {
     p(1, "Map the code: its parts and how they fit", "read", "low", [], big, "List the modules, the entry points and how they call each other, one line each.", all),
     p(2, "Read the parts that matter closely", "read", "medium", [1], "medium", "Explain what the parts this task touches do and how, with file:line for each claim.", all),
     p(3, "Decide the design and the steps", "reason", "high", [2], "small", "Decide how to do the task: the design, the steps in order, and what could go wrong."),
-    p(4, "Make the changes and run the tests", "code", "high", [3], "medium", "Make the changes the design calls for, then run the tests."),
-    p(5, "Review the changes", "reason", "medium", [4], "medium", "Review the changes for bugs and missed cases; list each with file:line."),
+    p(4, "Make the changes and run the tests", "code", "high", [3], "medium", "Make the changes the design calls for, then run the tests.", all),
+    p(5, "Review the changes", "reason", "medium", [4], "medium", "Review the changes for bugs and missed cases; list each with file:line.", all, true),
   ];
   if (RESEARCH.test(task)) return [
     p(1, "Gather the sources", "search", "medium", [], "none", "Find the most relevant, current sources and list them with links."),
     p(2, "Pull out the facts", "read", "low", [1], files.length ? big : "medium", "Pull out the facts the task needs from the sources, each with where it came from.", all), // with no files: what a search finds, a guess
     p(3, "Outline the answer", "reason", "medium", [2], "small", "Outline the answer: the points in order, each with its facts."),
     p(4, "Write it", "write", "medium", [3], "small", "Write the answer from the outline, briefly."),
-    p(5, "Check it against the sources", "reason", "high", [4], "medium", "Check every claim against the sources; list any that do not hold."),
+    p(5, "Check it against the sources", "reason", "high", [4], "medium", "Check every claim against the sources; list any that do not hold.", [], true),
   ];
   return [
     p(1, "Work out the approach", "reason", "medium", [], files.length ? "medium" : "small", "Work out how to do this: the steps, in order.", all),
-    p(2, "Do it", "write", "medium", [1], "small", "Do the task, following the approach."),
-    p(3, "Check the result", "reason", "high", [2], "small", "Check the result against the task; list anything wrong or missing."),
+    p(2, "Do it", "write", "medium", [1], files.length ? "medium" : "small", "Do the task, following the approach.", all), // 0.15: with the files it works on (it had none, and answered nothing)
+    p(3, "Check the result", "reason", "high", [2], "small", "Check the result against the task; list anything wrong or missing.", [], true),
   ];
 }
 
@@ -306,7 +310,12 @@ const MAKERS: [RegExp, string[]][] = [[CLAUDE_APPS, ["anthropic"]], [/codex|chat
   [/cursor|windsurf|vs ?code|copilot/i, ["anthropic", "openai", "google"]]];
 export const makersOf = (manager: string): string[] => MAKERS.find(([re]) => re.test(manager))?.[1] ?? [];
 const CLAUDE_ALIAS = /^Claude (Opus|Sonnet|Haiku|Fable)\b/; // Claude Code's names for its models: opus, sonnet, haiku, fable
-export function modelInYourApp(part: { kind: PartKind; effort: Effort; task: string }, manager: string): Part["use"] {
+export function modelInYourApp(part: { kind: PartKind; effort: Effort; task: string; top?: boolean }, manager: string): Part["use"] {
+  // Claude's apps (0.15): the newest of each Claude family, as llmledger lists them, by your rules (claudeladder.ts).
+  if (CLAUDE_APPS.test(manager)) {
+    const c = pickClaude(part.kind, part.effort, !!part.top);
+    if (c) return { id: c.rung.id, label: c.rung.label, alias: c.rung.alias, why: c.why };
+  }
   const makers = makersOf(manager);
   if (!makers.length) return null;
   const pool = allModels().filter((m) => makers.includes(m.provider) && !m.local && !m.free);
@@ -452,9 +461,10 @@ export const keptShare = (t: { kept: number; used: number }) =>
 // What the numbers are before the parts run (28 Oct: a plan that never ran read as 160k tokens saved).
 export const estimateNote = (t: { guessed?: boolean }) => (t.guessed ? "a guess, as no files were named for the reading" : "an estimate until they run");
 // What the totals say: what would go out, what would stay, and that it is an estimate.
-export function totalsText(t: PlanResult["totals"]): string {
+// plan: the app's subscription by name (Claude Max 20x), else the Claude subscription (0.15: never "your plan").
+export function totalsText(t: PlanResult["totals"], plan = "the Claude subscription"): string {
   if (!t.out) return `Nothing goes to Leanfare${t.parts === 1 ? "" : ` (${t.parts} parts)`}.`;
-  return `${t.out} of ${t.parts} parts go to Leanfare. If they run, about ${tokText(t.kept)} tokens stay out of your plan${keptShare(t)}${t.used ? ` and about ${tokText(t.used)} stay in it` : ""}: ${estimateNote(t)}.`;
+  return `${t.out} of ${t.parts} parts go to Leanfare. If they run, about ${tokText(t.kept)} tokens stay out of ${plan}${keptShare(t)}${t.used ? ` and about ${tokText(t.used)} stay in it` : ""}: ${estimateNote(t)}.`;
 }
 // A question small enough to answer yourself: asked as a question, a few sentences, no files, nothing to build,
 // research, write or work out, and nothing of a project's own (its code, tests, logs). Splitting it would cost more
@@ -470,7 +480,6 @@ export function isTiny(task: string, files: unknown[]): boolean {
 }
 const KEEP_WHY = "it is small enough to answer yourself: handing it off would cost more than it saves";
 const usd = (v: number | null) => (v === null ? "not known" : v === 0 ? "$0" : v < 0.01 ? "under $0.01" : `$${v.toFixed(2)}`);
-const RUNS: Record<Where, string> = { you: "you", local: "Leanfare, on this computer", free: "Leanfare, free model", paid: "Leanfare, pay per use", gemini: "Leanfare, through Gemini CLI", codex: "Leanfare, through Codex" };
 const cell = (s: string) => s.replace(/\|/g, "/").replace(/\n/g, " ");
 
 // How long Leanfare's parts take: the ones that start now, and the ones after yours (from when yours are done).
@@ -485,28 +494,45 @@ export function timeLine(t: { seconds: number | null; after: number | null }): s
 // Claude Code, and Claude (Desktop and Cowork; 0.14): Cowork starts helpers on another model too (its Agent tool takes
 // model: opus, sonnet, haiku or fable); the Desktop app's chat cannot, and is told to do the part itself then.
 export const picksPerPart = (manager: string) => /claude code/i.test(manager) || /^(claude|cowork)$/i.test(manager.trim());
-const yourModelFor = (p: Pick<Part, "use">, r: Pick<PlanResult, "manager" | "you">) =>
-  (picksPerPart(r.manager) ? p.use?.label : null) ?? r.you?.label ?? p.use?.label ?? "your model";
-// Who a part that stays with you runs on: "you (Claude, on your Claude Max plan)".
-const youText = (r: Pick<PlanResult, "manager" | "you">) => {
-  const plan = r.you?.plan ? `on your ${r.you.plan} plan`.replace(/ plan plan$/i, " plan") : null;
-  const app = r.manager === "you" ? null : r.manager;
-  return app || plan ? `you (${[app, plan].filter(Boolean).join(", ")})` : "you";
-};
+// 0.15: a part's model in words, its version and its role, never "you": Claude Opus 5.5 (main model), Claude Sonnet 5.5
+// (platform model: another of the app's own models, on a helper), NVIDIA Nemotron 3 Ultra (free), DeepSeek V4 (paid),
+// qwen3:8b (this computer), Codex (ChatGPT subscription), Gemini CLI (Google subscription).
+export type Role = "main model" | "platform model" | "free" | "paid" | "this computer" | "ChatGPT subscription" | "Google subscription";
+const ROLE: Record<Exclude<Where, "you">, Role> = { local: "this computer", free: "free", paid: "paid", codex: "ChatGPT subscription", gemini: "Google subscription" };
+const shortPlan = (plan: string | null | undefined) => (plan ? plan.replace(/ plan$/i, "") : null);
+export function modelText(p: Pick<Part, "where" | "model" | "use">, r: Pick<PlanResult, "manager" | "you">): { label: string; role: Role; text: string } {
+  if (p.where === "you") {
+    const main = r.you?.label ?? null;
+    const helper = picksPerPart(r.manager) && p.use?.label ? p.use.label : null; // a Claude app runs it on a helper with this model
+    const label = helper ?? main ?? p.use?.label ?? "the app's model";
+    const role: Role = helper && helper !== main ? "platform model" : "main model";
+    return { label, role, text: `${label} (${role})` };
+  }
+  const label = p.where === "codex" ? "Codex" : p.model?.label ?? "Leanfare's pick";
+  const role = ROLE[p.where];
+  return { label, role, text: `${label} (${role})` };
+}
+// What a part costs, in words: the subscription it counts in, or the dollars.
+export function costText(p: Pick<Part, "where" | "cost">, r: Pick<PlanResult, "you">): string {
+  if (p.where === "you") return shortPlan(r.you?.plan) ?? "Claude subscription";
+  if (p.where === "codex") return "ChatGPT subscription, $0";
+  if (p.where === "gemini") return "Google subscription, $0";
+  return usd(p.cost);
+}
 export function tableOf(r: Omit<PlanResult, "table" | "next" | "id">): string {
   const rows = r.parts.map((p) => [
-    String(p.n), p.title, `${LABEL_KIND[p.kind]}${p.patch ? " (patch)" : ""}, ${p.effort}`, p.where === "you" ? youText(r) : `${RUNS[p.where]}${p.risk ? ` (${p.risk})` : ""}`,
-    p.model?.label ?? yourModelFor(p, r), p.seconds === null ? "" : secondsText(p.seconds).replace(/^about /, "~"),
-    p.where === "you" ? `~${tokText(p.tokens)} of your plan` : `~${tokText(p.tokens)} kept`, p.where === "you" ? "in your plan" : p.where === "codex" ? "in your ChatGPT plan" : p.where === "gemini" ? "in your Google account" : usd(p.cost),
+    String(p.n), p.title, `${LABEL_KIND[p.kind]}${p.patch ? " (patch)" : ""}, ${p.effort}${p.top && p.where === "you" ? " (the hardest)" : ""}`, `${modelText(p, r).text}${p.risk ? `, ${p.risk}` : ""}`,
+    p.seconds === null ? "" : secondsText(p.seconds).replace(/^about /, "~"),
+    p.where === "you" ? `~${tokText(p.tokens)}` : `~${tokText(p.tokens)} kept`, costText(p, r),
     p.needs.length ? `after ${p.needs.join(", ")}` : "now",
   ].map(cell).join(" | "));
   const t = r.totals;
   return [
-    "| # | Part | Kind | Runs on | Model | Time | Tokens | Cost | When |",
-    "|---|---|---|---|---|---|---|---|---|",
+    "| # | Part | Kind | Model | Time | Tokens | Cost | When |",
+    "|---|---|---|---|---|---|---|---|",
     ...rows.map((x) => `| ${x} |`),
     "",
-    `${totalsText(t)} ${timeLine(t)}Pay per use: ${usd(t.cost)}.${t.out ? "" : ` ${r.parts.every((p) => p.keep) ? (r.parts.some((p) => p.keepWhy) ? `Answer it yourself: ${QUESTIONS_WHY}.` : "It is small enough to answer yourself: handing it off would cost more than it saves.") : nothingOut(r.parts)}`}${r.codex ? ` Codex took no part: ${r.codex}.` : ""}${r.local ? ` ${localLine(r.local)}` : ""}${r.parts.some((p) => p.risk) ? ` Parts on a free tier: ${[...new Set(r.parts.map((p) => p.risk).filter(Boolean))].join("; ")}. For anything private, plan it with private: it stays on this computer.` : ""}${r.private ? " This plan stays on this computer." : ""}${r.checks?.length ? ` Checks for this project: ${checksLine(r.checks)}.` : r.folder ? ` ${NO_CHECKS}` : ""}`,
+    `${totalsText(t, shortPlan(r.you?.plan) ?? "the Claude subscription")} ${timeLine(t)}Pay per use: ${usd(t.cost)}.${t.out ? "" : ` ${r.parts.every((p) => p.keep) ? (r.parts.some((p) => p.keepWhy) ? `Answer it yourself: ${QUESTIONS_WHY}.` : "It is small enough to answer yourself: handing it off would cost more than it saves.") : nothingOut(r.parts)}`}${r.codex ? ` Codex took no part: ${r.codex}.` : ""}${r.local ? ` ${localLine(r.local)}` : ""}${r.parts.some((p) => p.risk) ? ` Parts on a free tier: ${[...new Set(r.parts.map((p) => p.risk).filter(Boolean))].join("; ")}. For anything private, plan it with private: it stays on this computer.` : ""}${r.private ? " This plan stays on this computer." : ""}${r.checks?.length ? ` Checks for this project: ${checksLine(r.checks)}.` : r.folder ? ` ${NO_CHECKS}` : ""}`,
   ].join("\n");
 }
 
@@ -547,8 +573,8 @@ function nextOf(r: Omit<PlanResult, "table" | "next" | "id">, started: Set<numbe
     const on = mine.map((p) => `part ${p.n}${picksPerPart(r.manager) || !r.you?.label ? ` on ${p.use?.label ?? "your strongest model"}` : ""}`);
     // Claude Code runs a part on another model with a subagent (its Agent tool takes model: opus, sonnet, haiku or fable).
     const how = !(mine.some((p) => p.use?.alias) && picksPerPart(r.manager)) ? ""
-      : /claude code/i.test(r.manager) ? " For a part on another model than the one you run on, use a subagent with that model (model: opus, sonnet or haiku)."
-      : " For a part on another model than the one you run on, start a helper (a subagent) with that model if your app can (model: opus, sonnet or haiku); if it cannot, do the part yourself.";
+      : /claude code/i.test(r.manager) ? " For a part on another model than the one you run on, use a subagent with that model (model: haiku, sonnet, opus or fable)."
+      : " For a part on another model than the one you run on, start a helper (a subagent) with that model if your app can (model: haiku, sonnet, opus or fable); if it cannot, do the part yourself.";
     s.push(`Do these yourself: ${on.join(", ")}.${how}`);
   }
   if (r.checks?.length) s.push(`When every part is back and applied, run the project's checks (${r.checks.map((c) => c.n).join(", ")}) and report them with grade: the plan's id, whole true, and checks with the numbers that passed and failed.`);
@@ -731,6 +757,7 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
   const checks = checksFor(folder);
   const base = { task: input.task, manager, parts: placed, totals, split, limits: known ? limits : null, local, codex: codex.why, ...(gem.why ? { gemini: gem.why } : {}), ...(input.private ? { private: true } : {}), you, level: lv.level, folder, checks };
   const result: PlanResult = { id: randomId(), ...base, table: tableOf(base), next: `${nextOf(base)}${ownSplit ? ` ${OWN_SPLIT}` : ""}` };
+  for (const p of result.parts) { const m = modelText(p, result); p.words = { model: m.text, role: m.role, cost: costText(p, result) }; }
   keep(result, new Map(input.files.filter((f) => f.path).map((f) => [f.name, { path: f.path!, size: f.size }])));
   return result;
 }
@@ -768,6 +795,22 @@ const HANDED = 20_000; // characters of an earlier part's answer handed on
 const running = (id: string) => !!runs.get(id)?.view.running;
 
 // The last 20 plans are kept, and any plan whose parts are running (it is never dropped mid run).
+// The part of a recent plan a helper is for (0.15, helpers.ts): one the app keeps, whose title its words carry, newest
+// plan first. A Claude app starts a helper for such a part with its title or task in the helper's prompt.
+export function partForHelper(words: string, manager: string | null): { plan: PlanResult; part: Part } | null {
+  const said = words.toLowerCase().replace(/\s+/g, " ");
+  if (!said.trim()) return null;
+  for (const plan of [...kept.values()].reverse()) {
+    if (manager && plan.manager !== manager && !(CLAUDE_APPS.test(manager) && CLAUDE_APPS.test(plan.manager))) continue;
+    for (const part of plan.parts) {
+      if (part.where !== "you") continue;
+      const title = part.title.toLowerCase().replace(/\s+/g, " ").trim();
+      if (title.length >= 8 && said.includes(title)) return { plan, part };
+    }
+  }
+  return null;
+}
+
 function keep(plan: PlanResult, paths: Map<string, { path: string; size: number }>) {
   kept.set(plan.id, plan);
   wherePaths.set(plan.id, paths);
@@ -982,7 +1025,7 @@ async function runPart(p0: Part, plan: PlanResult, at: (n: number) => RunPart, s
     const r = await runGeminiCli({ n: p.n, title: p.title, task, folder, files: folder ? paths.map((x) => relative(folder, x)) : paths }, signal, { light: ok.own });
     const bytes = p.files.reduce((n, f) => n + (known.get(f)?.size ?? 0), 0);
     notePart({ kind: p.patch ? "write" : p.kind, effort: p.effort, model: GEMINI_CLI_ID, cost: 0, files: paths.length, fileTokens: Math.ceil(bytes / 4), task, answer: r.answer, plan: `${plan.id}:${p.n}`, ...appOf(plan), ms: Math.round(r.seconds * 1000) });
-    return { status: "done", answer: r.answer, receipt: `${GEMINI_CLI_LABEL}${r.model ? ` (${r.model})` : ""}, read only, ${secondsText(r.seconds)}. It counts in your Google account's Gemini CLI allowance; nothing to pay here.`, model: GEMINI_CLI_LABEL, modelId: GEMINI_CLI_ID, cost: 0, seconds: r.seconds };
+    return { status: "done", answer: r.answer, receipt: `${GEMINI_CLI_LABEL}${r.model ? ` (${r.model})` : ""}, read only, ${secondsText(r.seconds)}. It counts in the Google subscription's Gemini CLI allowance; nothing to pay here.`, model: GEMINI_CLI_LABEL, modelId: GEMINI_CLI_ID, cost: 0, seconds: r.seconds };
   }
   if (p.where === "codex") {
     if (!platformOn("chatgpt")) throw Object.assign(new UserError(409, "This part was to run on Codex, but ChatGPT is turned off for plans now (Settings, Where Leanfare may send work). Make the plan again to place it elsewhere.", "codex_off"), { spent: 0 });
@@ -996,7 +1039,7 @@ async function runPart(p0: Part, plan: PlanResult, at: (n: number) => RunPart, s
     const r = await runCodex({ n: p.n, title: p.title, task, folder, files: folder ? paths.map((x) => relative(folder, x)) : paths, effort: p.effort, search: p.kind === "search", ...(ok.own ? { light: true } : {}) }, signal);
     const bytes = p.files.reduce((n, f) => n + (known.get(f)?.size ?? 0), 0);
     notePart({ kind: p.patch ? "write" : p.kind, effort: p.effort, model: CODEX_ID, cost: 0, files: paths.length, fileTokens: Math.ceil(bytes / 4), task, answer: r.answer, plan: `${plan.id}:${p.n}`, ...appOf(plan), ms: Math.round(r.seconds * 1000) });
-    return { status: "done", answer: r.answer, receipt: `${CODEX_LABEL}, read only, ${secondsText(r.seconds)}. It counts in your ChatGPT plan's Codex use; nothing to pay here.${r.note ? ` ${r.note}` : ""}`, model: CODEX_LABEL, modelId: CODEX_ID, cost: 0, seconds: r.seconds };
+    return { status: "done", answer: r.answer, receipt: `${CODEX_LABEL}, read only, ${secondsText(r.seconds)}. It counts in the ChatGPT subscription's Codex use; nothing to pay here.${r.note ? ` ${r.note}` : ""}`, model: CODEX_LABEL, modelId: CODEX_ID, cost: 0, seconds: r.seconds };
   }
   if (plan.private && p.where !== "local") throw Object.assign(new UserError(409, "This plan is to stay on this computer, and this part was not placed here. Make the plan again.", "private_part"), { spent: 0 });
   if (p.kind === "search" && p.model) {

@@ -239,7 +239,10 @@ describe("the screen's API and the command line", () => {
   });
   test("leanfare apps lists Claude's apps, adds one, and never adds an archived app", async () => {
     mkdirSync(join(home, ".cursor"), { recursive: true });
-    mkdirSync(dirname(app("claude-desktop").file()), { recursive: true });
+    // Claude Desktop's settings file where a Mac keeps it and where Linux does: the command runs as its own process,
+    // on the computer's own platform (the Mac-like test run changes only this process's).
+    const files = [join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json"), join(home, ".config", "Claude", "claude_desktop_config.json")];
+    for (const f of files) mkdirSync(dirname(f), { recursive: true });
     const run = async (...a: string[]) => {
       const p = Bun.spawn([process.execPath, new URL("../src/cli.ts", import.meta.url).pathname, ...a], { stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: home } });
       return { code: await p.exited, out: (await new Response(p.stdout).text()) + (await new Response(p.stderr).text()) };
@@ -251,7 +254,7 @@ describe("the screen's API and the command line", () => {
     const add = await run("apps", "add", "claude-desktop");
     expect(add.code).toBe(0);
     expect(add.out).toContain("Added Leanfare's tools to Claude Desktop (and Cowork).");
-    expect(readJ(app("claude-desktop").file()).mcpServers.leanfare.args.at(-1)).toBe("mcp");
+    expect(readJ(files.find((f) => existsSync(f))!).mcpServers.leanfare.args.at(-1)).toBe("mcp");
     const no = await run("apps", "add", "cursor");
     expect([no.code, no.out.trim()]).toEqual([1, "Leanfare lives in Claude only now (Claude Desktop, Cowork and Claude Code), so it no longer adds itself to Cursor. Taking it out still works."]);
     await setApp("cursor", true); // an older Leanfare's entry: listed, with how to take it out

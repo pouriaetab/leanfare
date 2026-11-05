@@ -114,8 +114,8 @@ describe("work on your ChatGPT plan", () => {
     const r = await ui(url, "/api/delegate", { task: "Why does the nightly job fail? Answer in one line.", files: [{ name: "job.log", text: "10:01 error: disk full\n" }], kind: "read", effort: "medium", check: "auto", app: "Claude" });
     expect(r.status).toBe(200);
     expect(r.json.answer).toStartWith("Codex read it: nightly job fail");
-    expect(r.json.model).toEqual({ id: "codex", label: "Codex (your ChatGPT plan)" });
-    expect(r.json.receipt).toContain("Codex (your ChatGPT plan)");
+    expect(r.json.model).toEqual({ id: "codex", label: "Codex (ChatGPT subscription)" });
+    expect(r.json.receipt).toContain("Codex (ChatGPT subscription)");
     expect(r.json.receipt).toContain("None of the models you ticked could take it now, so Codex took it on your ChatGPT plan.");
     expect(calls().some((c) => c.startsWith("exec --sandbox read-only"))).toBe(true);
     expect(typeof r.json.row).toBe("number");

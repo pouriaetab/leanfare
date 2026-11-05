@@ -267,6 +267,25 @@ export const TOOLS = [
     annotations: { title: "Leanfare's level", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
+    name: "helper",
+    title: "The Claude model for a helper",
+    description: "For Leanfare's leanfare-level mod and Claude Code's hook, not for a chat: when a Claude app is about to start a helper (a subagent), the Claude model Leanfare picks for it, by the plan part it is for or else its kind of work, as Claude's Agent tool names models (haiku, sonnet, opus, fable). With done, what a helper used once it ended; with turn, the main model's own turn. Numbers only, never words.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task: { type: "string", description: "The helper's prompt, as the Agent tool got it." },
+        description: { type: "string", description: "The Agent tool's short description of the task." },
+        agent: { type: "string", description: "The helper's agent type (general-purpose, Explore, Plan, or a plugin's)." },
+        asked: { type: "string", description: "The model the Agent call named, if it named one." },
+        session: { type: "string", description: "The session or chat it belongs to, if known." },
+        done: { type: "object", description: "A helper's end: id (from the pick), model (the id that ran), input, cached and output tokens, seconds, reason (answer, aborted, refusal, error)." },
+        turn: { type: "object", description: "The main model's own turn: model, input, cached and output tokens, and effort if known." },
+      },
+      additionalProperties: false,
+    },
+    annotations: { title: "The Claude model for a helper", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  {
     name: "live",
     title: "Live tokens",
     description: "The model calls Leanfare is running right now, and those that ended in the last minute, as numbers only: the model, what it is for (a hand off, its check, a plan's part, an app through Leanfare's address), how long it has run, and its tokens so far by kind (new input, cached, thinking, written), with tokens a second. Use it when the user asks what Leanfare is doing now, or to watch a plan's parts run. Apps that show MCP Apps draw it as a live card that keeps moving.",
@@ -603,6 +622,14 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
     const { j: v } = await call("/api/live", {}, signal);
     return text(liveLines(v), v);
   }
+  if (name === "helper") {
+    // 0.15 (helpers.ts): the mod or the hook asks, then says what the helper used; the app is the one this door serves.
+    if (args?.done && typeof args.done === "object") { const { j } = await call("/api/helper/done", { method: "POST", json: args.done }, signal); return text(JSON.stringify(j ?? {}), j ?? {}); }
+    if (args?.turn && typeof args.turn === "object") { const { j } = await call("/api/app-turn", { method: "POST", json: { ...args.turn, app: ctx.client, session: args.session ?? null } }, signal); return text(JSON.stringify(j ?? {}), j ?? {}); }
+    const { j } = await call("/api/helper", { method: "POST", json: { app: ctx.client, session: args?.session ?? null, task: args?.task ?? null, description: args?.description ?? null, agent: args?.agent ?? null, asked: args?.asked ?? null } }, signal);
+    if (!j || j.error) return failure(String(j?.error ?? "Leanfare did not answer."));
+    return text(j.model ? `Run this helper on ${j.label} (model: ${j.model}): ${j.why}.` : `Leave the helper's model as it is: ${j.why}.`, j);
+  }
   if (name === "level") {
     const set = args?.set, scope = args?.scope ?? "chat";
     if (set !== undefined && !isLevel(set)) return failure("set is a level from 1 to 5: 1 Off, 2 Light, 3 More, 4 Most, 5 All it can.");
@@ -741,6 +768,9 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
       id: j.id, saved_in: saved,
       parts: j.parts.map((p: any) => ({ n: p.n, title: p.title, kind: p.kind, ...(p.patch ? { patch: true } : {}), effort: p.effort, needs: p.needs, runs_on: p.where, risk: p.risk ?? null, model: p.model?.id ?? null, model_label: p.model?.label ?? null,
         your_model: p.use ?? null, // a part that stays with you: the model to pick for it in your app (alias: Claude Code's name for it)
+        // 0.15: the model in words with its role (main model, platform model, free, paid, this computer, a subscription), and
+        // its cost in words, so the card says the model and never "you".
+        model_text: p.words?.model ?? null, model_role: p.words?.role ?? null, cost_text: p.words?.cost ?? null, top: !!p.top,
         seconds: p.seconds, tokens: p.tokens, cost_usd: p.cost,
         files: p.files.slice(0, 50), more_files: Math.max(0, p.files.length - 50), task: p.task })),
       totals: j.totals, split: j.split, limits: j.limits, local: j.local ?? null, you: j.you ?? null,

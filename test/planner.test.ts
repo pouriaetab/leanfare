@@ -44,10 +44,13 @@ describe("reading the split", () => {
   });
 
   test("unknown kinds, efforts and sizes fall back to plain ones, and at most 8 parts are kept", () => {
-    const many = { parts: Array.from({ length: 12 }, (_, i) => ({ title: `Part ${i + 1}`, kind: "dance", effort: "max", size: "huge", task: "x" })) };
+    const many = { parts: Array.from({ length: 12 }, (_, i) => ({ title: `Part ${i + 1}`, kind: "dance", effort: "extreme", size: "huge", task: "x" })) };
     const parts = readSplit(JSON.stringify(many), [])!;
     expect(parts.length).toBe(8);
     expect(parts[0]).toMatchObject({ kind: "reason", effort: "medium", size: "small" });
+    expect(parts[0].top).toBeUndefined();
+    // 0.15: max is the hardest (high, and the strongest of Claude's models when it stays with a Claude app)
+    expect(readSplit(JSON.stringify({ parts: [{ title: "Check it all", kind: "reason", effort: "max", task: "x" }] }), [])![0]).toMatchObject({ effort: "high", top: true });
   });
 
   test("the rules: a code task keeps its changes with you, research starts with a search, anything else is three parts", () => {
@@ -89,8 +92,9 @@ describe("where each part runs", () => {
     expect(by(5).where).not.toBe("you");
     expect(r.totals).toMatchObject({ parts: 5, out: 3 });
     expect(r.totals.kept).toBeGreaterThan(r.totals.used);
-    expect(r.table).toContain("| # | Part | Kind | Runs on | Model | Time | Tokens | Cost | When |");
-    expect(r.table).toContain("you (Claude Code)");
+    expect(r.table).toContain("| # | Part | Kind | Model | Time | Tokens | Cost | When |");
+    expect(r.table).toContain("Claude Sonnet 4.6 (platform model)"); // a helper's model, never "you"
+    expect(r.table).not.toMatch(/\byou \(|your plan/);
     expect(r.table).toContain("after 3");
     expect(r.next).toContain("Run part 1 now with delegate");
     expect(r.next).toContain("Do these yourself: part 3 on Claude Sonnet 4.6, part 4 on Claude Sonnet 4.6");
@@ -121,7 +125,7 @@ describe("where each part runs", () => {
     expect(r.parts.every((p) => p.where === "you")).toBe(true);
     expect(r.parts[0].why).toContain("Leanfare has no model for it now");
     expect(r.manager).toBe("you");
-    expect(r.table).toContain("| you |");
+    expect(r.table).toContain("| the app's model (main model) |");
   });
 
   test("split rules: no model is asked to split it", async () => {
@@ -178,9 +182,9 @@ describe("where each part runs", () => {
       { n: 2, title: "Fix it", kind: "code", effort: "high", needs: [1], task: "", files: [], size: "small", where: "you", model: null, use: { id: "anthropic/claude-sonnet-4-6", label: "Claude Sonnet 4.6", alias: "sonnet" }, seconds: null, tokens: 5000, cost: null, why: "" },
     ] as Part[];
     const t = tableOf({ task: "x", manager: "Claude Code", parts, totals: { parts: 2, out: 1, later: 0, kept: SIZE_TOKENS.large, used: 5000, seconds: 40, after: null, cost: 0 }, split: { by: "rules", model: null, cost: null, note: null }, limits: null });
-    expect(t).toContain("| 1 | Read / the logs | read, low | Leanfare, on this computer | Qwen | ~40 s | ~150k kept | $0 | now |");
-    expect(t).toContain("| 2 | Fix it | code, high | you (Claude Code) | Claude Sonnet 4.6 |  | ~5k of your plan | in your plan | after 1 |"); // the model to pick in your app
-    expect(t).toContain("1 of 2 parts go to Leanfare. If they run, about 150k tokens stay out of your plan (97% of the parts' tokens) and about 5k stay in it: an estimate until they run.");
+    expect(t).toContain("| 1 | Read / the logs | read, low | Qwen (this computer) | ~40 s | ~150k kept | $0 | now |");
+    expect(t).toContain("| 2 | Fix it | code, high | Claude Sonnet 4.6 (platform model) |  | ~5k | Claude subscription | after 1 |"); // the model to pick in the app
+    expect(t).toContain("1 of 2 parts go to Leanfare. If they run, about 150k tokens stay out of the Claude subscription (97% of the parts' tokens) and about 5k stay in it: an estimate until they run.");
     const g = tableOf({ task: "x", manager: "Claude Code", parts, totals: { parts: 2, out: 1, later: 0, kept: SIZE_TOKENS.large, used: 5000, seconds: 40, after: null, cost: 0, guessed: true }, split: { by: "rules", model: null, cost: null, note: null }, limits: null });
     expect(g).toContain("stay in it: a guess, as no files were named for the reading.");
   });
@@ -421,8 +425,8 @@ describe("folders and searches", () => {
 describe("the model to pick in your app", () => {
   test("a part that stays with you names the model to pick there: the cheapest of that app's maker rated well enough", () => {
     const part = (kind: string, effort: string) => ({ kind, effort, task: "Fix the parser" } as any);
-    expect(modelInYourApp(part("code", "high"), "Claude Code")).toEqual({ id: "anthropic/claude-sonnet-4-6", label: "Claude Sonnet 4.6", alias: "sonnet" });
-    expect(modelInYourApp(part("code", "low"), "Claude Code")).toEqual({ id: "anthropic/claude-haiku-4-5", label: "Claude Haiku 4.5", alias: "haiku" }); // light work, the light model
+    expect(modelInYourApp(part("code", "high"), "Claude Code")).toMatchObject({ id: "anthropic/claude-sonnet-4-6", label: "Claude Sonnet 4.6", alias: "sonnet" });
+    expect(modelInYourApp(part("code", "low"), "Claude Code")).toMatchObject({ id: "anthropic/claude-haiku-4-5", label: "Claude Haiku 4.5", alias: "haiku" }); // light work, the light model
     expect(modelInYourApp(part("code", "medium"), "Codex")).toEqual({ id: "openai/gpt-5-mini", label: "GPT-5 mini", alias: null }); // never a retired or unrated one
     expect(modelInYourApp(part("reason", "high"), "you")).toBeNull(); // no app, no names
     expect(modelInYourApp(part("reason", "high"), "Perplexity")).toBeNull();
@@ -439,10 +443,10 @@ describe("the model to pick in your app", () => {
     expect(plan.parts.map((p) => p.where)).toEqual(["you", "you", "you"]);
     expect(plan.parts.map((p) => p.use?.label)).toEqual(["Claude Sonnet 4.6", "Claude Sonnet 4.6", "Claude Sonnet 4.6"]);
     expect(plan.parts[0].why).toContain("which Claude Code can do; no model you ticked in Leanfare does (tick Perplexity Sonar to send searches out)");
-    expect(plan.table).toContain("| 1 | Look up how its router works | search, medium | you (Claude Code) | Claude Sonnet 4.6 |");
+    expect(plan.table).toContain("| 1 | Look up how its router works | search, medium | Claude Sonnet 4.6 (platform model) |");
     expect(plan.table).not.toContain("your model");
     expect(plan.table).toContain("Nothing goes to Leanfare: tick Perplexity Sonar in Leanfare and the searches go out; name the files or folder it is about and the reading goes out.");
-    expect(plan.next).toContain("Do these yourself: part 1 on Claude Sonnet 4.6, part 2 on Claude Sonnet 4.6, part 3 on Claude Sonnet 4.6. For a part on another model than the one you run on, use a subagent with that model (model: opus, sonnet or haiku).");
+    expect(plan.next).toContain("Do these yourself: part 1 on Claude Sonnet 4.6, part 2 on Claude Sonnet 4.6, part 3 on Claude Sonnet 4.6. For a part on another model than the one you run on, use a subagent with that model (model: haiku, sonnet, opus or fable).");
     expect(nothingOut([{ kind: "code", where: "you", files: ["a.ts"] }])).toBe("Nothing goes to Leanfare: every part changes the project or needs the hardest judgement.");
   });
 

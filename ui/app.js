@@ -490,16 +490,15 @@
   // kept out of your plan and the cost. Leanfare's parts can run here at once; the rest is for the
   // app you work in (Copy for Claude Code hands it the plan).
   const planBox = { ta: null, rules: null };
-  const PLAN_APPS = [["Claude Code", "Claude Code"], ["Claude", "Claude Desktop or Cowork"], ["Codex", "Codex"], ["Gemini CLI", "Gemini CLI"], ["Cursor", "Cursor"], ["you", "No app (just you)"]];
+  const PLAN_APPS = [["Claude Code", "Claude Code"], ["Claude", "Claude Desktop or Cowork"], ["you", "No app (just you)"]]; // Claude only (0.15)
   let planTimer = null;
-  const RUNS_ON = { you: "you", local: "Leanfare, on this computer", free: "Leanfare, free model", paid: "Leanfare, pay per use", codex: "Leanfare, through Codex", gemini: "Leanfare, through Gemini CLI" };
-  // Who a part that stays with you runs on: "you (Claude, on your Claude Max plan)" (planner.ts: youText).
-  const youText = (P) => {
-    const plan = P.you && P.you.plan ? `on your ${P.you.plan.replace(/ plan$/i, "")} plan` : null;
-    const app = P.manager === "you" ? null : P.manager;
-    return app || plan ? `you (${[app, plan].filter(Boolean).join(", ")})` : "you";
-  };
-  const STATUS = { waiting: "waiting", running: "running…", done: "done", failed: "failed", stopped: "stopped", yours: "yours to do", after_yours: "after yours", blocked: "waits for a part that is not done", asks: "paid: waits for a yes" };
+  // 0.15: a part names its model with its role, never "you" (planner.ts: modelText, costText); an older plan's words are made here.
+  const ROLE = { local: "this computer", free: "free", paid: "paid", codex: "ChatGPT subscription", gemini: "Google subscription" };
+  const planName = (P) => (P.you && P.you.plan ? P.you.plan.replace(/ plan$/i, "") : "the Claude subscription");
+  const modelWords = (P, p) => p.words?.model ?? (p.where === "you"
+    ? `${(/claude code/i.test(P.manager) ? p.use?.label : null) ?? P.you?.label ?? p.use?.label ?? "the app's model"} (main model)`
+    : `${p.where === "codex" ? "Codex" : p.model?.label ?? ""} (${ROLE[p.where] ?? p.where})`);
+  const STATUS = { waiting: "waiting", running: "running…", done: "done", failed: "failed", stopped: "stopped", yours: "for the main model", after_yours: "after the main model's", blocked: "waits for a part that is not done", asks: "paid: waits for a yes" };
   function renderPlan() {
     const el = $("#tab-plan");
     if (!planBox.ta) {
@@ -554,21 +553,20 @@
         td("#", { text: String(p.n) }),
         h("td", { "data-label": "Part", class: "part" }, h("b", { text: p.title }), h("div", { class: "fine", text: p.why })),
         td("Kind", { text: `${p.kind}${p.patch ? " (patch)" : ""}, ${p.effort}` }),
-        td("Runs on", {}, p.where === "you" ? youText(P) : RUNS_ON[p.where], p.risk ? h("span", { class: "chip warn", title: "A free tier: what is sent there may be read or kept by its company. Make the plan private to keep it on this computer.", text: p.risk }) : null),
-        td("Model", { text: p.model?.label ?? ((/claude code/i.test(P.manager) ? p.use?.label : null) ?? P.you?.label ?? p.use?.label ?? "your model") }),
+        td("Model", {}, modelWords(P, p), p.risk ? h("span", { class: "chip warn", title: "A free tier: what is sent there may be read or kept by its company. Make the plan private to keep it on this computer.", text: p.risk }) : null),
         td("Time", { text: p.seconds === null ? "—" : secsShort(p.seconds) }),
-        td("Tokens", { text: p.where === "you" ? `~${tokShort(p.tokens)} of your plan` : `~${tokShort(p.tokens)} kept` }),
-        td("Cost", { text: p.where === "you" ? "in your plan" : p.where === "codex" ? "in your ChatGPT plan" : p.where === "gemini" ? "in your Google account" : p.cost === null ? "not known" : money(p.cost) }),
+        td("Tokens", { text: p.where === "you" ? `~${tokShort(p.tokens)}` : `~${tokShort(p.tokens)} kept` }),
+        td("Cost", { text: p.words?.cost ?? (p.where === "you" ? planName(P) : p.where === "codex" ? "ChatGPT subscription, $0" : p.where === "gemini" ? "Google subscription, $0" : p.cost === null ? "not known" : money(p.cost)) }),
         td("When", { text: p.needs.length ? `after ${p.needs.join(", ")}` : "now" }),
         run ? td("Now", { class: "st " + (r?.status ?? ""), text: STATUS[r?.status] ?? "" }) : null);
     });
     const t = P.totals;
-    const head = ["#", "Part", "Kind", "Runs on", "Model", "Time", "Tokens", "Cost", "When", ...(run ? ["Now"] : [])];
+    const head = ["#", "Part", "Kind", "Model", "Time", "Tokens", "Cost", "When", ...(run ? ["Now"] : [])];
     const table = h("div", { class: "plan-table-wrap" }, h("table", { class: "plan-table" }, h("thead", {}, h("tr", {}, ...head.map((x) => h("th", { text: x })))), h("tbody", {}, ...rows)));
     const time = [t.seconds !== null ? `Leanfare's parts take ${secsShort(t.seconds)} done at once` : "", t.after !== null && t.after !== undefined ? `${t.seconds !== null ? "the ones after yours take" : "Leanfare's parts wait for yours, then take"} ${secsShort(t.after)}${t.seconds !== null ? " once yours are done" : ""}` : ""].filter(Boolean).join("; ");
     const share = t.kept > 0 ? ` (${t.used ? `${Math.max(1, Math.min(99, Math.round((t.kept / (t.kept + t.used)) * 100)))}%` : "all"} of the parts' tokens)` : "";
     // Before the parts run these are estimates, and a guess where no files were named (planner.ts: totalsText).
-    const what = t.out ? `${t.out} of ${t.parts} parts go to Leanfare. If they run, about ${tokShort(t.kept)} tokens stay out of your plan${share}${t.used ? ` and about ${tokShort(t.used)} stay in it` : ""}: ${t.guessed ? "a guess, as no files were named for the reading" : "an estimate until they run"}.` : "Nothing goes to Leanfare.";
+    const what = t.out ? `${t.out} of ${t.parts} parts go to Leanfare. If they run, about ${tokShort(t.kept)} tokens stay out of ${planName(P)}${share}${t.used ? ` and about ${tokShort(t.used)} stay in it` : ""}: ${t.guessed ? "a guess, as no files were named for the reading" : "an estimate until they run"}.` : "Nothing goes to Leanfare.";
     const small = !t.out && P.parts.every((p) => p.keep);
     const sum = h("p", { class: "plan-sum", text: `${what}${time ? ` ${time}.` : ""} Pay per use: ${t.cost === null ? "not known" : money(t.cost)}.${t.out ? "" : ` ${small ? "It is small enough to answer yourself: handing it off would cost more than it saves." : nothingOut(P.parts)}`}` });
     // A local model that would run the reading and drafting free: pressing Download it is the yes.
@@ -3374,6 +3372,33 @@
   }
   // Gemini CLI on your Google account (0.14.1): found and signed in, then one switch.
   async function loadGeminiCli() { try { S.geminiCli = await api("/api/gemini-cli"); } catch { S.geminiCli = { installed: false, signedIn: false }; } renderSettings(); }
+  // ---- Claude's own models (0.15, claudeladder.ts) ----------------------------------------------------------------
+  // The helpers (subagents) Claude starts run on Leanfare's pick: the newest of each Claude family llmledger lists, in
+  // the order the ratings and prices give, and your rules for the strongest one.
+  async function loadClaudeModels() { try { S.claudeModels = await api("/api/claude-models"); } catch { S.claudeModels = { rungs: [], picks: {}, rules: null, today: [] }; } renderSettings(); }
+  function claudeModelsSettingEl(s) {
+    if (S.claudeModels === undefined) { S.claudeModels = null; loadClaudeModels(); }
+    const v = S.claudeModels, rules = (v && v.rules) || s.claudeHelpers || { on: true, top: true, topUntil: 80, topPerDay: 20 };
+    const save = (patch, done) => patchSettings({ claudeHelpers: { ...rules, ...patch } }, done).then(() => loadClaudeModels());
+    const price = (r) => (r.input === null || r.output === null ? "" : `$${r.input} / $${r.output}`);
+    const picks = v && v.picks && v.picks.code ? [["The hardest parts and final checks", v.picks.reason?.top], ["High effort", v.picks.reason?.high], ["Medium effort", v.picks.reason?.medium], ["Light code", v.picks.code?.low], ["Light reading", v.picks.read?.low]] : [];
+    const today = v && v.today && v.today.length ? `Today: ${v.today.map((t) => `${t.n} on ${t.family}`).join(", ")}.` : "No helpers today yet.";
+    const num = (value, min, max, label, key) => h("input", { type: "number", min: String(min), max: String(max), step: "1", value: String(value), "aria-label": label, class: "num-in",
+      onchange: (e) => { const n = Math.round(Number(e.target.value)); if (Number.isFinite(n) && n >= min && n <= max) save({ [key]: n }, `${label}: ${n}.`); } });
+    return h("div", { class: "setting claude-models", id: "claudeModelsSetting" }, h("h3", { text: "Claude's own models" }),
+      h("p", { text: "The helpers Claude starts in Cowork, Claude Desktop and Claude Code run on the model Leanfare picks: the plan part's, else by the kind of work. The order comes from llmledger's ratings and prices: a new Claude model takes its place the day llmledger lists it, and a retired one drops out." }),
+      !v ? h("p", { class: "note", text: "Reading llmledger's list of Claude models…" }) : h("table", { class: "cm-table" },
+        h("thead", {}, h("tr", {}, ...["Model", "Rating", "Price per 1M"].map((x) => h("th", { text: x })))),
+        h("tbody", {}, ...v.rungs.map((r) => h("tr", {}, h("td", { text: r.label }), h("td", { text: r.rated ? String(Math.round(r.overall ?? 0)) : "not rated yet" }), h("td", { text: price(r) }))))),
+      picks.length ? h("p", { class: "note cm-picks", text: picks.filter(([, m]) => m).map(([what, m]) => `${what}: ${m}`).join(" · ") }) : null,
+      switchRow(rules.on !== false, "Leanfare sets each helper's model", "Off: a helper runs on the model Claude picks (the chat's own, unless the call names one).",
+        (on) => save({ on }, on ? "Leanfare sets each helper's model." : "Claude picks its helpers' models again.")),
+      switchRow(rules.top !== false, "The strongest one for the hardest parts and final checks", "When the votes cannot tell two models apart, the bigger one takes these; Claude does not say how much of one model is left, so the rules below hold it back.",
+        (on) => save({ top: on }, on ? "The strongest model takes the hardest parts." : "The hardest parts take the next strongest.")),
+      h("div", { class: "row cm-caps" }, h("span", { class: "note", text: "Only while the week is under" }), num(rules.topUntil, 0, 100, "Week used, at most (percent)", "topUntil"), h("span", { class: "note", text: "% used, and at most" }),
+        num(rules.topPerDay, 0, 1000, "Helpers on the strongest model a day, at most", "topPerDay"), h("span", { class: "note", text: "a day." })),
+      h("p", { class: "fine", text: today }));
+  }
   function geminiCliSettingEl(s) {
     if (S.geminiCli === undefined) { S.geminiCli = null; loadGeminiCli(); }
     const g = S.geminiCli, on = !!s.geminiCliPlan && !!g?.signedIn;
@@ -3732,7 +3757,7 @@
   // Each column's cards go into a few groups by their heading: the everyday ones open, the rest closed, each remembered
   // as you leave it. A card's longer explanations fold behind a Details line, so a closed page fits one screen.
   const RIGHT_GROUPS = [
-    { key: "apps", title: "Your apps and AI plans", open: true, has: ["Use Leanfare in your apps", "Hand work to your other AI plans"] },
+    { key: "apps", title: "Your apps and AI plans", open: true, has: ["Use Leanfare in your apps", "Claude's own models", "Hand work to your other AI plans"] },
     // Each group, open, fits one screen (0.13.12): the level, where work goes, jobs, money and subscriptions apart.
     { key: "level", title: "How much Leanfare does", open: true, has: ["How much Leanfare takes first"] },
     { key: "where", title: "Where work may go", open: false, has: ["Where Leanfare may send work"] },
@@ -3819,6 +3844,7 @@
     const right = h("div", { class: "colR" },
       h("div", { class: "section-title", text: "In your apps" }),
       appsSettingEl(),
+      claudeModelsSettingEl(s),
       h("div", { class: "setting workers", id: "workersSetting" }, h("h3", { text: "Hand work to your other AI plans" }), codexSettingEl(s), geminiCliSettingEl(s), freeRowsEl()),
       h("div", { class: "section-title", text: "Choices" }),
       levelSettingEl(s), keepSettingEl(s),

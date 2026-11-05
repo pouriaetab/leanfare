@@ -48,7 +48,7 @@ describe("before the parts run", () => {
     expect(facts.tokens).toBeLessThan(SIZE_TOKENS.large); // not the 150k it guessed before
     expect(p.totals.guessed).toBe(true);
     expect(p.table).toContain(": a guess, as no files were named for the reading.");
-    expect(p.table).toMatch(/parts go to Leanfare\. If they run, about \S+ tokens stay out of your plan \(\d+% of the parts' tokens\)/);
+    expect(p.table).toMatch(/parts go to Leanfare\. If they run, about \S+ tokens stay out of the Claude subscription \(\d+% of the parts' tokens\)/);
   });
 
   test("with files named: an estimate until they run", async () => {

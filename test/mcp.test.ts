@@ -58,7 +58,7 @@ describe("the protocol", () => {
     const unknown = await rpc("initialize", { protocolVersion: "2019-01-01", capabilities: {} });
     expect(unknown.result.protocolVersion).toBe("2025-11-25");
     const list = await rpc("tools/list", {});
-    expect(list.result.tools.map((t: any) => t.name)).toEqual(["plan", "plan_run", "plan_stop", "plan_status", "grade", "ask", "delegate", "spend", "report", "models", "estimate", "trial", "local_model", "level", "live"]);
+    expect(list.result.tools.map((t: any) => t.name)).toEqual(["plan", "plan_run", "plan_stop", "plan_status", "grade", "ask", "delegate", "spend", "report", "models", "estimate", "trial", "local_model", "level", "helper", "live"]);
     expect(list.result.resultType).toBeUndefined();
   });
 
@@ -68,7 +68,7 @@ describe("the protocol", () => {
     expect(d.result._meta["io.modelcontextprotocol/serverInfo"].name).toBe("leanfare");
     const list = await rpc("tools/list", modern());
     expect(list.result.resultType).toBe("complete");
-    expect(list.result.tools).toHaveLength(15);
+    expect(list.result.tools).toHaveLength(16);
     for (const t of list.result.tools) expect(t.inputSchema.type).toBe("object");
   });
 
@@ -119,8 +119,8 @@ describe("the tools", () => {
     const r = await rpc("tools/call", { name: "plan", arguments: { task: "Reverse engineer the router in this project and build a smaller one", files: [dir], split: "rules", run: false } });
     expect(r.result.isError).toBeUndefined();
     const t = r.result.content[0].text;
-    expect(t).toContain("| # | Part | Kind | Runs on | Model | Time | Tokens | Cost | When |");
-    expect(t).toContain("you (Claude Code)");
+    expect(t).toContain("| # | Part | Kind | Model | Time | Tokens | Cost | When |");
+    expect(t).toContain("(platform model)"); // a part Claude Code keeps names its helper's model, never "you"
     expect(t).toContain("Run part 1 now with delegate");
     const parts = r.result.structuredContent.parts;
     expect(parts.map((p: any) => p.kind)).toEqual(["read", "read", "reason", "code", "reason"]);
@@ -434,6 +434,6 @@ describe("the end of the input", () => {
     expect((await run('{"jsonrpc":"2.0","id":1,"method":"ping"}')).map((m) => m.id)).toEqual([1]);
     const two = await run('{"jsonrpc":"2.0","id":1,"method":"ping"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}');
     expect(two.map((m) => m.id)).toEqual([1, 2]);
-    expect(two[1].result.tools).toHaveLength(15);
+    expect(two[1].result.tools).toHaveLength(16);
   }, 20000);
 });

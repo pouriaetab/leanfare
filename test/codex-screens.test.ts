@@ -57,7 +57,7 @@ describe("Settings: the ChatGPT row, next to your apps", () => {
 });
 
 describe("the Plan tab", () => {
-  test("a part on Codex: where it runs, its model, and its cost in your ChatGPT plan", async () => {
+  test("a part on Codex: its model with its subscription, and its cost there", async () => {
     await keys("openai");
     await ui(url, "/api/settings", { codexPlan: true });
     const doc = await open(url);
@@ -68,8 +68,7 @@ describe("the Plan tab", () => {
     doc.querySelector("#planGo").click();
     await waitFor(() => !!doc.querySelector("#planResult"));
     const t = doc.querySelector("#planResult").textContent;
-    expect(t).toContain("Leanfare, through Codex");
-    expect(t).toContain("Codex (your ChatGPT plan)");
-    expect(t).toContain("in your ChatGPT plan");
+    expect(t).toContain("Codex (ChatGPT subscription)");
+    expect(t).toContain("ChatGPT subscription, $0");
   }, 20000);
 });

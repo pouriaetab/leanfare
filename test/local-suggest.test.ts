@@ -86,7 +86,8 @@ describe("in a plan", () => {
   test("a reading part that goes to pay per use: the plan names the local model, and the table says how to get it", async () => {
     computer(64 * GB);
     await keys("openai");
-    const r = await ui(url, "/api/plan", { task: "Find the errors in these logs and list them", files: [{ name: "logs/app.log", size: 40_000 }], manager: "Claude Code", split: "rules" });
+    // 20 KB: each part reads the log (0.15: "Do it" gets the files too), and a local model takes up to 16k tokens.
+    const r = await ui(url, "/api/plan", { task: "Find the errors in these logs and list them", files: [{ name: "logs/app.log", size: 20_000 }], manager: "Claude Code", split: "rules" });
     expect(r.status).toBe(200);
     expect(r.json.parts.some((p: any) => p.where === "paid")).toBe(true);
     expect(r.json.local).toEqual({ name: "gemma4:31b-it-qat", size: 19 * GB, like: "Gemma 4 31B", rating: 1437, fit: "fits" });

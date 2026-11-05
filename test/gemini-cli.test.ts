@@ -47,8 +47,8 @@ describe("Gemini CLI on your Google account", () => {
     const r = await makePlan({ task: "Summarize the notes in this folder for the README", files: [], manager: "Claude Code", split: "rules", level: 4, signal: signal() });
     const part = r.parts.find((p) => p.where === "gemini")!;
     expect(part.model).toEqual({ id: "gemini-cli/auto", label: "Gemini CLI" });
-    expect(r.table).toContain("| Leanfare, through Gemini CLI (Google's terms for a free account: people may read it) |");
-    expect(r.table).toContain("in your Google account");
+    expect(r.table).toContain("| Gemini CLI (Google subscription), Google's terms for a free account: people may read it |");
+    expect(r.table).toContain("| Google subscription, $0 |");
     startRun(r.id, { paid: true });
     await until(() => !runView(r.id)!.running);
     const done = runView(r.id)!.parts.find((p) => p.n === part.n)!;
