@@ -1,4 +1,5 @@
-// Live tokens (0.12): the model calls running now, and those that ended in the last minute and a half, as numbers
+// Live tokens (0.12): the model calls running now, and those that ended in the last minute and a half (0.15.1: and the
+// last calls, however long ago they ended, until newer ones end), as numbers
 // only: which model, for what (a hand off, its check, a plan's part, the chat, an app through Leanfare's address), and
 // its tokens by kind as they come: new input, cached input, thinking and written. Words are counted, never kept.
 // Until a provider gives its own counts, input is Leanfare's estimate and thinking and writing are about four
@@ -18,6 +19,10 @@ interface Inner extends LiveCall { thinkChars: number; writeChars: number; usage
 
 const calls = new Map<string, Inner>();
 export const LIVE_KEEP = 90_000; // an ended call stays this long (the lanes show the last 60 seconds)
+// 0.15.1: the last calls stay until newer ones end, so Savings' Live card can show them, with when they ended, however
+// long ago (it went empty a minute after the last call, even under your pointer): those that ended within a minute of
+// the newest end.
+export const LIVE_LAST = 60_000;
 const MOST_ENDED = 60;
 let version = 0; // grows with every change: the stream sends only when something changed
 export const liveVersion = () => version;
@@ -71,7 +76,8 @@ export function liveEnd(id: string, at = Date.now()) {
 
 function prune(at: number) {
   const ended = [...calls.values()].filter((c) => c.ended !== null).sort((a, b) => b.ended! - a.ended!);
-  ended.forEach((c, i) => { if (at - c.ended! > LIVE_KEEP || i >= MOST_ENDED) calls.delete(c.id); });
+  const newest = ended[0]?.ended ?? 0;
+  ended.forEach((c, i) => { if ((at - c.ended! > LIVE_KEEP && newest - c.ended! > LIVE_LAST) || i >= MOST_ENDED) calls.delete(c.id); });
 }
 
 const plain = ({ thinkChars, writeChars, usage, ...c }: Inner): LiveCall => c;
