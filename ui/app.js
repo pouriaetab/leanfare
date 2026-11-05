@@ -3664,9 +3664,16 @@
   }
   function appsSettingEl() {
     if (!S.apps) loadApps();
-    const list = S.apps?.list ?? [];
+    // Claude's apps only (0.15): Leanfare lives in Claude Desktop with Cowork, and Claude Code. An archived app it is still
+    // in gets one line, to take it out.
+    const all = S.apps?.list ?? [];
+    const list = all.filter((a) => !a.archived);
+    const still = all.filter((a) => a.archived && (a.status === "added" || a.status === "old" || a.auto?.on || a.auto?.partly));
     const here = list.filter((a) => a.status !== "not installed");
     const away = list.filter((a) => a.status === "not installed");
+    const stillRow = (a) => h("div", { class: "app-row archived" }, h("div", { class: "row" },
+      h("span", { class: "grow" }, h("b", { text: a.name }), h("span", { class: "note", text: " · Leanfare is still in it. It lives in Claude only now, and still sends parts to outside models." })),
+      runButton("Take it out", (signal) => (a.status === "added" || a.status === "old" ? toggleApp(a, false, signal) : toggleAuto(a, false, signal)), "btn small")));
     const row = (a) => h("div", { class: "app-row" },
       h("div", { class: "row" },
         h("span", { class: "grow" }, h("b", { text: a.name }), h("span", { class: "note", text: ` · ${APP_STATUS[a.status]}` })),
@@ -3678,12 +3685,13 @@
         h("span", { class: "grow note", text: `${a.auto.what}${a.auto.on ? " · on" : a.auto.partly ? " · partly on" : ""}.${a.auto.reminders?.n ? ` In the last 7 days it reminded Claude Code ${a.auto.reminders.n} time${a.auto.reminders.n === 1 ? "" : "s"} before a big read (${a.auto.reminders.kb >= 1024 ? `${(a.auto.reminders.kb / 1024).toFixed(1)} MB` : `${a.auto.reminders.kb} KB`} of files).` : ""}` }),
         runButton(a.auto.on || a.auto.partly ? "Turn off" : "Turn on", (signal) => toggleAuto(a, !(a.auto.on || a.auto.partly), signal), a.auto.on || a.auto.partly ? "btn small" : "btn small primary")) : null);
     return h("div", { class: "setting apps", id: "appsSetting" }, h("h3", { text: "Use Leanfare in your apps" }),
-      h("p", { text: "Adds Leanfare's tools (plan, delegate, ask, spend, models, estimate, trial) to the AI apps you already use, so they work as usual with Leanfare on top. Leanfare changes only its own entry in each app's settings, and keeps a copy of the file as it was." }),
+      h("p", { text: "Adds Leanfare's tools (plan, delegate, ask, spend, models, estimate, trial) to Claude Desktop (with Cowork) and Claude Code, so they work as usual with Leanfare on top. Leanfare changes only its own entry in each app's settings, and keeps a copy of the file as it was." }),
       h("div", { class: "row" }, h("button", { class: "btn small", type: "button", text: "Set up all at once", onclick: () => setTab("setup") }),
-        h("span", { class: "note", text: "Every app found, and the first models when none is ticked, with one press" })),
+        h("span", { class: "note", text: "Claude Desktop and Claude Code, and the first models when none is ticked, with one press" })),
       S.apps?.loading ? h("p", { class: "note", text: "Looking for the AI apps on this computer…" }) : null,
       ...here.map(row),
-      !S.apps?.loading && !here.length ? h("p", { class: "note", text: "None of the apps Leanfare knows are on this computer yet." }) : null,
+      !S.apps?.loading && !here.length ? h("p", { class: "note", text: "Neither Claude Desktop nor Claude Code is on this computer yet." }) : null,
+      ...still.map(stillRow),
       away.length ? h("button", { class: "more-toggle", type: "button", text: S.showAllApps ? "▾ Hide the apps not on this computer" : `▸ ${away.length} more not found on this computer (${away.map((a) => a.name).join(", ")})`, onclick: () => { S.showAllApps = !S.showAllApps; renderSettings(); } }) : null,
       S.showAllApps ? h("div", { class: "away" }, ...away.map(row)) : null);
   }
