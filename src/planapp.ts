@@ -62,10 +62,12 @@ export const PLAN_APP_HTML = `<!doctype html>
   const tok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(Math.round(n)));
   const share = (t) => (t.kept > 0 ? " (" + (t.used ? Math.max(1, Math.min(99, Math.round((t.kept / (t.kept + t.used)) * 100))) + "%" : "all") + " of the parts' tokens)" : "");
   const secs = (s) => (s === null || s === undefined ? "" : s < 90 ? "~" + Math.max(1, Math.round(s)) + " s" : "~" + Math.round(s / 60) + " min");
-  const RUNS = { you: "you", local: "Leanfare, this computer", free: "Leanfare, free", paid: "Leanfare, pay per use", codex: "Leanfare, through Codex" };
-  const NOW = { waiting: "waiting", running: "running…", done: "done", failed: "failed", stopped: "stopped", yours: "yours", after_yours: "after yours", blocked: "waits", asks: "waits for a yes" };
+  // 0.15: each part names its model with its role (main model, platform model, free, paid, this computer, a subscription),
+  // never "you"; the server words it (planner.ts: modelText, costText), with a fallback for an older server.
+  const ROLE = { local: "this computer", free: "free", paid: "paid", codex: "ChatGPT subscription", gemini: "Google subscription" };
+  const NOW = { waiting: "waiting", running: "running…", done: "done", failed: "failed", stopped: "stopped", yours: "main model", after_yours: "after the main model's", blocked: "waits", asks: "waits for a yes" };
   // A part in words: what the run says, then whether Claude has its answer and how Claude graded it.
-  const nowOf = (r) => (!r ? "" : r.verdict ? "checked: " + r.verdict : r.took && r.status === "done" ? "with Claude" : NOW[r.status] || r.status || "");
+  const nowOf = (r, p) => (!r ? "" : r.verdict ? "checked: " + r.verdict : r.took && r.status === "done" ? "with Claude" : r.status === "yours" && p && p.model_role ? p.model_role : NOW[r.status] || r.status || "");
   const nowClass = (r) => (!r ? "" : r.verdict === "good" || (!r.verdict && r.status === "done") ? "done" : r.verdict === "wrong" || ["failed", "blocked", "asks"].includes(r.status) ? "bad" : "");
   const count = (n) => (n === 1 ? "1 part" : n + " parts");
   let plan = null, run = null, timer = null, watch = null, until = 0;
@@ -99,20 +101,21 @@ export const PLAN_APP_HTML = `<!doctype html>
   function draw() {
     const app = $("#app");
     if (!plan) return;
-    // Who a part that stays with you runs on: the app's own plan, when Settings names it.
-    const youText = (pl) => (pl.you && pl.you.plan ? "you (on your " + pl.you.plan.replace(/ plan$/i, "") + " plan)" : RUNS.you || "you");
+    const planName = (pl) => (pl.you && pl.you.plan ? pl.you.plan.replace(/ plan$/i, "") : "the Claude subscription");
+    const modelOf = (p) => p.model_text || (p.runs_on === "you"
+      ? ((p.your_model && p.your_model.label) || (plan.you && plan.you.label) || "the app's model") + " (main model)"
+      : (p.runs_on === "codex" ? "Codex" : p.model_label || p.model || "") + " (" + (ROLE[p.runs_on] || p.runs_on) + ")");
     const st = (n) => (run ? run.parts.find((p) => p.n === n) : null);
     const byN = (n) => plan.parts.find((q) => q.n === n) || {};
     const laterOf = (p, seen = 0) => seen < 50 && p.needs.some((n) => byN(n).runs_on === "you" || (byN(n).needs && laterOf(byN(n), seen + 1))); // it waits for one of yours, through its needs
     const rows = plan.parts.map((p) => el("tr", { class: p.runs_on === "you" ? "you" : "" },
       el("td", { class: "n", text: p.n }),
       el("td", {}, el("b", { text: p.title }), el("div", { class: "why", text: p.kind + (p.patch ? " (patch)" : "") + ", " + p.effort + (p.needs.length ? " · after " + p.needs.join(", ") : "") })),
-      el("td", { "data-l": "Runs on", text: (p.runs_on === "you" ? youText(plan) : RUNS[p.runs_on] || p.runs_on) + (p.risk ? " (" + p.risk + ")" : "") }),
-      el("td", { "data-l": "Model", text: p.model_label || (p.runs_on === "you" ? (plan.you && plan.you.label) || (p.your_model && p.your_model.label) || "your model" : p.model || "") }),
+      el("td", { "data-l": "Model", text: modelOf(p) + (p.risk ? ", " + p.risk : "") }),
       el("td", { class: "t", "data-l": "Time", text: secs(p.seconds) }),
-      el("td", { "data-l": "Tokens", text: "~" + tok(p.tokens) + (p.runs_on === "you" ? " of your plan" : " kept") }),
-      el("td", { class: "c", "data-l": "Cost", text: p.runs_on === "you" ? "in your plan" : p.runs_on === "codex" ? "in your ChatGPT plan" : p.runs_on === "gemini" ? "in your Google account" : usd(p.cost_usd) }),
-      run ? el("td", { class: "s " + nowClass(st(p.n)), "data-l": "Now", text: nowOf(st(p.n)) }) : null));
+      el("td", { "data-l": "Tokens", text: "~" + tok(p.tokens) + (p.runs_on === "you" ? "" : " kept") }),
+      el("td", { class: "c", "data-l": "Cost", text: p.cost_text || (p.runs_on === "you" ? planName(plan) : p.runs_on === "codex" ? "ChatGPT subscription, $0" : p.runs_on === "gemini" ? "Google subscription, $0" : usd(p.cost_usd)) }),
+      run ? el("td", { class: "s " + nowClass(st(p.n)), "data-l": "Now", text: nowOf(st(p.n), p) }) : null));
     const t = plan.totals;
     const mine = plan.parts.filter((p) => p.runs_on !== "you").length;
     const later = plan.parts.filter((p) => p.runs_on !== "you" && laterOf(p)).map((p) => p.n);
@@ -120,12 +123,12 @@ export const PLAN_APP_HTML = `<!doctype html>
     const kids = [
       el("h1", {}, "Leanfare's plan", el("small", { text: mine + " of " + plan.parts.length + " parts to Leanfare" })),
       el("p", { class: "state " + state.cls, id: "state" }, state.live ? el("span", { class: "dot" }) : null, state.text),
-      el("table", {}, el("thead", {}, el("tr", {}, ...["#", "Part", "Runs on", "Model", "Time", "Tokens", "Cost", ...(run ? ["Now"] : [])].map((x) => el("th", { text: x })))), el("tbody", {}, ...rows)),
-      mine ? el("p", { class: "sum", text: "About " + tok(t.kept) + " tokens stay out of your plan" + share(t) + (t.used ? " and about " + tok(t.used) + " stay in it" : "") + ": " + (t.guessed ? "a guess, as no files were named for the reading" : "an estimate until the parts end") + ". Pay per use: " + usd(t.cost) + "." }) : null,
+      el("table", {}, el("thead", {}, el("tr", {}, ...["#", "Part", "Model", "Time", "Tokens", "Cost", ...(run ? ["Now"] : [])].map((x) => el("th", { text: x })))), el("tbody", {}, ...rows)),
+      mine ? el("p", { class: "sum", text: "About " + tok(t.kept) + " tokens stay out of " + planName(plan) + share(t) + (t.used ? " and about " + tok(t.used) + " stay in it" : "") + ": " + (t.guessed ? "a guess, as no files were named for the reading" : "an estimate until the parts end") + ". Pay per use: " + usd(t.cost) + "." }) : null,
       plan.local ? el("p", { class: "muted", text: "A local model fits this computer: " + plan.local.name + " (" + (plan.local.size / 1e9).toFixed(plan.local.size < 10e9 ? 1 : 0) + " GB), rated like " + plan.local.like + ", free to run. Ask for it to be downloaded (Leanfare's local_model asks you first)." }) : null,
     ].filter(Boolean); // replaceChildren would print a left out part as the word null
     if (run && run.asks) kids.push(el("p", { class: "bad", text: (run.asks.parts.length === 1 ? "Part " + run.asks.parts[0] + " is" : "Parts " + run.asks.parts.join(", ") + " are") + " paid (" + (run.asks.estimate === null || run.asks.estimate === undefined ? "cost not known" : "about " + usd(run.asks.estimate)) + ") and wait" + (run.asks.parts.length === 1 ? "s" : "") + " for your yes: Claude asks you in the chat." }));
-    if (later.length) kids.push(el("p", { class: "muted", text: (later.length === 1 ? "Part " + later[0] + " waits" : "Parts " + later.join(", ") + " wait") + " for yours: once yours are done, Claude hands " + (later.length === 1 ? "it" : "them") + " to Leanfare." }));
+    if (later.length) kids.push(el("p", { class: "muted", text: (later.length === 1 ? "Part " + later[0] + " waits" : "Parts " + later.join(", ") + " wait") + " for the main model's parts: once those are done, Claude hands " + (later.length === 1 ? "it" : "them") + " to Leanfare." }));
     if (run) for (const p of run.parts.filter((x) => x.answer || x.error)) kids.push(el("details", {}, el("summary", { text: "Part " + p.n + " · " + p.title + " · " + nowOf(p) + (p.model ? " · " + p.model : "") }), p.answer ? el("pre", { text: p.answer }) : null, p.error ? el("p", { class: "bad", text: p.error }) : null));
     app.replaceChildren(...kids);
     size();
