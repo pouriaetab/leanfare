@@ -22,6 +22,7 @@ import { forgetTests } from "../src/localtest";
 import { forgetLogs } from "../src/plans";
 import { forgetFound } from "../src/found";
 import { runsSettled } from "../src/planner";
+import { forgetRests as forgetHelperRests } from "../src/claudeladder";
 import { setNow } from "../src/util";
 import { KEYS, type startFake } from "./fake";
 import * as connect from "../src/connect";
@@ -73,9 +74,10 @@ export async function reset(patch: Partial<Settings> = {}) {
   setPaused(false);
   setNow("2026-10-21T12:00:00Z");
   await stopTrial();
-  db.exec("DELETE FROM ledger; DELETE FROM messages; DELETE FROM chats; DELETE FROM settings; DELETE FROM files; DELETE FROM delegations; DELETE FROM trials; DELETE FROM grades; DELETE FROM comparisons; DELETE FROM prompts; DELETE FROM rests; DELETE FROM noquota; DELETE FROM words; DELETE FROM checks;");
+  db.exec("DELETE FROM ledger; DELETE FROM messages; DELETE FROM chats; DELETE FROM settings; DELETE FROM files; DELETE FROM delegations; DELETE FROM trials; DELETE FROM grades; DELETE FROM comparisons; DELETE FROM prompts; DELETE FROM rests; DELETE FROM noquota; DELETE FROM words; DELETE FROM checks; DELETE FROM helpers; DELETE FROM app_turns;");
   forgetGrades();
   forgetRests();
+  forgetHelperRests(); // a family resting after a helper on it ended with nothing (claudeladder.ts)
   forgetNoQuota();
   forgetAllowances(); // allowance.ts reads the ledger again
   forgetAppLogs();
