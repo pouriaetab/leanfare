@@ -2426,15 +2426,30 @@
         await new Promise((r) => setTimeout(r, S.tokens.data?.running?.length ? 1000 : 3000));
       }
     })();
-    S.tokens.timer = setInterval(() => { if (S.tokens.view === "lanes" && liveCalls().length) redrawLive(); }, 250); // the lanes slide on between readings
+    S.tokens.timer = setInterval(() => {
+      if (S.tokens.view === "lanes" && liveWindow().length) redrawLive(); // the lanes slide on between readings
+      const stale = liveStale(); // the minute after the last call has passed: drawn once more as the last calls
+      if (stale !== !!S.tokens.stale) { S.tokens.stale = stale; redrawLive(); }
+      const sub = $("#liveCard .lv-head .muted"); // and "ended 3 min ago" keeps up, here and in the group's title line
+      if (sub && S.tokens.data && !S.tokens.data.running.length) { sub.textContent = liveSub(S.tokens.data); setGist("live", liveGist()); }
+    }, 250);
   }
   function liveStop() { S.tokens.conn?.abort(); S.tokens.conn = null; clearInterval(S.tokens.timer); S.tokens.timer = null; }
   function liveGot(v) { S.tokens.data = v; S.tokens.got = Date.now(); redrawLive(); }
   const liveNow = () => (S.tokens.data ? S.tokens.data.at + (Date.now() - S.tokens.got) : Date.now());
-  const liveCalls = () => { const v = S.tokens.data; if (!v) return []; const now = liveNow(); return [...v.running, ...v.ended.filter((c) => now - c.ended < 60_000)]; };
+  // The calls to show: those running and those that ended in the last minute; when there are none, the last calls,
+  // however long ago they ended (0.15.1: the card went empty a minute after the last call, even on a click).
+  const liveWindow = () => { const v = S.tokens.data; if (!v) return []; const now = liveNow(); return [...v.running, ...v.ended.filter((c) => now - c.ended < 60_000)]; };
+  const liveLast = () => { const v = S.tokens.data; if (!v || v.running.length || !v.ended.length) return []; const newest = v.ended[0].ended; return v.ended.filter((c) => newest - c.ended < 60_000); };
+  const liveCalls = () => { const w = liveWindow(); return w.length ? w : liveLast(); };
+  const liveStale = () => !liveWindow().length && liveLast().length > 0;
+  const liveAgo = (ms) => { const s = Math.max(0, Math.round((liveNow() - ms) / 1000)); return s < 90 ? `${s} s ago` : s < 90 * 60 ? `${Math.round(s / 60)} min ago` : `at ${new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`; };
+  const liveLastText = (v) => `the last ${liveLast().length === 1 ? "call" : `${liveLast().length} calls`} ended ${liveAgo(v.ended[0].ended)}`;
+  const liveSub = (v) => (!v ? "connecting…" : v.running.length ? `${plural(v.running.length, "call")} running · ${tokShort(v.rate)} tokens a second`
+    : liveStale() ? `nothing running now · ${liveLastText(v)}` : "nothing running now");
   const liveTotal = (c) => LIVE_KINDS.reduce((n, [k]) => n + (S.tokens.kinds[k] ? c[k] : 0), 0);
   // Drawn again in full when it connects, or when the last hand off changes (0.13.7: the body stayed "Connecting…").
-  const liveSig = () => `${S.tokens.data ? 1 : 0}|${S.savings?.work?.recent?.[0]?.ts ?? ""}|${S.tokens.view}|${Object.entries(S.tokens.kinds).filter(([, on]) => on).map(([k]) => k).join(",")}|${liveCalls().map((c) => `${c.id}${c.ended ? "e" : ""}${S.tokens.open[c.id] ? "o" : ""}`).join(",")}`;
+  const liveSig = () => `${S.tokens.data ? 1 : 0}${liveStale() ? "s" : ""}|${S.savings?.work?.recent?.[0]?.ts ?? ""}|${S.tokens.view}|${Object.entries(S.tokens.kinds).filter(([, on]) => on).map(([k]) => k).join(",")}|${liveCalls().map((c) => `${c.id}${c.ended ? "e" : ""}${S.tokens.open[c.id] ? "o" : ""}`).join(",")}`;
   function redrawLive() {
     const old = $("#liveCard");
     if (!old) return;
@@ -2495,7 +2510,7 @@
     const n = pools.filter((p) => p.used > 0).length;
     return n ? `${n} of ${plural(pools.length, "model")} in use today` : `none of ${plural(pools.length, "model")} used yet today`;
   }
-  function liveGist() { const lv = S.tokens?.data; return lv?.running?.length ? `${plural(lv.running.length, "call")} running` : "nothing running"; }
+  function liveGist() { const lv = S.tokens?.data; return lv?.running?.length ? `${plural(lv.running.length, "call")} running` : lv && liveStale() ? `nothing running · ${liveLastText(lv)}` : "nothing running"; }
 
   // Nothing running (0.13.7): the last hand off and this month's work, so the top of Savings is never empty after one ends.
   function liveIdleEl() {
@@ -2514,7 +2529,7 @@
     const kinds = h("div", { class: "lv-kinds", role: "group", "aria-label": "Kinds of tokens to show" }, ...LIVE_KINDS.map(([k, name], i) =>
       h("button", { type: "button", class: `chip-btn lk-${i + 1}`, "aria-pressed": String(L.kinds[k]), text: name, onclick: () => { L.kinds[k] = !L.kinds[k]; if (!Object.values(L.kinds).some(Boolean)) L.kinds[k] = true; redrawLive(); } })));
     const head = h("div", { class: "sv-head lv-head" }, h("h2", {}, h("span", { class: v?.running?.length ? "lv-dot on" : "lv-dot", "aria-hidden": "true" }), "Live"),
-      h("span", { class: "muted", text: !v ? "connecting…" : v.running.length ? `${plural(v.running.length, "call")} running · ${tokShort(v.rate)} tokens a second` : "nothing running now" }),
+      h("span", { class: "muted", text: liveSub(v) }),
       h("span", { class: "grow" }), h("div", { class: "seg", role: "group", "aria-label": "How to show it" }, pick("bars", "Bars"), pick("lanes", "Lanes"), pick("numbers", "Numbers")));
     const body = !v ? h("div", { class: "empty", text: "Connecting to the live numbers…" })
       : L.view === "numbers" ? liveNumbersEl(v)
@@ -2562,16 +2577,17 @@
       }
     }
     const v = S.tokens.data, sub = card.querySelector(".lv-head .muted");
-    if (sub && v) sub.textContent = v.running.length ? `${plural(v.running.length, "call")} running · ${tokShort(v.rate)} tokens a second` : "nothing running now";
+    if (sub && v) sub.textContent = liveSub(v);
   }
   // The last 60 seconds as lanes: a call per lane, from its start to its end (or now), sliding left as time goes on.
   function liveLanesEl(calls) {
-    const W = Math.max(320, ($("#liveCard")?.clientWidth || 628) - 28), lane = 22, top = 6, H = top + calls.length * lane + 22, now = liveNow(); // drawn at the card's own width, so its text stays its size
+    const stale = liveStale(); // the last calls: drawn against their own last end, not now
+    const W = Math.max(320, ($("#liveCard")?.clientWidth || 628) - 28), lane = 22, top = 6, H = top + calls.length * lane + 22, now = stale ? Math.max(...calls.map((c) => c.ended ?? 0)) : liveNow(); // drawn at the card's own width, so its text stays its size
     const x = (t) => Math.max(0, Math.min(W, W - ((now - t) / 60_000) * W));
-    const g = sv("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: "lv-lanes", role: "img", "aria-label": `${plural(calls.length, "call")} in the last minute, each a lane from its start to its end` });
+    const g = sv("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: "lv-lanes", role: "img", "aria-label": `${plural(calls.length, "call")} ${stale ? "of the last ones" : "in the last minute"}, each a lane from its start to its end` });
     for (const s of [60, 45, 30, 15, 0]) {
       const at = W - (s / 60) * W;
-      g.append(sv("line", { x1: at, x2: at, y1: top, y2: H - 18, class: "lv-grid" }), sv("text", { x: Math.min(W - 2, Math.max(2, at)), y: H - 5, "text-anchor": s === 60 ? "start" : s === 0 ? "end" : "middle", class: "lv-axis" }, s ? `${s} s ago` : "now"));
+      g.append(sv("line", { x1: at, x2: at, y1: top, y2: H - 18, class: "lv-grid" }), sv("text", { x: Math.min(W - 2, Math.max(2, at)), y: H - 5, "text-anchor": s === 60 ? "start" : s === 0 ? "end" : "middle", class: "lv-axis" }, stale ? (s ? `${s} s before` : "the last end") : s ? `${s} s ago` : "now"));
     }
     calls.forEach((c, i) => {
       const y = top + i * lane, x1 = x(c.started), x2 = Math.max(x1 + 3, x(c.ended ?? now));
@@ -2583,12 +2599,14 @@
     return h("div", { class: "lv-lanes-box" }, g);
   }
   function liveNumbersEl(v) {
-    const sum = LIVE_KINDS.reduce((n, [k]) => n + (S.tokens.kinds[k] ? v.minute[k] : 0), 0);
+    // 0.15.1: with nothing in the last minute, the last calls' own numbers.
+    const stale = liveStale(), last = stale ? liveLast() : [], of = (k) => (stale ? last.reduce((n, c) => n + c[k], 0) : v.minute[k]);
+    const sum = LIVE_KINDS.reduce((n, [k]) => n + (S.tokens.kinds[k] ? of(k) : 0), 0), span = stale ? "The last calls" : "The last minute";
     return h("div", { class: "lv-numbers" },
-      h("div", { class: "rp-tiles" }, rtile("Tokens a second", tokShort(v.rate), "thinking and writing, of what runs now"), rtile("Running", String(v.running.length), `${plural(v.ended.length, "call")} ended lately`), rtile("The last minute", tokShort(sum), "of the kinds picked above")),
-      h("table", { class: "lv-table" }, h("thead", {}, h("tr", {}, h("th", { text: "Kind" }), h("th", { text: "The last minute" }), h("th", { text: "Running now" }))),
+      h("div", { class: "rp-tiles" }, rtile("Tokens a second", tokShort(v.rate), "thinking and writing, of what runs now"), rtile("Running", String(v.running.length), stale ? `the last ended ${liveAgo(v.ended[0].ended)}` : `${plural(v.ended.length, "call")} ended lately`), rtile(span, tokShort(sum), stale ? `${plural(last.length, "call")}, of the kinds picked above` : "of the kinds picked above")),
+      h("table", { class: "lv-table" }, h("thead", {}, h("tr", {}, h("th", { text: "Kind" }), h("th", { text: span }), h("th", { text: "Running now" }))),
         h("tbody", {}, ...LIVE_KINDS.map(([k, name], i) => h("tr", { class: S.tokens.kinds[k] ? null : "off" },
-          h("td", {}, h("span", { class: `lv-swatch lk-${i + 1}`, "aria-hidden": "true" }), name), h("td", { class: "num", text: tokShort(v.minute[k]) }), h("td", { class: "num", text: tokShort(v.running.reduce((n, c) => n + c[k], 0)) }))))));
+          h("td", {}, h("span", { class: `lv-swatch lk-${i + 1}`, "aria-hidden": "true" }), name), h("td", { class: "num", text: tokShort(of(k)) }), h("td", { class: "num", text: tokShort(v.running.reduce((n, c) => n + c[k], 0)) }))))));
   }
 
   // Ask about these prompts (askreport.ts, 0.12): a model on this computer reads the span's prompts and answers; another
