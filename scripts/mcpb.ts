@@ -18,7 +18,7 @@ export const REPO = "https://github.com/pouriaetab/leanfare";
 export const REGISTRY_NAME = "io.github.pouriaetab/leanfare";
 // Where Claude Desktop runs, and the platform name a manifest uses for it.
 export const MCPB_TARGETS: Record<string, "darwin" | "win32"> = { "darwin-arm64": "darwin", "darwin-x64": "darwin", "windows-x64": "win32" };
-export const SHORT = "Hands reading, drafting and checks to cheaper models you pick, and shows what it saved."; // the Registry takes 100 characters
+export const SHORT = "Makes your Claude plan last longer: hands reading and drafting to cheaper or free models."; // the Registry takes 100 characters
 
 // A tool's first sentence, for the manifest's list.
 const first = (s: string) => { const m = /^(.+?[.!?])(\s|$)/.exec(s); return (m ? m[1] : s).slice(0, 240); };
@@ -32,7 +32,7 @@ export function manifestFor(target: string, version: string, tools: { name: stri
     display_name: "Leanfare",
     version,
     description: SHORT,
-    long_description: "Leanfare works inside the AI apps you already use. It hands simple work, like reading files, searching, drafting and checking, to cheaper or free models you pick (with your own keys, or Ollama on your computer), so your app's plan lasts longer. Each answer comes back with a receipt, your app reviews and grades it, and Leanfare's page shows what was kept out and what it cost. It sends nothing anywhere by itself: work goes only to the providers you add, under their terms. Its page opens at http://127.0.0.1:4747 once it runs.",
+    long_description: "Leanfare works inside Claude: Claude Desktop, Cowork and Claude Code. Claude keeps the hard parts of a task and hands the simple ones, like reading files, searching, drafting and checking, to cheaper or free models you pick (with your own keys, Codex on your ChatGPT plan, Gemini CLI on your Google account, or models on your computer), so your Claude plan lasts longer. Each answer comes back with a receipt, Claude reviews and grades it, and Leanfare's page shows what each prompt used and what it saved. It sends nothing anywhere by itself: work goes only to the providers you add, under their terms. Its page opens at http://127.0.0.1:4747 once it runs.",
     author: { name: "pouriaetab" },
     repository: { type: "git", url: REPO },
     homepage: REPO,

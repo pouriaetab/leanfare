@@ -2,74 +2,98 @@
 
 [![Latest release](https://img.shields.io/github/v/release/pouriaetab/leanfare)](https://github.com/pouriaetab/leanfare/releases/latest) [![Tests](https://github.com/pouriaetab/leanfare/actions/workflows/ci.yml/badge.svg)](https://github.com/pouriaetab/leanfare/actions/workflows/ci.yml) [![License](https://img.shields.io/github/license/pouriaetab/leanfare)](LICENSE)
 
-Leanfare makes your Claude plan last longer. It works inside Claude and hands simple work, like reading files and drafting, to cheaper or free models. You keep working as before.
+Leanfare makes your Claude plan last longer. Claude keeps the hard parts of a task and hands the simple ones, like reading files, searching and drafting, to free or cheaper models. You keep working in Claude as before.
 
-It lives inside Claude: Claude Desktop, Cowork and Claude Code. From there it hands parts to outside models: free and paid ones from OpenAI, Google, xAI, Perplexity, DeepSeek and the other providers you connect, Codex on your ChatGPT plan, Gemini CLI on your Google account, and models on your own computer.
-
-![Leanfare's report: what it saved your app, what the outside models used, your app's own use, and how good the answers were](docs/savings.png)
+![A plan as Claude shows it in Cowork: each part of the task, the model it runs on, its tokens and its cost](docs/plan.png)
 
 > Leanfare is early and changes every week. If something breaks, [report a bug](https://github.com/pouriaetab/leanfare/issues/new?template=bug_report.yml); Settings, **Report a problem**, fills in your version. Questions and ideas go to [Discussions](https://github.com/pouriaetab/leanfare/discussions).
 
+## How it works
+
+1. You ask Claude for something, in Claude Desktop, Cowork or Claude Code.
+2. Claude asks Leanfare for a plan. Leanfare splits the task into parts and picks a model for each: free or cheap models for reading and drafting, Claude's own models for the hard parts.
+3. Leanfare sends its parts to those models and hands the answers back. Claude does the rest, checks every answer, and answers you.
+4. Leanfare's report shows what each prompt used and what it saved.
+
 ## Get started
 
-1. **Install it.** On macOS or Linux, paste this in Terminal:
+On macOS or Linux, paste this in Terminal:
 
-   ```sh
-   curl -fsSL https://raw.githubusercontent.com/pouriaetab/leanfare/main/install.sh | sh
-   ```
+```sh
+curl -fsSL https://raw.githubusercontent.com/pouriaetab/leanfare/main/install.sh | sh
+```
 
-   On Windows, paste this in PowerShell:
+On Windows, paste this in PowerShell:
 
-   ```powershell
-   powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/pouriaetab/leanfare/main/install.ps1 | iex"
-   ```
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/pouriaetab/leanfare/main/install.ps1 | iex"
+```
 
-   **Claude Code, as a plugin:** with Leanfare installed, type `/plugin marketplace add pouriaetab/leanfare`, then `/plugin install leanfare@leanfare`.
+Then type `leanfare` in the same window. In the page that opens, press **Turn on Leanfare**, then restart Claude. That's all.
 
-   **Claude Desktop, one click:** download `leanfare-darwin-arm64.mcpb` (Apple silicon), `leanfare-darwin-x64.mcpb` (Intel) or `leanfare-windows-x64.mcpb` from the [latest release](https://github.com/pouriaetab/leanfare/releases/latest) and double-click it.
+Leanfare needs at least one model to hand work to. It uses the API keys and Ollama models already on your computer, and Settings connects free ones with one press each: ChatGPT (a free account works), Gemini, Groq, OpenRouter, Mistral and Cloudflare.
 
-2. **Open it.** Type `leanfare`. The app opens in your browser.
-3. **Press Turn on Leanfare.** Leanfare finds the AI apps on your computer and adds itself to each one. Then do the one step it shows for each app (most need a restart).
-4. **Connect your free models (optional).** In Settings, under your apps: ChatGPT (a free account works) and free models from Gemini, Groq, OpenRouter, Mistral and Cloudflare, one press each. Leanfare shares their daily allowances out by the kind of work you do.
+Other ways in: the Claude Code plugin (`/plugin marketplace add pouriaetab/leanfare`, then `/plugin install leanfare@leanfare`), or a one click `.mcpb` file for Claude Desktop from the [latest release](https://github.com/pouriaetab/leanfare/releases/latest).
 
-That's all. Keep working in your apps: Leanfare steps in on reading and drafting.
+## What you see
 
-### No model yet?
+**The report.** Every prompt with its main model, Claude's helpers and the outside models, and what was saved. By prompt or by model, over any days.
 
-Leanfare needs a model to hand work to. It uses an API key your computer already has (like `OPENAI_API_KEY`), or Ollama's free models, when it finds them. When it finds none, Set up offers the quickest ways:
+![The Usage report, by prompt: each prompt's main model, Claude's helpers, the outside models, and what was saved](docs/report.png)
 
-- **Connect OpenRouter.** Sign in on OpenRouter's page. It has free models, and there is nothing to copy.
-- **A free Google key.** Make one at [Google AI Studio](https://aistudio.google.com/apikey), press **Add a key** and paste it. On Google's free plan, people at Google may read your messages, and Google uses them to improve its products: Leanfare marks it, and keeps private work on your computer when an app asks.
-- **Ollama.** Install [Ollama](https://ollama.com/download) for free models on your own computer, then press **Look again**. Set up then offers the best free model that fits your computer and downloads it when you say yes.
+**Claude's own models.** Leanfare picks the Claude model for each helper Claude starts, from llmledger's ratings and prices. As the ratings stand: Fable 5.1 for the hardest parts, Opus 5.5 for high effort, Sonnet 5.5 for medium and Haiku 5.5 for light code. Cowork can ask you to approve each helper, so you choose how many a prompt starts: one per part, one per prompt, or none.
 
-## The app
+![Settings, Claude's own models: the order, each kind's pick, and how many helpers](docs/settings.png)
 
-- **The switch at the top**, In your apps, turns Leanfare off and on in all your apps at once. Off means your apps do all the work themselves.
-- **Chat** talks to any model, and each answer says which model wrote it and what it cost. **Plan** splits a task across models. **Savings** opens with a report of what Leanfare did for your apps, over any span and prompt by prompt: both sides of each hand off (what the outside models used, measured, and what your app would have used alone, an estimate), the saving, each model's speed and failures, and quality three ways. Then what Leanfare saved and what you spent. **Settings** has the rest: models and keys, your apps, your plans, a monthly budget. Leanfare picks all of it for you. Change it only if you want to.
-- **Inside Claude:** ask for Leanfare's report, and Claude Desktop and Cowork show it as a card in the chat. A plan shows there as a table, with each part's model, your app's own included.
-- **Fair grades:** a sample of the answers is checked blind, by a model of another company when one can take it, and now and then compared with the best model you ticked.
-- **Picks that learn:** your grades move each model's rating for each kind of work, its time is learned from its own answers, and a model that keeps failing rests while Auto picks others.
-- **Your plan's mode and your rules:** as your Claude plan runs low, Leanfare pushes more work out of it (Settings shows the mode), and Settings, Jobs, says where each kind of job goes, with a cap for paid work. Grades show as a score out of 100 with its range.
-- **Three knobs in Settings:** the level, from 1 Off to 5 All it can, says how much your apps hand to Leanfare first; what Leanfare keeps, from numbers only to each hand off's words, on your computer; and where work may go, from only this computer to anywhere you ticked.
-- **Every answer reviewed:** your app checks, grades and fixes each answer Leanfare brings back before it answers you.
-- **Live, and ask:** Savings shows each model call's tokens as they come, and answers questions about your prompts with a model on your computer.
-- **Your own models:** Settings, Local models says where they are and tests one on your computer. One that passes takes reading work first, for free. **Where Leanfare may send work** turns each platform off or on, with what is left before its nearest limit.
-- The [guide](https://github.com/pouriaetab/leanfare/blob/main/docs/GUIDE.md) explains each part.
+## Three settings
+
+1. **Level**, from 1 (Off) to 5 (All it can): how much Claude hands to Leanfare first.
+2. **Helpers**: one per part, one per prompt (the default), or none.
+3. **Where work may go**: only this computer, or the providers you ticked.
+
+Leanfare picks the rest for you. The [guide](docs/GUIDE.md) explains every part.
+
+## What's inside
+
+Leanfare is an MCP server with a small web app, both on your computer. Claude connects to it over stdio, like any MCP server. It is TypeScript on [Bun](https://bun.sh), with no runtime dependencies.
+
+| File | What it is |
+|---|---|
+| `src/mcp.ts` | The MCP server and its tools |
+| `src/cli.ts` | The `leanfare` command |
+| `src/server.ts` | The app and its API, at http://127.0.0.1:4747 |
+| `src/planner.ts` | Plans: the parts, a model for each, the runs |
+| `src/delegate.ts` | Hand offs to outside models, each with a receipt |
+| `src/claudeladder.ts` | Claude's own models, in order |
+| `ui/` | The app's screens |
+
+The MCP tools: `plan`, `plan_run`, `plan_status`, `plan_stop`, `delegate`, `ask`, `grade`, `level`, `report`, `spend`, `models`, `estimate`, `trial`, `local_model`, `live` and `helper`.
+
+To build and run it from source:
+
+```sh
+git clone https://github.com/pouriaetab/leanfare.git
+cd leanfare
+bun install
+bun test             # against fake providers; nothing leaves your computer
+bun src/cli.ts       # the app
+bun src/cli.ts mcp   # the MCP server, over stdio
+```
 
 ## Privacy
 
-Leanfare reads usage numbers, never your words, unless you choose in Settings to keep a hand off's words on your computer to read later. Your keys stay on your computer, and requests go from your computer straight to the AI company you use. No telemetry. The [guide](https://github.com/pouriaetab/leanfare/blob/main/docs/GUIDE.md#privacy) has the details.
+Leanfare reads usage numbers, never your words, unless you choose in Settings to keep a hand off's words on your computer to read later. Your keys stay on your computer, and requests go from your computer straight to the AI company you use. No telemetry. The [guide](docs/GUIDE.md#privacy) has the details.
 
 ## Update, stop or take it out
 
-- **Update:** run the install line again. Leanfare says when a new version is out.
-- **Stop:** type `leanfare stop`.
-- **Turn it off for a while:** the switch at the top, In your apps.
-- **Take it out of an app:** in Leanfare, Settings, In your apps, then **Remove** next to the app.
+1. **Update:** run the install line again. Leanfare says when a new version is out.
+2. **Stop:** type `leanfare stop`.
+3. **Off for a while:** the switch at the top of the app.
+4. **Take it out of an app:** Settings, In your apps, then **Remove** next to the app.
 
 ## Data and credits
 
-Prices come from [llmledger](https://github.com/pouriaetab/llmledger) (MIT), built from LiteLLM's public price list (MIT). Quality ratings come from the [Arena leaderboard](https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset) (CC BY 4.0). The [guide](https://github.com/pouriaetab/leanfare/blob/main/docs/GUIDE.md#data-and-credits) lists the rest. Leanfare is not affiliated with any AI provider.
+Prices come from [llmledger](https://github.com/pouriaetab/llmledger) (MIT), built from LiteLLM's public price list (MIT). Quality ratings come from the [Arena leaderboard](https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset) (CC BY 4.0). The [guide](docs/GUIDE.md#data-and-credits) lists the rest. Leanfare is not affiliated with any AI provider.
 
 ## Licence
 
