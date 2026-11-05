@@ -607,7 +607,7 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
     const set = args?.set, scope = args?.scope ?? "chat";
     if (set !== undefined && !isLevel(set)) return failure("set is a level from 1 to 5: 1 Off, 2 Light, 3 More, 4 Most, 5 All it can.");
     if (!["chat", "app", "default"].includes(scope)) return failure("scope is chat (this chat only), app (this app from now on) or default (every app and new chat).");
-    if (set !== undefined && scope === "app" && !appKey(ctx.client)) return failure(`A level can be kept for Claude Code, Claude Desktop and Cowork, Codex, Gemini CLI and Cursor, and this app is ${ctx.client ?? "not named"}. Set it for this chat, or as the default.`);
+    if (set !== undefined && scope === "app" && !appKey(ctx.client)) return failure(`A level can be kept for Claude Code, and for Claude Desktop and Cowork, and this app is ${ctx.client ?? "not named"}. Set it for this chat, or as the default.`);
     if (set !== undefined && scope !== "chat") await call("/api/level", { method: "POST", json: { set, scope, app: ctx.client } }, signal);
     const q = [ctx.client ? `app=${encodeURIComponent(ctx.client)}` : "", set !== undefined && scope === "chat" ? `chat=${set}` : ""].filter(Boolean).join("&");
     const { j } = await call(`/api/level${q ? `?${q}` : ""}`, {}, signal);
