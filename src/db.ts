@@ -108,6 +108,15 @@ CREATE INDEX IF NOT EXISTS comparisons_month ON comparisons(month);
 -- so a prompt keeps its id whatever span or filter shows it. Its number, its key (the session's file and the prompt's
 -- time, or the first hand off of a group) and its time. No words.
 CREATE TABLE IF NOT EXISTS prompts(n INTEGER PRIMARY KEY, key TEXT NOT NULL UNIQUE, ts TEXT NOT NULL);
+-- Claude's own helpers (0.15, claudeladder.ts): a subagent a Claude app started, the model Leanfare set for it, and
+-- what it used, numbers only (the leanfare-level mod and Claude Code's hook say them).
+CREATE TABLE IF NOT EXISTS helpers(id INTEGER PRIMARY KEY, ts TEXT NOT NULL, day TEXT NOT NULL, app TEXT NOT NULL, session TEXT, plan TEXT, part INTEGER,
+  kind TEXT, effort TEXT, top INTEGER NOT NULL DEFAULT 0, family TEXT, model TEXT NOT NULL, label TEXT, asked TEXT, why TEXT,
+  input INTEGER NOT NULL DEFAULT 0, cached INTEGER NOT NULL DEFAULT 0, output INTEGER NOT NULL DEFAULT 0, seconds REAL, ended TEXT);
+-- The main model's own turns in a Claude app whose log files are not on this computer (Cowork, Claude Desktop), as the
+-- mod says them at each turn's end: its model and token counts, never words (0.15).
+CREATE TABLE IF NOT EXISTS app_turns(id INTEGER PRIMARY KEY, ts TEXT NOT NULL, day TEXT NOT NULL, app TEXT NOT NULL, session TEXT, model TEXT NOT NULL,
+  effort TEXT, input INTEGER NOT NULL DEFAULT 0, cached INTEGER NOT NULL DEFAULT 0, output INTEGER NOT NULL DEFAULT 0);
 -- What Leanfare keeps of a hand off's words (words.ts, 0.12): only when Settings, What Leanfare keeps, is above numbers
 -- only. The task, the answer, the files' names and sizes, the files' text, as far as the setting went. On this computer.
 CREATE TABLE IF NOT EXISTS words(handoff INTEGER PRIMARY KEY, ts TEXT NOT NULL, task TEXT NOT NULL, answer TEXT, files TEXT, texts TEXT);
@@ -154,6 +163,7 @@ const ADDED: [table: string, column: string, type: string][] = [
   ["delegations", "fix_of", "INTEGER"], // 0.12: this hand off is a fix of that one, asked one tier up through the grade tool
   ["delegations", "level", "INTEGER"], // 0.12: the level in effect when it was handed off (level.ts), for the grades by level
   ["comparisons", "app_alone", "INTEGER"], // 1: the top model was the app's own model, so this is a sample of the app alone
+  ["delegations", "app_effort", "TEXT"], // 0.15: the main model's effort, as the app said it (low, medium, high, xhigh, max)
 ];
 
 function addColumns(d: Database) {
