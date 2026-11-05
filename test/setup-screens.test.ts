@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { entry } from "../src/apps";
+import { APPS, entry } from "../src/apps";
 import { paths } from "../src/config";
 import { store } from "../src/data";
 import { setSwitch } from "../src/switch";
@@ -36,7 +36,10 @@ const text = (doc: any, sel: string) => doc.querySelector(sel)?.textContent ?? "
 const press = (doc: any, label: string, within = "main") => [...doc.querySelector(within).querySelectorAll("button")].find((b: any) => b.textContent.trim() === label || b.querySelector(".lr-title")?.textContent === label)?.click();
 const toasts = (doc: any) => [...doc.querySelectorAll("#toasts .toast")].map((t: any) => t.textContent).join(" | ");
 const bad = (doc: any) => /\bnull\b|\bundefined\b|NaN|\[object Object\]/.test(doc.body.textContent);
-// How the screens list apps ("Cursor", "Claude Desktop and Cursor"). A Mac also has the apps in /Applications.
+// How the screens list apps ("Claude Desktop", "Claude Desktop and Claude Code"). A Mac also has Claude in /Applications.
+// Claude Desktop's settings file, where this platform keeps it: Set up offers Claude's apps only (0.15).
+const desk = () => APPS.find((a) => a.id === "claude-desktop")!.file();
+const deskHere = () => mkdirSync(dirname(desk()), { recursive: true });
 const andList = (xs: string[]) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
 const api = async (path: string) => (await ui(url, path)).json;
 const notices = (doc: any) => text(doc, "#notices");
@@ -45,28 +48,30 @@ const added = (apps: any[]) => apps.filter((a: any) => a.status === "added").map
 describe("Set up, the first time", () => {
   test("an app and a model here: one press puts Leanfare in, then Chat, with the one step the app needs at the top", async () => {
     await reset({ ticked: [] }); // a new person: no model ticked, a Google key already on this computer
-    mkdirSync(join(home, ".cursor"), { recursive: true });
+    deskHere();
+    mkdirSync(join(home, ".cursor"), { recursive: true }); // archived: not listed
     await keys("google");
     const doc = await openApp(url, { screen: null });
-    await waitFor(() => on(doc, "setup") && text(doc, "#tab-setup").includes("Cursor"));
+    await waitFor(() => on(doc, "setup") && text(doc, "#tab-setup").includes("Claude Desktop"));
     expect(doc.querySelector("#app").classList.contains("simple")).toBe(true); // no tabs, no pills, no switch
     expect(text(doc, "#tab-setup .simple-h1")).toBe("Set up Leanfare");
     const found = text(doc, "#tab-setup");
-    expect(found).toContain("CursorLeanfare goes in here");
+    expect(found).toContain("Claude DesktopLeanfare goes in here");
+    expect(found).not.toContain("Cursor");
     expect(found).toContain("Google GeminiA model to hand work to: your key, saved in Leanfare");
     expect(found).toContain("Leanfare reads usage numbers, never your words.");
-    expect(found).toContain("It adds Leanfare's tools to each app. Remove takes them out again (Settings, In your apps)."); // Cursor does not plan by itself
+    expect(found).toContain("It adds Leanfare's tools to each app. Remove takes them out again (Settings, In your apps)."); // Claude Desktop does not plan by itself
     const turnOn = [...doc.querySelectorAll("#tab-setup button")].find((b: any) => b.textContent === "Turn on Leanfare") as any;
     expect(turnOn.disabled).toBe(false);
     expect(bad(doc)).toBe(false);
     turnOn.click();
     await waitFor(() => on(doc, "chat") && notices(doc).includes("One last step"));
-    expect(JSON.parse(readFileSync(join(home, ".cursor", "mcp.json"), "utf8")).mcpServers.leanfare.args.at(-1)).toBe("mcp");
+    expect(JSON.parse(readFileSync(desk(), "utf8")).mcpServers.leanfare.args.at(-1)).toBe("mcp");
     expect(doc.querySelector("#app").classList.contains("simple")).toBe(false); // the tabs and the switch are there
     expect(doc.querySelector("#appsSwitch").getAttribute("aria-checked")).toBe("true");
-    expect(notices(doc)).toContain("Cursor picks it up by itself");
+    expect(notices(doc)).toContain("Quit Claude Desktop and open it again.");
     const names = added((await api("/api/setup")).apps);
-    expect(names).toContain("Cursor");
+    expect(names).toContain("Claude Desktop");
     expect(toasts(doc)).toContain(`Leanfare is on in ${andList(names)}.`);
     press(doc, "Done", "#notices");
     await waitFor(() => !notices(doc).includes("One last step"));
@@ -79,7 +84,7 @@ describe("Set up, the first time", () => {
   }, 30000);
 
   test("no model yet: Turn on waits and says why, and Add a key opens that card in Settings", async () => {
-    mkdirSync(join(home, ".cursor"), { recursive: true });
+    deskHere();
     const doc = await openApp(url, { screen: null });
     await waitFor(() => on(doc, "setup") && text(doc, "#tab-setup").includes("Leanfare needs a model"));
     const turnOn = [...doc.querySelectorAll("#tab-setup button")].find((b: any) => b.textContent === "Turn on Leanfare") as any;
@@ -97,12 +102,14 @@ describe("Set up, the first time", () => {
   }, 30000);
 
   test("an app that plans by itself: the fine print says it also gets a few lines on when to hand work over", async () => {
-    mkdirSync(join(home, ".cursor"), { recursive: true });
-    mkdirSync(join(home, ".gemini"), { recursive: true });
+    deskHere();
+    process.env.CLAUDE_CONFIG_DIR = join(home, "claude");
+    fakeClaude(home);
+    put(join(home, "claude", ".claude.json"), "{}");
     await keys("google");
     const doc = await openApp(url, { screen: null });
-    await waitFor(() => on(doc, "setup") && text(doc, "#tab-setup").includes("Gemini CLI"));
-    expect(text(doc, "#tab-setup")).toContain("It adds Leanfare's tools to each app, and to Gemini CLI a few lines on when to hand work over. Remove takes them out again (Settings, In your apps).");
+    await waitFor(() => on(doc, "setup") && text(doc, "#tab-setup").includes("Claude Code"));
+    expect(text(doc, "#tab-setup")).toContain("It adds Leanfare's tools to each app, and to Claude Code a few lines on when to hand work over. Remove takes them out again (Settings, In your apps).");
   }, 30000);
 
   test("an app that gets Leanfare but cannot plan by itself: One last step says why", async () => {
@@ -125,7 +132,7 @@ describe("Set up, the first time", () => {
     const gate = join(home, "claude-gate");
     fakeClaude(home, { gate }); // Claude Code's command runs until the test lets it end, however busy the computer is
     put(join(home, "claude", ".claude.json"), "{}");
-    mkdirSync(join(home, ".cursor"), { recursive: true });
+    put(desk(), "{}"); // Claude Desktop comes first: it is done before Claude Code's slow command
     await keys("google");
     const doc = await openApp(url, { screen: null });
     await waitFor(() => on(doc, "setup") && text(doc, "#tab-setup").includes("Claude Code"));
@@ -146,14 +153,14 @@ describe("Set up, the first time", () => {
     expect(on(doc, "setup")).toBe(true); // still here, not sent on
     const rows = [...doc.querySelectorAll("#tab-setup .list-row")].map((r: any) => r.textContent);
     expect(rows).toContain("✓Claude CodeLeanfare is in here already"); // the one it was doing
-    expect(rows).toContain("✓CursorLeanfare goes in here"); // the next one was left as it was
-    expect(existsSync(join(home, ".cursor", "mcp.json"))).toBe(false);
+    expect(rows).toContain("✓Claude DesktopLeanfare is in here already"); // the one before it
+    expect(JSON.parse(readFileSync(desk(), "utf8")).mcpServers.leanfare.args.at(-1)).toBe("mcp");
   }, 30000);
 
   test("Ollama running with no model yet: Set up offers the free model that fits this computer", async () => {
     await reset({ ticked: [] });
     store.ollamaFound = true; // running, nothing downloaded
-    mkdirSync(join(home, ".cursor"), { recursive: true });
+    deskHere();
     const doc = await openApp(url, { screen: null });
     await waitFor(() => on(doc, "setup") && text(doc, "#tab-setup").includes("Get a free model for Ollama"));
     expect(text(doc, "#tab-setup")).toContain("Ollama is running on this computer, with no model yet.");
@@ -191,7 +198,7 @@ describe("Set up, the first time", () => {
   }, 30000);
 
   test("someone with Leanfare in an app already is not sent to Set up", async () => {
-    put(join(home, ".cursor", "mcp.json"), JSON.stringify({ mcpServers: { leanfare: entry() } }));
+    put(desk(), JSON.stringify({ mcpServers: { leanfare: entry() } }));
     const doc = await openApp(url, { screen: null });
     await waitFor(() => on(doc, "chat"));
     expect(on(doc, "chat")).toBe(true);
@@ -202,7 +209,7 @@ describe("Set up, the first time", () => {
 describe("the switch at the top", () => {
   beforeEach(async () => {
     await reset({ ticked: ALL_TICKED, setupDone: true });
-    put(join(home, ".cursor", "mcp.json"), JSON.stringify({ mcpServers: { leanfare: entry() } }));
+    put(desk(), JSON.stringify({ mcpServers: { leanfare: entry() } }));
   });
 
   test("off: the tools in your apps go quiet, a line at the top says so, and its Turn on turns it back on", async () => {

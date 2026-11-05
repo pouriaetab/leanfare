@@ -36,12 +36,13 @@ describe("which level is in effect", () => {
   test("a chat's own first, then the app's, then the default; 3 when nothing says", () => {
     expect(DEFAULTS.level).toBe(3);
     expect(levelFor({}, "Claude").level).toBe(3);
-    const s = { level: 2, levels: { codex: 4, claude: 5 } };
-    expect(levelFor(s, "Codex")).toEqual({ level: 4, base: 4, from: "app", raised: null });
+    const s = { level: 2, levels: { "claude-code": 4, claude: 5, codex: 1 } };
+    expect(levelFor(s, "Claude Code")).toEqual({ level: 4, base: 4, from: "app", raised: null });
     expect(levelFor(s, "Cowork")).toMatchObject({ level: 5, from: "app" }); // Claude Desktop and Cowork share one
+    expect(levelFor(s, "Codex")).toMatchObject({ level: 2, from: "default" }); // Leanfare lives in Claude only (0.15): another app follows the default
     expect(levelFor(s, "Cursor")).toMatchObject({ level: 2, from: "default" });
-    expect(levelFor(s, "Codex", 1)).toEqual({ level: 1, base: 1, from: "chat", raised: null });
-    expect([appKey("Claude Code"), appKey("Claude"), appKey("Gemini CLI"), appKey("Windsurf"), appKey(null)]).toEqual(["claude-code", "claude", "gemini-cli", null, null]);
+    expect(levelFor(s, "Claude Code", 1)).toEqual({ level: 1, base: 1, from: "chat", raised: null });
+    expect([appKey("Claude Code"), appKey("Claude"), appKey("Cowork"), appKey("Gemini CLI"), appKey("Codex"), appKey(null)]).toEqual(["claude-code", "claude", "claude", null, null, null]);
   });
 
   test("raised as a Claude plan runs low (4, then 5), never past a chat's own, never for another company's app, and not when turned off", () => {
@@ -65,10 +66,11 @@ describe("Settings, the level tool and leanfare level", () => {
     expect((await ui(url, "/api/settings", { level: 6 })).status).toBe(400);
     expect((await ui(url, "/api/settings", { level: 2.5 })).status).toBe(400);
     expect((await ui(url, "/api/settings", { levels: { windsurf: 3 } })).status).toBe(400);
-    expect((await ui(url, "/api/settings", { levels: { codex: 9 } })).status).toBe(400);
-    expect((await ui(url, "/api/settings", { level: 4, levels: { codex: 1, claude: 5 }, raiseWhenLow: false, askEachChat: true })).status).toBe(200);
-    expect(settings()).toMatchObject({ level: 4, levels: { codex: 1, claude: 5 }, raiseWhenLow: false, askEachChat: true });
-    await ui(url, "/api/settings", { levels: { codex: null } });
+    expect((await ui(url, "/api/settings", { levels: { codex: 3 } })).status).toBe(400); // Claude's apps only (0.15)
+    expect((await ui(url, "/api/settings", { levels: { "claude-code": 9 } })).status).toBe(400);
+    expect((await ui(url, "/api/settings", { level: 4, levels: { "claude-code": 1, claude: 5 }, raiseWhenLow: false, askEachChat: true })).status).toBe(200);
+    expect(settings()).toMatchObject({ level: 4, levels: { "claude-code": 1, claude: 5 }, raiseWhenLow: false, askEachChat: true });
+    await ui(url, "/api/settings", { levels: { "claude-code": null } });
     expect(settings().levels).toEqual({ claude: 5 });
   });
 
@@ -94,7 +96,7 @@ describe("Settings, the level tool and leanfare level", () => {
     expect((await call({ set: 7 })).isError).toBe(true);
     expect((await call({ set: 3, scope: "everywhere" })).isError).toBe(true);
     const other = await runToolFor({ client: "Windsurf", cwd: DATA(), canAsk: false }, "level", { set: 3, scope: "app" }, new AbortController().signal);
-    expect(other.content[0].text).toContain("A level can be kept for Claude Code, Claude Desktop and Cowork, Codex, Gemini CLI and Cursor, and this app is Windsurf.");
+    expect(other.content[0].text).toContain("A level can be kept for Claude Code, and for Claude Desktop and Cowork, and this app is Windsurf.");
     saveSettings({ askEachChat: true });
     expect((await call({})).content[0].text).toContain("Ask the user which level they want for this chat");
   });
@@ -106,14 +108,15 @@ describe("Settings, the level tool and leanfare level", () => {
     };
     const a = await run();
     expect(a.out).toStartWith("Leanfare's level: 2 (Light).");
-    expect(a.out).toContain("  Codex: the default");
-    const b = await run("4", "--app", "codex");
-    expect(b.out).toContain("  Codex: 4 (Most)");
+    expect(a.out).toContain("  Claude Code: the default");
+    expect(a.out).not.toContain("Codex");
+    const b = await run("4", "--app", "claude-code");
+    expect(b.out).toContain("  Claude Code: 4 (Most)");
     const c = await run("5");
     expect(c.out).toStartWith("Leanfare's level: 5 (All it can).");
     const d = await run("3", "--app", "windsurf");
     expect(d.code).toBe(2);
-    expect(d.err).toContain("--app takes one of: claude-code, claude, codex, gemini-cli, cursor.");
+    expect(d.err).toContain("--app takes one of: claude-code, claude.");
   });
 });
 

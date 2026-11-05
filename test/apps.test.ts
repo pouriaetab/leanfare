@@ -219,29 +219,44 @@ fs.writeFileSync(file, JSON.stringify(j));
 });
 
 describe("the screen's API and the command line", () => {
-  test("GET lists every app; POST adds one", async () => {
+  test("GET lists every app, the archived ones marked; POST adds a Claude app, never an archived one, and takes one out", async () => {
     mkdirSync(join(home, ".cursor"), { recursive: true });
+    mkdirSync(dirname(app("claude-desktop").file()), { recursive: true });
     const a = (await ui(url, "/api/apps")).json.apps as any[];
     expect(a.map((x) => x.id)).toEqual(["claude-desktop", "claude-code", "cursor", "codex", "gemini-cli", "windsurf", "vscode", "lm-studio"]);
-    expect(a.find((x) => x.id === "cursor").status).toBe("not added");
-    const r = await ui(url, "/api/apps", { id: "cursor", on: true });
-    expect(r.json.app).toMatchObject({ id: "cursor", status: "added" });
-    expect(readJ(app("cursor").file()).mcpServers.leanfare).toEqual(entry());
+    expect(a.filter((x) => !x.archived).map((x) => x.id)).toEqual(["claude-desktop", "claude-code"]); // Leanfare lives in Claude only (0.15)
+    const r = await ui(url, "/api/apps", { id: "claude-desktop", on: true });
+    expect(r.json.app).toMatchObject({ id: "claude-desktop", status: "added" });
+    expect(readJ(app("claude-desktop").file()).mcpServers.leanfare).toEqual(entry());
+    const no = await ui(url, "/api/apps", { id: "cursor", on: true });
+    expect([no.status, no.json.error]).toEqual([409, "Leanfare lives in Claude only now (Claude Desktop, Cowork and Claude Code), so it no longer adds itself to Cursor. Taking it out still works."]);
+    expect(existsSync(app("cursor").file())).toBe(false);
+    // One an older Leanfare added is still taken out.
+    await setApp("cursor", true);
+    expect((await ui(url, "/api/apps", { id: "cursor", on: false })).json.app).toMatchObject({ id: "cursor", status: "not added", archived: true });
+    expect((await ui(url, "/api/apps", { id: "cursor", auto: true })).status).toBe(409);
     expect((await ui(url, "/api/apps", { id: "nope", on: true })).status).toBe(409);
   });
-  test("leanfare apps lists them, and leanfare apps add cursor adds it", async () => {
+  test("leanfare apps lists Claude's apps, adds one, and never adds an archived app", async () => {
     mkdirSync(join(home, ".cursor"), { recursive: true });
+    mkdirSync(dirname(app("claude-desktop").file()), { recursive: true });
     const run = async (...a: string[]) => {
       const p = Bun.spawn([process.execPath, new URL("../src/cli.ts", import.meta.url).pathname, ...a], { stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: home } });
       return { code: await p.exited, out: (await new Response(p.stdout).text()) + (await new Response(p.stderr).text()) };
     };
     const list = await run("apps");
     expect(list.code).toBe(0);
-    expect(list.out).toMatch(/cursor\s+Cursor\s+not added/);
-    const add = await run("apps", "add", "cursor");
+    expect(list.out).toMatch(/claude-desktop\s+Claude Desktop \(and Cowork\)\s+not added/);
+    expect(list.out).not.toContain("cursor");
+    const add = await run("apps", "add", "claude-desktop");
     expect(add.code).toBe(0);
-    expect(add.out).toContain("Added Leanfare's tools to Cursor.");
-    expect(readJ(app("cursor").file()).mcpServers.leanfare.args.at(-1)).toBe("mcp");
+    expect(add.out).toContain("Added Leanfare's tools to Claude Desktop (and Cowork).");
+    expect(readJ(app("claude-desktop").file()).mcpServers.leanfare.args.at(-1)).toBe("mcp");
+    const no = await run("apps", "add", "cursor");
+    expect([no.code, no.out.trim()]).toEqual([1, "Leanfare lives in Claude only now (Claude Desktop, Cowork and Claude Code), so it no longer adds itself to Cursor. Taking it out still works."]);
+    await setApp("cursor", true); // an older Leanfare's entry: listed, with how to take it out
+    expect((await run("apps")).out).toContain("(Leanfare lives in Claude only now: leanfare apps remove cursor)");
+    expect((await run("apps", "remove", "cursor")).out).toContain("Took Leanfare's tools out of Cursor.");
     expect((await run("apps", "add", "nothing")).code).toBe(2);
   });
 });
