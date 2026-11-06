@@ -124,12 +124,14 @@ export const TOOLS = [
   {
     name: "grade",
     title: "Grade an answer",
-    description: "Review every answer Leanfare brings back (delegate, or a plan's part from plan_status) before you use it, then say how good it was: good, partly or wrong. Grade a delegate answer with handoff (the number in its receipt); a plan's part with id and part. If it is partly or wrong, fix it before you answer the user: yourself (fix myself), or with fix leanfare and why, and Leanfare asks again one tier up and returns the new answer, a new hand off to review and grade too. Leanfare keeps only the grade, with the model that answered and the kind of part, never the words; why goes only to the model asked again. A model graded below good too often for a kind is moved down, so plans and delegate stop picking it for that kind. At the end of a prompt that handed work off, grade its whole result too, your work and the hand offs together: whole true and the verdict.",
+    description: "Review every answer Leanfare brings back (delegate, or a plan's part from plan_status) before you use it, then say how good it was: good, partly or wrong. Grade a delegate answer with handoff (the number in its receipt); a plan's part with id and part. If it is partly or wrong, fix it before you answer the user: yourself (fix myself), or with fix leanfare and why, and Leanfare asks again one tier up and returns the new answer, a new hand off to review and grade too. Leanfare keeps only the grade, with the model that answered and the kind of part, never the words; why goes only to the model asked again. A model graded below good too often for a kind is moved down, so plans and delegate stop picking it for that kind. At the end of a prompt that handed work off, grade its whole result too, your work and the hand offs together: whole true and the verdict. Several answers of one plan go in one call: the plan's id and grades (each part's number and verdict), with whole and verdict for the whole result in the same call.",
     inputSchema: {
       type: "object",
       properties: {
-        verdict: { type: "string", enum: ["good", "partly", "wrong"], description: "good: you used it as it was. partly: you had to fix or redo some of it. wrong: you could not use it." },
+        verdict: { type: "string", enum: ["good", "partly", "wrong"], description: "good: you used it as it was. partly: you had to fix or redo some of it. wrong: you could not use it. With grades: the whole result's verdict, when whole is true." },
         id: { type: "string", description: "The plan's id, from plan." },
+        grades: { type: "array", minItems: 1, maxItems: 20, description: "With id: several of the plan's parts in one call, each with its number and verdict (and fix and why, as for one).",
+          items: { type: "object", properties: { part: { type: "integer", minimum: 1 }, verdict: { type: "string", enum: ["good", "partly", "wrong"] }, fix: { type: "string", enum: ["myself", "leanfare"] }, why: { type: "string", maxLength: 2000 } }, required: ["part", "verdict"], additionalProperties: false } },
         part: { type: "integer", minimum: 1, description: "The part's number in the plan." },
         model: { type: "string", description: "For a delegate answer: the model id its receipt named, such as deepseek/deepseek-v4-flash." },
         kind: { type: "string", enum: ["read", "write", "reason", "search"], description: "For a delegate answer: the kind you gave it." },
@@ -139,7 +141,6 @@ export const TOOLS = [
         whole: { type: "boolean", description: "true: grade the final result of the prompt you are on, your own work and Leanfare's parts together (once, at the end of a prompt that handed work off). Only the verdict is needed with it." },
         checks: { type: "object", properties: { passed: { type: "array", items: { type: "integer", minimum: 1 } }, failed: { type: "array", items: { type: "integer", minimum: 1 } }, why: { type: "string", maxLength: 500 } }, additionalProperties: false, description: "With id: the project's checks you ran once the plan's parts were back, by their numbers in the plan (passed and failed), and why in a line for a failure." },
       },
-      required: ["verdict"],
       additionalProperties: false,
     },
     annotations: { title: "Grade an answer", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }, // fix leanfare asks a model
@@ -257,7 +258,7 @@ export const TOOLS = [
   {
     name: "level",
     title: "Leanfare's level",
-    description: "How much to hand to Leanfare first, from 1 to 5: 1 Off (only when the user asks), 2 Light (big reads and tasks with several parts), 3 More (also reads over about 10 KB you will not change, project wide searches, summaries, reviews and first drafts), 4 Most (plan every prompt that is more than a quick question with Leanfare first), 5 All it can (every part a model can do; you review, decide and answer). Call it with nothing at the start of a chat to learn the level, and follow it. When the user sets one (\"Leanfare 4\", \"use Leanfare less\"), call it with set, and scope: chat (this chat only, the default), app (this app from now on) or default (every app). Pass the level to delegate and plan.",
+    description: "How much to hand to Leanfare first, from 1 to 5: 1 Off (only when the user asks), 2 Light (big reads and tasks with several parts), 3 More (also reads over about 10 KB you will not change, project wide searches, summaries, reviews and first drafts), 4 Most (plan every prompt that is more than a quick question with Leanfare first), 5 All it can (every part a model can do; you review, decide and answer). Where the leanfare-level mod puts the level in the system prompt (Cowork and Claude Desktop), do not call it to read the level; elsewhere call it with nothing once at the start of a chat to learn the level, and follow it. Level 1, or Leanfare switched off: do not call Leanfare's tools unless the user asks. When the user sets one (\"Leanfare 4\", \"use Leanfare less\"), call it with set, and scope: chat (this chat only, the default), app (this app from now on) or default (every app). Pass the level to delegate and plan.",
     inputSchema: {
       type: "object",
       properties: {
@@ -452,6 +453,9 @@ export function sharedFolder(given?: unknown, base = process.cwd()): string | nu
   return dir;
 }
 const PLAN_ID = /^[A-Za-z0-9_-]{6,64}$/; // the ids Leanfare makes (randomId): never a path
+// 0.15.2: what the level says when Leanfare is switched off, and the calls it asks to save while it is on.
+export const OFF_LEVEL = "Leanfare is switched off in the Leanfare app, so it takes nothing now: do not call or load its tools in this chat, and do the work yourself.";
+export const FEWER_CALLS = "This is the level: no need to call Leanfare's level tool again in this chat. Grade all of Leanfare's answers of a prompt in one grade call (the plan's id, grades with each part's verdict, and whole for the whole result), and write any line about what Leanfare did from what its tools already said, with no call for it.";
 // Each folder on the way and each file is checked not to be a link (a cloned repo could carry one
 // that points anywhere), and a file is written only as a plain file.
 const isLink = (p: string) => { try { return lstatSync(p).isSymbolicLink(); } catch { return false; } };
@@ -491,8 +495,8 @@ const SHOWN = 3000; // characters of an answer in the tool's result (the whole a
 export function planReview(v: any): string {
   const done = v.parts.filter((r: any) => r.answer && !r.mine); // the app's own parts are not reviewed here
   if (!done.length) return "";
-  if (v.review !== false) return `Review ${done.length === 1 ? "this answer" : "each answer"} before you use it, then grade ${done.length === 1 ? "it" : "each"} with grade (good, partly or wrong, with the plan's id and the part). If one is partly or wrong, fix it before you answer: yourself (fix "myself"), or with fix "leanfare" and why, and Leanfare asks again one tier up and sends back a new answer to review.`;
-  return `Once you have used ${done.length === 1 ? "this answer" : "these answers"}, grade ${done.length === 1 ? "it" : "each"} with grade (good, partly or wrong, with the plan's id and the part): models graded below good too often are moved down.`;
+  if (v.review !== false) return `Review ${done.length === 1 ? "this answer" : "each answer"} before you use it, then grade ${done.length === 1 ? "it with grade (good, partly or wrong, with the plan's id and the part)" : "them all in one grade call (the plan's id, and grades with each part's number and verdict: good, partly or wrong)"}. If one is partly or wrong, fix it before you answer: yourself (fix "myself"), or with fix "leanfare" and why, and Leanfare asks again one tier up and sends back a new answer to review.`;
+  return `Once you have used ${done.length === 1 ? "this answer" : "these answers"}, grade ${done.length === 1 ? "it with grade (good, partly or wrong, with the plan's id and the part)" : "them all in one grade call (the plan's id, and grades with each part's number and verdict)"}: models graded below good too often are moved down.`;
 }
 // A run's parts as the tools give them; took: the app has had the answer, verdict: its grade.
 const runParts = (v: any) => v.parts.map((r: any) => ({ n: r.n, title: r.title, status: r.status, model: r.model, cost_usd: r.cost, seconds: r.seconds, answer: r.answer, receipt: r.receipt, error: r.error, took: !!r.took, verdict: r.verdict ?? null, ...(r.words?.length ? { words: r.words } : {}), ...(r.round > 1 ? { round: r.round } : {}), ...(r.mine ? { mine: true } : {}), ...(r.note ? { note: r.note } : {}) }));
@@ -618,6 +622,28 @@ const HANDS_OVER = new Set(["plan", "plan_run", "ask", "delegate"]);
 export interface ToolCtx { client: string | null; cwd: string; canAsk: boolean }
 const here = (): ToolCtx => ({ client, cwd: process.cwd(), canAsk });
 export const runToolFor = (ctx: ToolCtx, name: string, args: any, signal: AbortSignal) => runTool(name, args, signal, ctx);
+// 0.15.2: a plan's answers graded in one call (each call can be a question in an app that asks before a tool runs):
+// the checks, each part as one grade would, then the whole result.
+const VERDICTS = ["good", "partly", "wrong"];
+async function gradeMany(args: any, signal: AbortSignal, ctx: ToolCtx): Promise<any> {
+  const list: any[] = args.grades;
+  if (typeof args.id !== "string" || !PLAN_ID.test(args.id)) return failure("grades go with the plan's id.");
+  if (!list.length || list.length > 20) return failure("grades is a list of 1 to 20 parts, each with its number (part) and verdict.");
+  if (list.some((g) => !g || typeof g !== "object" || !Number.isInteger(g.part) || !VERDICTS.includes(g.verdict))) return failure("each of grades needs part (the part's number) and verdict (good, partly or wrong).");
+  if (args.whole === true && !VERDICTS.includes(args.verdict)) return failure("whole needs verdict: good, partly or wrong for the whole result.");
+  const said: string[] = [], each: unknown[] = [];
+  const one = async (a: any, head: string) => {
+    let r: any;
+    try { r = await runTool("grade", a, signal, ctx); } catch (e: any) { r = failure(String(e?.message ?? e)); } // one part that cannot be graded leaves the others graded
+    said.push(`${head}${r.content?.[0]?.text ?? ""}`);
+    each.push({ ...(a.part ? { part: a.part } : {}), ...(a.whole ? { whole: true } : {}), ...(r.isError ? { error: true } : {}), result: r.structuredContent ?? null });
+  };
+  if (args.checks !== undefined) await one({ id: args.id, checks: args.checks, verdict: "good" }, "");
+  for (const g of list) await one({ id: args.id, part: g.part, verdict: g.verdict, ...(g.fix ? { fix: g.fix } : {}), ...(typeof g.why === "string" ? { why: g.why } : {}) }, `Part ${g.part}: `);
+  if (args.whole === true) await one({ whole: true, verdict: args.verdict }, "");
+  return text(said.join("\n"), { graded: each });
+}
+
 async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCtx = here()): Promise<any> {
   if ((HANDS_OVER.has(name) || (name === "trial" && args?.action === "start")) && !switchedOn()) return text(OFF_TEXT, { off: true });
   if (name === "live") {
@@ -640,15 +666,21 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
     if (set !== undefined && scope !== "chat") await call("/api/level", { method: "POST", json: { set, scope, app: ctx.client } }, signal);
     const q = [ctx.client ? `app=${encodeURIComponent(ctx.client)}` : "", set !== undefined && scope === "chat" ? `chat=${set}` : ""].filter(Boolean).join("&");
     const { j } = await call(`/api/level${q ? `?${q}` : ""}`, {}, signal);
-    const lines = [levelAdvice(j.view, "chat")];
+    // 0.15.2: switched off, the apps hear level 1 (the leanfare-level mod then adds nothing to the prompt and turns no
+    // call back); on, the level line asks for no more calls than the work needs: each one is a question in an app that
+    // asks before a tool runs (Cowork can).
+    const off = !switchedOn(), shown: Level = off ? 1 : j.view.level;
+    const lines = [off ? OFF_LEVEL : levelAdvice(j.view, "chat")];
+    if (!off && j.view.level > 1) lines.push(FEWER_CALLS);
     if (set !== undefined) lines.push(scope === "chat" ? `Set for this chat only: follow it until the user changes it. Leanfare's default stays ${levelText(j.default)}.` : scope === "app" ? `Kept for ${ctx.client} from now on, in every chat that sets none of its own.` : "Kept as the default for every app and new chat that sets none of its own.");
     else if (j.ask) lines.push("Ask the user which level they want for this chat (1 Off, 2 Light, 3 More, 4 Most, 5 All it can), then call level with set.");
     const p = j.plan;
     if (p?.at) lines.push(`The Claude plan, read ${agoText(Date.now() - p.at)}: ${[p.five !== null ? `the 5 hours ${p.five}% used` : "", p.week !== null ? `the week ${p.week}% used` : ""].filter(Boolean).join(", ") || "no window known"}.`);
     lines.push(`The levels: ${LEVELS.map((n) => `${n} ${LEVEL_NAME[n]}`).join(", ")}.`);
-    return text(lines.join("\n"), { level: j.view.level, name: LEVEL_NAME[j.view.level as Level], from: set !== undefined ? scope : j.view.from, default: j.default, raised: j.view.raised, advice: lines[0], note: lines.slice(1).join(" ") });
+    return text(lines.join("\n"), { level: shown, name: LEVEL_NAME[shown], ...(off ? { off: true, knob: j.view.level } : {}), from: set !== undefined ? scope : j.view.from, default: j.default, raised: j.view.raised, advice: lines[0], note: lines.slice(1).join(" ") });
   }
   if (name === "grade") {
+    if (Array.isArray(args?.grades)) return gradeMany(args, signal, ctx);
     if (!["good", "partly", "wrong"].includes(args?.verdict)) return failure("grade needs a verdict: good, partly or wrong.");
     // The project's checks, run once the plan's parts were back (0.14): kept with the plan, then the grade as asked.
     let checked = "";

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.15.2
+
+- Fewer questions in Cowork. Switched off, Leanfare tells your apps level 1 and not to call its tools, so the leanfare-level mod adds nothing to the prompt; before, the level tool still gave the knob's level, and Cowork kept asking about Leanfare's tools. On, the level line says not to call the level tool again, and a plan's answers are graded in one call: `grade` takes the plan's id, `grades` for each part, and `whole` for the whole result.
+
 ## 0.15.1
 
 - Fewer questions in Cowork. Cowork can ask you before each helper starts, and a plan used to ask for a helper per part. Now Settings, Claude's own models, Helpers, says how many: one per prompt (the default), one per part, or none. One per prompt gives one helper the parts that need a stronger model than the chat's own, on the strongest of them, and the rest run in the chat; none runs every part in the chat.
