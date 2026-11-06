@@ -1763,12 +1763,21 @@
     try {
       const d = await api("/api/report?" + params);
       if (seq !== S.report.seq) return; // a newer filter was picked meanwhile
-      S.report.data = d; S.report.error = null;
+      S.report.data = d; S.report.error = null; S.report.at = Date.now();
     } catch (e) { if (seq !== S.report.seq) return; S.report.error = String(e?.message ?? e); }
     S.report.loading = false;
     const old = $("#reportCard");
     if (old) old.replaceWith(reportCardEl());
   }
+  // 0.15.2: Refresh reads the prompts again (the report was read once, so a prompt after that showed only on the next
+  // load); it also reads them again every minute while it shows, and when the page comes back into view, unless you are
+  // in the middle of something in it (a field, the calendar, the columns).
+  function refreshReport() { S.report.loading = true; redrawReport(); loadReport(); }
+  const reportShown = () => document.visibilityState === "visible" && S.tab === "savings" && !!$("#reportCard") && !!document.querySelector('#tab-savings details.fold[data-fold="report"]')?.open;
+  const reportBusy = () => S.report.loading || S.report.calOpen || S.report.colsOpen || !!document.activeElement?.closest?.("#reportCard");
+  function reportAgain() { if (S.report.data && reportShown() && !reportBusy()) loadReport(); }
+  setInterval(reportAgain, 60_000);
+  document.addEventListener("visibilitychange", reportAgain);
   function setReport(patch) {
     Object.assign(S.report.q, patch);
     S.report.loading = true; S.report.page = 0;
@@ -1785,6 +1794,8 @@
     const o = d?.options ?? { apps: [], providers: [], models: [], kinds: [], threads: [] };
     const keep = (list, v) => (v && !list.some(([x]) => x === v) ? [...list, [v, v]] : list); // a picked value stays in its list
     const exportBtns = [
+      S.report.at ? h("span", { class: "rp-updated", text: `Updated ${new Date(S.report.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` }) : null,
+      h("button", { class: "btn small", type: "button", text: S.report.loading ? "Refreshing…" : "Refresh", title: "Read the prompts again, with what came in since", disabled: !!S.report.loading, onclick: refreshReport }),
       d?.prompts?.length ? h("button", { class: "btn small", type: "button", text: "Export CSV", title: "Every prompt and part in this span, numbers only", onclick: () => download(`leanfare-report-${new Date().toISOString().slice(0, 10)}.csv`, reportCsv(d), "text/csv") }) : null,
       d?.prompts?.some((p) => p.parts.some((x) => x.words)) ? h("button", { class: "btn small", type: "button", text: "Export CSV with the words", onclick: async () => {
         const ids = d.prompts.flatMap((p) => p.parts.filter((x) => x.words).map((x) => x.id));
