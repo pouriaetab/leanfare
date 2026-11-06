@@ -6,6 +6,7 @@
 - A **Refresh** for the report's prompts, with the time they were last read. The table also reads them again every minute while it is open; before, a prompt that came in after you opened the report did not show until you opened it again.
 - Savings takes less room: less space around its parts, and smaller text on the view switches, By prompt and By model, the filters and the pages.
 - Switched off, Leanfare picks no model for Claude's helpers, so they run on the model your app picks. What each used is still kept.
+- A `glama.json` file names who keeps the server, for Glama's list of MCP servers.
 
 ## 0.15.1
 
