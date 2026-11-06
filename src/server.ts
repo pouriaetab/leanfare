@@ -33,7 +33,7 @@ import { checkDelegate, fixHandOff, gradeRow, gradeTogether, handOffRow, markFix
 import { sideMonth, sideStandings, sideText, stopSideBySide } from "./sidebyside";
 import { endRest } from "./rest";
 import { clearNoQuota, noQuota, noQuotaNow, noQuotaWhy } from "./quota";
-import { TOOLS, clientLabel, resourceContents, runToolFor } from "./mcp";
+import { TOOLS, clientLabel, nowLine, resourceContents, runToolFor, withNowLine } from "./mcp";
 import { setSelf } from "./client";
 import { checkReport, report } from "./report";
 import { askModels, askReport, checkAsk } from "./askreport";
@@ -677,7 +677,8 @@ async function api(req: Request, url: URL): Promise<Response> {
   // A door older than this app (an app kept it running after an update, mcp.ts): the tools as this version has them,
   // a call run here for that door's app and folder, and an MCP App's page. A call reads files and may spend, so only
   // Leanfare's own door makes one: it carries the control token.
-  if (p === "/api/mcp/tools" && m === "GET") return json({ version: VERSION, tools: TOOLS });
+  // 0.15.3: with the level line (an older door lists the tools from here).
+  if (p === "/api/mcp/tools" && m === "GET") return json({ version: VERSION, tools: withNowLine(TOOLS, nowLine(levelState(url.searchParams.get("app"), null).view, switchedOn())) });
   if (p === "/api/mcp/hello" && m === "POST") { const b = await readBody(req); noteDoor(b?.client); return json({ ok: true }); } // an app opened the tools
   if (p === "/api/mcp/resource" && m === "POST") { const b = await readBody(req); return json({ contents: resourceContents(b?.uri) }); }
   if (p === "/api/mcp/call" && m === "POST") {

@@ -8,7 +8,7 @@
 // carries its version in _meta; server/discover) and the earlier ones that
 // open with initialize (2025-11-25 and before). No SDK: JSON-RPC over stdin and
 // stdout, one message per line; anything for a person goes to stderr.
-import { appKey, isLevel, LEVEL_NAME, LEVELS, levelAdvice, levelText, type Level } from "./level";
+import { appKey, isLevel, LEVEL_NAME, LEVELS, levelAdvice, levelText, type Level, type LevelView } from "./level";
 import { VERSION } from "./config";
 import { OFF_TEXT, switchedOn } from "./switch";
 import { app, call, healthy, seenVersion, where } from "./client";
@@ -456,6 +456,17 @@ const PLAN_ID = /^[A-Za-z0-9_-]{6,64}$/; // the ids Leanfare makes (randomId): n
 // 0.15.2: what the level says when Leanfare is switched off, and the calls it asks to save while it is on.
 export const OFF_LEVEL = "Leanfare is switched off in the Leanfare app, so it takes nothing now: do not call or load its tools in this chat, and do the work yourself.";
 export const FEWER_CALLS = "This is the level: no need to call Leanfare's level tool again in this chat. Grade all of Leanfare's answers of a prompt in one grade call (the plan's id, grades with each part's verdict, and whole for the whole result), and write any line about what Leanfare did from what its tools already said, with no call for it.";
+// 0.15.3: the level as an app has it now, as the first line of the level tool's description. The leanfare-level mod reads
+// it from the tool list the app already holds, so it calls nothing: through the desktop app's link to this computer,
+// Cowork asks the person before every call to Leanfare, with no "always allow" (over 10 questions in a task, 5 Nov).
+export const NOW_LINE = /^Leanfare now: level [1-5], (on|switched off)\./;
+export function nowLine(view: LevelView, on: boolean): string {
+  const n: Level = on ? view.level : 1;
+  const advice = on ? [levelAdvice(view, "chat"), ...(n > 1 ? [FEWER_CALLS] : [])].join(" ") : OFF_LEVEL;
+  return `Leanfare now: level ${n}, ${on ? "on" : "switched off"}. ${advice}`;
+}
+export const withNowLine = (tools: any[], line: string | null): any[] =>
+  line ? tools.map((t) => (t?.name === "level" && !NOW_LINE.test(String(t.description)) ? { ...t, description: `${line}\n\n${t.description}` } : t)) : tools;
 // Each folder on the way and each file is checked not to be a link (a cloned repo could carry one
 // that points anywhere), and a file is written only as a plain file.
 const isLink = (p: string) => { try { return lstatSync(p).isSymbolicLink(); } catch { return false; } };
@@ -947,6 +958,25 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
 
 type Id = string | number;
 const out = (msg: unknown): void => { process.stdout.write(JSON.stringify(msg) + "\n"); };
+// 0.15.3: the level line for this door's app, when Leanfare runs (it is never started for this); and a nudge to list
+// the tools again when the line changes (the level, the switch), so the app and the mod see the new level, no call.
+async function levelNow(): Promise<string | null> {
+  try {
+    if (!(await healthy(where().base))) return null;
+    const { j } = await call(`/api/level${client ? `?app=${encodeURIComponent(client)}` : ""}`);
+    return j?.view && isLevel(j.view.level) ? nowLine(j.view, switchedOn()) : null;
+  } catch { return null; }
+}
+let listedLine: string | null = null, watching: ReturnType<typeof setInterval> | null = null;
+const WATCH_MS = Number(process.env.LEANFARE_LEVEL_WATCH_MS) > 0 ? Number(process.env.LEANFARE_LEVEL_WATCH_MS) : 20_000;
+function watchLevel() {
+  if (watching) return;
+  watching = setInterval(async () => {
+    const line = await levelNow();
+    if (line !== null && line !== listedLine) { listedLine = line; out({ jsonrpc: "2.0", method: "notifications/tools/list_changed" }); }
+  }, WATCH_MS);
+  (watching as any).unref?.();
+}
 const reply = (id: Id, result: unknown): void => out({ jsonrpc: "2.0", id, result });
 const error = (id: Id | null, code: number, message: string, data?: unknown): void => out({ jsonrpc: "2.0", id, error: { code, message, ...(data !== undefined ? { data } : {}) } });
 const inflight = new Map<Id, AbortController>();
@@ -1006,8 +1036,11 @@ export async function handleMessage(msg: any, send = { reply, error }): Promise<
   if (method === "ping") return done({});
   if (method === "tools/list") {
     void hello();
-    if (await appNewer(false)) { const { j } = await call("/api/mcp/tools"); if (Array.isArray(j?.tools)) return done({ tools: j.tools }); }
-    return done({ tools: TOOLS });
+    const line = await levelNow();
+    listedLine = line;
+    watchLevel();
+    if (await appNewer(false)) { const { j } = await call(`/api/mcp/tools${client ? `?app=${encodeURIComponent(client)}` : ""}`); if (Array.isArray(j?.tools)) return done({ tools: withNowLine(j.tools, line) }); }
+    return done({ tools: withNowLine(TOOLS, line) });
   }
   if (method === "tools/call") {
     const name = params?.name;
