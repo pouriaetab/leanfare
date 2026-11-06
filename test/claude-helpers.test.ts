@@ -12,6 +12,7 @@ import { HELPER_MATCHER, helperOutput } from "../src/helperhook";
 import { forgetPlans, makePlan } from "../src/planner";
 import { HELPER_DEFAULTS, saveSettings, settings } from "../src/settings";
 import { saveSnap } from "../src/statusline";
+import { setSwitch } from "../src/switch";
 import { localDay, now } from "../src/util";
 import { CLAUDE_HOOKS } from "../src/workers";
 import { boot, reset, ui } from "./app";
@@ -260,6 +261,20 @@ describe("a helper's model, as the mod and Claude Code's hook ask for it", () =>
     const ask = { description: "Final check", task: "Verify the final result against the task" };
     expect((await ui(url, "/api/helper", { app: "Claude", ...ask })).json).toMatchObject({ model: "claude-saga-6", label: "Claude Saga 6", top: true });
     expect((await ui(url, "/api/helper", { app: "Claude Code", ...ask })).json).toMatchObject({ model: "fable", label: "Claude Fable 5.1", top: true });
+  });
+
+  // 0.15.2: switched off, Leanfare does nothing for the apps: it leaves the helper's model alone, and still keeps what
+  // the helper used (numbers only), so the report shows the prompt whole.
+  test("Leanfare switched off: no model for the helper, a row kept, and its model and tokens filled in at its end", async () => {
+    addClaude();
+    setSwitch(false);
+    try {
+      const a = await ui(url, "/api/helper", { app: "Claude", session: "s-off", agent: "Explore", task: "Find where the router picks a model" });
+      expect(a.json).toMatchObject({ model: null, label: null, from: "off", why: "Leanfare is switched off: the helper runs on the model the app picks" });
+      expect(Number.isInteger(a.json.id)).toBe(true);
+      expect((await ui(url, "/api/helper/done", { id: a.json.id, model: "claude-sonnet-5-5", input: 900, cached: 4000, output: 300 })).json.ok).toBe(true);
+      expect(db.query("SELECT model, input, cached, output FROM helpers WHERE id = ?").get(a.json.id)).toEqual({ model: "anthropic/claude-sonnet-5-5", input: 900, cached: 4000, output: 300 });
+    } finally { setSwitch(true); }
   });
 
   test("Settings, Claude's own models, off: no model, so the helper runs on the one the app picks, and no row", async () => {

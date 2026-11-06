@@ -1121,3 +1121,32 @@ tr.wd td { background: var(--panel-2); }
 .rp-table.pt td { white-space: nowrap; }
 .rp-table.pt.flat tr.part td { background: none; }
 .rp-table.pt.flat tr.part.main td { border-top: 1px solid var(--line); }
+
+/* 0.15.2: Savings tighter still (his ask, 5 Nov: less space, smaller text). Every switch of views (By prompt or By model,
+   Bars, Lanes or Numbers, the report's rows) at one small size, as the small buttons beside it. */
+.savings { padding: 10px 14px; gap: 8px; }
+#tab-savings .seg { padding: 2px; border-radius: 9px; }
+#tab-savings .seg button { font-size: var(--fs-tiny); min-height: 22px; padding: 1px 8px; border-radius: 7px; }
+#tab-savings .card { padding: 6px 10px; }
+#tab-savings .lv-card { padding: 6px 10px; gap: 6px; margin-bottom: 6px; }
+#tab-savings .fold { padding: 2px 0; }
+#tab-savings .fold > summary { padding: 3px 2px; }
+#tab-savings .rp-view { gap: 6px; }
+#tab-savings .rp-views button[role="tab"] { padding: 2px 8px; font-size: var(--fs-small); }
+.rp-tbar { gap: 6px; margin-bottom: 4px; }
+.rp-tbar .rp-ttl { font-size: var(--fs-small); }
+.rp-pager { margin-top: 4px; font-size: var(--fs-tiny); }
+.rp-pager select { min-height: 22px; }
+.rp-updated { font-size: var(--fs-tiny); color: var(--muted); white-space: nowrap; }
+#tab-savings .fold-title { font-size: var(--fs-body); }
+#tab-savings .fold-gist { font-size: var(--fs-tiny); }
+#tab-savings .lv-kinds { gap: 4px; }
+#tab-savings .lv-kinds .chip-btn { font-size: var(--fs-tiny); min-height: 22px; padding: 1px 8px; }
+#tab-savings .rp-filters select { min-height: 22px; font-size: var(--fs-tiny); }
+/* Live in its group: the kinds and Bars, Lanes or Numbers on one line, the calls under them */
+.fold[data-fold="live"] .lv-card:not(.idle) { grid-template-columns: minmax(0, 1fr) auto; }
+.fold[data-fold="live"] .lv-card:not(.idle) > .lv-kinds { grid-column: 1; grid-row: 1; align-self: center; }
+.fold[data-fold="live"] .lv-card:not(.idle) > .lv-head { grid-column: 2; grid-row: 1; }
+.fold[data-fold="live"] .lv-card:not(.idle) > :not(.lv-kinds):not(.lv-head) { grid-column: 1 / -1; }
+#tab-savings .rp-pager select, #tab-savings .rp-ask-row select { min-height: 22px; font-size: var(--fs-tiny); }
+#tab-savings .rp-ask-q { min-height: 22px; }

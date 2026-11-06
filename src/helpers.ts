@@ -8,8 +8,10 @@ import { claudeRungs, helperRules, pickClaude, restFamily, familyOf, TASK_OF, ty
 import { ALIASES } from "./helperhook";
 import { partForHelper } from "./planner";
 import { guessTask } from "./router";
+import { switchedOn } from "./switch";
 import { localDay, now } from "./util";
 
+const OFF_WHY = "Leanfare is switched off: the helper runs on the model the app picks";
 export interface HelperAsk { app: string | null; session?: string | null; task?: string | null; description?: string | null; agent?: string | null; asked?: string | null }
 export interface HelperAnswer { id: number | null; model: string | null; label: string | null; family: string | null; why: string; from: "plan" | "guess" | "off"; top: boolean }
 
@@ -31,6 +33,13 @@ export function guessHelper(agent: string | null | undefined, words: string): { 
 const nameFor = (p: ClaudePick) => (ALIASES.has(p.rung.family) ? p.rung.family : p.rung.model.apiId);
 
 export function helperPick(a: HelperAsk): HelperAnswer {
+  // 0.15.2: switched off, Leanfare leaves the helper's model to the app, as all its work; what it used is still kept
+  // (numbers only), so the report shows the prompt whole.
+  if (!switchedOn()) {
+    const r = db.query("INSERT INTO helpers(ts, day, app, session, model, asked, why) VALUES(?,?,?,?,?,?,?) RETURNING id")
+      .get(now().toISOString(), localDay(), a.app ?? "Claude", a.session ?? null, a.asked ?? "", a.asked ?? null, OFF_WHY) as { id: number };
+    return { id: r.id, model: null, label: null, family: null, why: OFF_WHY, from: "off", top: false };
+  }
   const rules = helperRules();
   if (!rules.on) return { id: null, model: null, label: null, family: null, why: "Settings, Claude's own models, is off: the helper runs on the model the app picks", from: "off", top: false };
   const words = [a.description, a.task].filter(Boolean).join("\n");
