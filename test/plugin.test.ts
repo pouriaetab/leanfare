@@ -105,3 +105,9 @@ test("the plugin's hooks stay quiet when the app's own are in Claude Code's sett
     if (before === undefined) delete process.env.LEANFARE_CLAUDE_SETTINGS; else process.env.LEANFARE_CLAUDE_SETTINGS = before;
   }
 });
+
+// Glama's list of MCP servers reads glama.json at the repository's root to know who keeps the server (0.15.2).
+test("glama.json: Glama's schema and the repository's maintainer, nothing else", () => {
+  const g = JSON.parse(readFileSync(join(ROOT, "glama.json"), "utf8"));
+  expect(g).toEqual({ $schema: "https://glama.ai/mcp/schemas/server.json", maintainers: ["pouriaetab"] });
+});
