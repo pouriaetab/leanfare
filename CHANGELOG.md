@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.15.3
+
+- The leanfare-level mod asks you nothing. In a Cowork task, Leanfare is reached through the desktop app's link to your computer, and Cowork asks before every call there, with only Allow once. The mod called Leanfare by itself: the level every 10 minutes (and a minute after a Deny), a model for each helper, and each turn's token counts at its end, which made over 10 questions in a task, even with Leanfare switched off. Now Leanfare writes the level as the first line of its level tool's description and lists its tools again when the level or the switch changes; the mod reads the level from that list, with no call, and calls Leanfare only where Leanfare runs on the same computer as the app. When Leanfare answers that it is switched off, the mod stops asking Claude to plan first at once.
+- To get it: in Cowork, update leanfare-level from the pouriaetab/leanfare marketplace, then quit and reopen Claude Desktop.
+
 ## 0.15.2
 
 - Fewer questions in Cowork. Switched off, Leanfare tells your apps level 1 and not to call its tools, so the leanfare-level mod adds nothing to the prompt; before, the level tool still gave the knob's level, and Cowork kept asking about Leanfare's tools. On, the level line says not to call the level tool again, and a plan's answers are graded in one call: `grade` takes the plan's id, `grades` for each part, and `whole` for the whole result.

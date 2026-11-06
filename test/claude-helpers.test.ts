@@ -359,9 +359,9 @@ describe("Claude Code's hook and the mod", () => {
     const src = readFileSync(join(import.meta.dir, "..", "mods", "leanfare-level", "hooks", "register.ts"), "utf8");
     expect(src).toContain("on('agent.spawn'");
     expect(src).toContain("on('turn.complete'");
-    expect(src).toMatch(/\['leanfare', 'helper'\]/);
-    expect(src).toMatch(/\['remote-devices', 'leanfare__helper'\]/);
-    expect(src).toContain("if (e.fork) return next(e)"); // a fork keeps the main model: it is the same conversation
+    expect(src).toContain("$.mcp.call(OWN, 'helper', args)"); // 0.15.3: on Leanfare's own server only
+    expect(src).not.toContain("'remote-devices'"); // never through the desktop app's link, where each call is a question
+    expect(src).toContain("if (e.fork || !(await ownServer($))) return next(e)"); // a fork keeps the main model: it is the same conversation
     expect(src).toContain("task: String(e.prompt ?? '').slice(0, 8000)"); // its words, to pick; Leanfare keeps none of them
     expect(src).toContain("helper($, { turn: { model: u.model, ...tokensOf(u) } })"); // the main model's turn: numbers only
     const columns = (db.query("PRAGMA table_info(helpers)").all() as { name: string }[]).map((c) => c.name);
