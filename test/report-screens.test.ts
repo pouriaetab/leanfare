@@ -263,3 +263,27 @@ describe("the report", () => {
     for (const f of ["ui/app.js", "src/reportapp.ts"]) expect(readFileSync(join(import.meta.dir, "..", f), "utf8")).not.toMatch(together);
   });
 });
+
+// 0.15.2: the report was read once, so a prompt that came in later showed only on the next load (he saw the last one at
+// 12:25 PM well after). Refresh reads it again, and says when it was read.
+describe("the report, read again", () => {
+  test("Refresh shows a prompt that came in after the report was read, and the time it was read", async () => {
+    const doc = await open(url);
+    await goReport(doc);
+    doc.querySelector('#reportCard .rp-views [role="tab"]:nth-child(2)').click(); // Prompts
+    await waitFor(() => !!doc.querySelector("#reportCard .rp-table.pt"));
+    const table = () => doc.querySelector("#reportCard .rp-table.pt")?.textContent ?? "";
+    expect(doc.querySelector("#reportCard .rp-updated").textContent).toStartWith("Updated ");
+    expect(table()).not.toContain("11:55");
+    // Two Cowork turns come in after the report was read: the second is a prompt of its own.
+    db.query("INSERT INTO app_turns(ts, day, app, model, input, cached, output) VALUES ('2026-10-21T11:50:00Z', '2026-10-21', 'Claude', 'claude-opus-5-5', 300, 9000, 200), ('2026-10-21T11:55:00Z', '2026-10-21', 'Claude', 'claude-opus-5-5', 400, 9500, 250)").run();
+    await Bun.sleep(300);
+    expect(table()).not.toContain("11:55"); // nothing reads it again by itself within the minute
+    const refresh = [...doc.querySelectorAll("#reportCard .rp-views button")].find((b: any) => b.textContent === "Refresh") as any;
+    expect(refresh.title).toBe("Read the prompts again, with what came in since");
+    refresh.click();
+    await waitFor(() => table().includes("11:55"));
+    expect(table()).toContain("11:55");
+    expect(bad(doc)).toBe(false);
+  });
+});
