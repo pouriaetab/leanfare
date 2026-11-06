@@ -110,7 +110,8 @@ describe("the mod for Cowork and Claude Desktop", () => {
     expect(JSON.parse(readFileSync(join(dir, ".claude-plugin", "plugin.json"), "utf8")).name).toBe("leanfare-level");
     expect(src).toContain("on('prompt.compose'");
     expect(src).toContain("on('tool.call'");
-    expect(src).toContain("[['leanfare', 'level'], ['remote-devices', 'leanfare__level']]");
+    expect(src).toContain("const OWN = 'leanfare'"); // 0.15.3: the level from the tool list, else Leanfare's own server
+    expect(src).not.toContain("'remote-devices'");
     expect(src).toContain("return { deny: firstWords(l.n) }");
     expect(src).toContain(".catch(($, e, next) => next(e))"); // a failed hook lets everything through
     expect(src).not.toMatch(/fetch\(|\$\.process|\$\.fs/); // it reads the level and sends nothing anywhere
