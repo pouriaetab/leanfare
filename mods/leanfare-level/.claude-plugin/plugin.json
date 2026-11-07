@@ -1,10 +1,11 @@
 {
   "name": "leanfare-level",
-  "version": "0.15.3",
-  "description": "Leanfare in every Cowork and Claude Desktop chat: the level in the system prompt, read from Leanfare's tool list so it asks you nothing, at levels 4 and 5 a reminder to plan with Leanfare first, and where Leanfare runs on the same computer each helper on the Claude model Leanfare picks.",
+  "version": "0.15.4",
+  "description": "Leanfare in every Cowork and Claude Desktop chat: a row above the message box to pick its level, speed, quality and models, or turn it off, with no questions; the level in the system prompt, read from Leanfare's tool list; at levels 4 and 5 a reminder to plan first.",
   "author": {
     "name": "pouriaetab"
   },
   "homepage": "https://github.com/pouriaetab/leanfare",
-  "license": "MIT"
+  "license": "MIT",
+  "types": "./types/index.d.ts"
 }

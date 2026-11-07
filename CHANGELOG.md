@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.15.4
+
+- The Leanfare row. In Cowork and Claude Desktop, the leanfare-level mod adds a row just above the message box with four pickers: Level (Leanfare's knob, Off, or 2 to 5 for this chat), Speed (as in Leanfare, Fast, Balanced or Cheapest), Quality (Standard, or High: each part one effort step up) and Models (Claude and Leanfare's, or Claude only: every part on Claude's own models, the plan naming the model for each). A pick calls nothing, so Cowork asks nothing: the mod tells Claude in the conversation and shapes Claude's own calls to Leanfare by it. Off turns back every Leanfare call in that chat before Cowork can ask.
+- `plan` takes `speed`, `quality` (`high`: each part one effort step up) and `only` (`claude`: every part on Claude's own models).
+- The README says how to run Leanfare in any MCP host, which hosts it supports, and the packages in the MCP Registry.
+- To get the row: in Cowork, Customize, Plugins, Check for updates on Leanfare's marketplace.
+
 ## 0.15.3
 
 - The leanfare-level mod asks you nothing. In a Cowork task, Leanfare is reached through the desktop app's link to your computer, and Cowork asks before every call there, with only Allow once. The mod called Leanfare by itself: the level every 10 minutes (and a minute after a Deny), a model for each helper, and each turn's token counts at its end, which made over 10 questions in a task, even with Leanfare switched off. Now Leanfare writes the level as the first line of its level tool's description and lists its tools again when the level or the switch changes; the mod reads the level from that list, with no call, and calls Leanfare only where Leanfare runs on the same computer as the app. When Leanfare answers that it is switched off, the mod stops asking Claude to plan first at once.

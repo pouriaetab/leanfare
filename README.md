@@ -51,7 +51,7 @@ Other ways in: the Claude Code plugin (`/plugin marketplace add pouriaetab/leanf
 2. **Helpers**: one per part, one per prompt (the default), or none.
 3. **Where work may go**: only this computer, or the providers you ticked.
 
-Leanfare picks the rest for you. The [guide](docs/GUIDE.md) explains every part.
+In Cowork and Claude Desktop, a row just above the message box sets the level (or Off), the speed, the quality and the models for the chat you are in. Leanfare picks the rest for you. The [guide](docs/GUIDE.md) explains every part.
 
 ## What's inside
 

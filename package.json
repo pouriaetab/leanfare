@@ -1,6 +1,6 @@
 {
   "name": "leanfare",
-  "version": "0.15.3",
+  "version": "0.15.4",
   "description": "Makes your Claude plan last longer: it works inside Claude and hands simple work, like reading files and drafting, to cheaper or free models.",
   "license": "MIT",
   "type": "module",
