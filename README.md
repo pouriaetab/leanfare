@@ -80,6 +80,27 @@ bun src/cli.ts       # the app
 bun src/cli.ts mcp   # the MCP server, over stdio
 ```
 
+## In any MCP host
+
+Leanfare is a standard MCP server over stdio: the command is `leanfare mcp`, with no environment variables. When the Leanfare app is not running, the server starts it.
+
+```json
+{
+  "mcpServers": {
+    "leanfare": {
+      "command": "/Users/you/.leanfare/bin/leanfare",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+The install line puts the program in `~/.leanfare/bin/leanfare` on macOS and Linux, and in `%LOCALAPPDATA%\Leanfare\bin\leanfare.exe` on Windows. Use its full path: an app opened from the Dock or the Start menu may not see your shell's PATH. VS Code takes the same command and args in `.vscode/mcp.json`, under `servers` with `"type": "stdio"`.
+
+**Hosts.** Leanfare is built and tested for Claude Desktop, Cowork and Claude Code. There **Turn on Leanfare** sets it up in one press, and the level, the hooks and the per-prompt report work. Other MCP hosts that run local stdio servers, such as VS Code with GitHub Copilot's agent mode, can run the same tools with the configuration above: the host's model plans with Leanfare, hands it reading and drafting, grades the answers, and the report counts those hand offs. The one-press setup, the level hooks and the main model's own token counts are for Claude's apps only, and other hosts are not tested.
+
+**In the MCP Registry.** `io.github.pouriaetab/leanfare` lists an MCPB bundle (registry type `mcpb`, transport stdio) for each computer Claude Desktop runs on: macOS on Apple silicon, macOS on Intel, and Windows. Each comes from the release with its SHA-256, holds the compiled program, and starts `leanfare mcp`. For Linux, or a host that does not take MCPB bundles, use the install line and the configuration above.
+
 ## Privacy
 
 Leanfare reads usage numbers, never your words, unless you choose in Settings to keep a hand off's words on your computer to read later. Your keys stay on your computer, and requests go from your computer straight to the AI company you use. No telemetry. The [guide](docs/GUIDE.md#privacy) has the details.
