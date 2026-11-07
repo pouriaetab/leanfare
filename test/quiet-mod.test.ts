@@ -4,13 +4,20 @@
 // made over 10 questions in one task (5 Nov 2026). Now it reads the level from the first line of the level tool's
 // description, which Leanfare writes, and calls Leanfare only on Leanfare's own server. Here the mod runs against a
 // stand-in for the app's engine.
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { copyFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nowLine, OFF_LEVEL } from "../src/mcp";
 import { OFF_TEXT } from "../src/switch";
 
+// The engine's own module and its drawing function, as a stand-in: values the session holds, and a tree as plain data.
+mock.module("claude-code", () => ({
+  atom: (ref: any, initial: any) => ({ ref, initial }),
+  read: async ($: any, a: any) => ($.state.has(a.ref.key) ? $.state.get(a.ref.key) : a.initial),
+  update: async ($: any, a: any, fn: (v: any) => any) => { const v = fn($.state.has(a.ref.key) ? $.state.get(a.ref.key) : a.initial); $.state.set(a.ref.key, v); return v; },
+}));
+(globalThis as any).h = (type: unknown, props: any, ...children: unknown[]) => ({ type, props: props ?? {}, children });
 const SRC = join(import.meta.dir, "..", "mods", "leanfare-level", "hooks", "register.ts");
 const DIR = mkdtempSync(join(tmpdir(), "lf-mod-"));
 let copies = 0;
@@ -22,9 +29,14 @@ async function load(): Promise<any> {
 }
 type Tool = { name: string; description?: string };
 // The engine: the tools this session lists, and Leanfare's servers (a server with no answers is not there).
-function engine(tools: Tool[], answers: Record<string, any> = {}) {
+function engine(tools: Tool[], answers: Record<string, any> = {}, kept: Record<string, unknown> = {}) {
   const calls: [string, string, any][] = [];
+  const told: string[] = [];
   const $ = {
+    state: new Map<string, unknown>(),
+    store: { get: async (k: string) => kept[k], set: async (k: string, v: unknown) => { kept[k] = v; } },
+    session: { append: async (x: any) => { told.push(x.message.content[0].text); } },
+    ui: { resolve: () => ({ Box: "Box", Text: "Text", Select: "Select" }) },
     tool: { list: async () => tools.map((t) => ({ mcp: true, description: "", ...t })) },
     mcp: { call: async (server: string, tool: string, args: any) => {
       calls.push([server, tool, args]);
@@ -33,11 +45,12 @@ function engine(tools: Tool[], answers: Record<string, any> = {}) {
       return a;
     } },
   };
-  return { $, calls };
+  return { $, calls, told, kept };
 }
 function hooks(mod: any) {
   const h: Record<string, (...a: any[]) => any> = {};
-  mod.register((event: string, hook: any) => { h[event] = hook; return { catch: () => undefined }; }, {});
+  // on(event, hook) or on(event, matcher, hook), as the engine takes it.
+  mod.register((event: string, a: any, b?: any) => { h[event] = typeof a === "function" ? a : b; return { catch: () => undefined }; }, {});
   return h;
 }
 const core = async () => ({ sections: [{ id: "core", text: "core", scope: "shared" }] });
@@ -141,5 +154,68 @@ describe("the leanfare-level mod asks nothing", () => {
     expect(mod.fromLine("Leanfare now: level 4, on.")).toMatchObject({ n: 4 });
     expect(mod.fromLine("Leanfare now: level 4, on.").advice).toContain("plan tool your first tool call");
     expect(mod.fromLine(STATIC)).toBeNull();
+  });
+
+  // 0.15.4: the Leanfare row above the message box.
+  const ABOVE = { surface: "desktop", component: "AbovePrompt", props: { hasSurvey: false, isWorking: false } };
+  const drawn = (tree: any) => tree.children.filter((c: any) => c.type === "Select").map((c: any) => c.props);
+  test("the row: four pickers where Leanfare's tools are, the knob's level named; nothing without them", async () => {
+    const mod = await load(), h = hooks(mod);
+    const e = engine([{ name: `${LINK}level`, description: nowLine(view(4), true) }]);
+    const tree: any = await h["ui.render"](e.$, ABOVE, async () => "engine");
+    expect(tree.type).toBe("Box");
+    expect(tree.children[0]).toMatchObject({ type: "Text", children: ["Leanfare"] });
+    const picks = drawn(tree);
+    expect(picks.map((p: any) => [p.key, p.label, p.value])).toEqual([["leanfare-level", "Level", "knob"], ["leanfare-speed", "Speed", "app"], ["leanfare-quality", "Quality", "standard"], ["leanfare-only", "Models", "any"]]);
+    expect(picks[0].options[0]).toEqual({ value: "knob", label: "Leanfare's knob (4)" });
+    expect(picks[0].options.map((o: any) => o.value)).toEqual(["knob", "off", "2", "3", "4", "5"]);
+    expect(e.calls).toEqual([]);
+    const none = engine([]);
+    expect(await hooks(await load())["ui.render"](none.$, ABOVE, async () => "engine")).toBe("engine");
+    expect(await h["ui.render"](e.$, { ...ABOVE, props: { hasSurvey: true } }, async () => "survey")).toBe("survey"); // a survey goes first
+  });
+
+  test("Off in the row: every Leanfare call turned back here, so nothing is asked; the model is told, and the pick kept", async () => {
+    const mod = await load(), h = hooks(mod);
+    const e = engine([{ name: `${LINK}level`, description: nowLine(view(4), true) }, { name: `${LINK}plan` }]);
+    const picks = drawn(await h["ui.render"](e.$, ABOVE, async () => "engine"));
+    await picks[0].onSelect("off");
+    expect(e.told.at(-1)).toStartWith(mod.OFF_HERE);
+    expect(e.kept.row).toEqual({ level: "off", speed: "app", quality: "standard", only: "any" });
+    let reached = 0;
+    for (const tool of ["plan", "delegate", "plan_status", "level"]) expect(await h["tool.call"](e.$, { tool: `${LINK}${tool}` }, async () => { reached++; return { result: "ok" }; })).toEqual({ deny: mod.OFF_HERE });
+    expect(reached).toBe(0);
+    await h["prompt.submit"](e.$, { text: "go" }, async (x: any) => x);
+    expect(await h["tool.call"](e.$, { tool: "Bash", command: "ls" }, go)).toEqual({ result: "ok" }); // no plan-first turn back
+    expect(section(await h["prompt.compose"](e.$, {}, core))).toBeUndefined();
+    expect(e.calls).toEqual([]);
+  });
+
+  test("level 3, fast, high and Claude only: Claude's own calls carry them, and delegate and ask are turned back", async () => {
+    const mod = await load(), h = hooks(mod);
+    const e = engine([{ name: `${LINK}level`, description: nowLine(view(4), true) }, { name: `${LINK}plan` }]);
+    const picks = drawn(await h["ui.render"](e.$, ABOVE, async () => "engine"));
+    for (const [i, v] of [[0, "3"], [1, "fastest"], [2, "high"], [3, "claude"]] as const) await picks[i].onSelect(v);
+    expect(e.told.at(-1)).toStartWith("The Leanfare row above the message box now says: level 3 (More).");
+    expect(e.told.at(-1)).toContain("speed fast, quality high (each part one effort step up), Claude only");
+    let sent: any = null;
+    await h["tool.call"](e.$, { tool: `${LINK}plan`, task: "a" }, async (x: any) => { sent = x; return { result: "ok" }; });
+    expect(sent).toMatchObject({ task: "a", level: 3, speed: "fastest", split: "rules", quality: "high", only: "claude" });
+    expect(await h["tool.call"](e.$, { tool: `${LINK}delegate`, task: "b" }, go)).toEqual({ deny: mod.CLAUDE_ONLY });
+    expect(await h["tool.call"](e.$, { tool: `${LINK}ask`, prompt: "c" }, go)).toEqual({ deny: mod.CLAUDE_ONLY });
+    expect(section(await h["prompt.compose"](e.$, {}, core)).text).toContain("level 3 (More) in this chat, as the Leanfare row says.");
+    // A delegate, with Claude and Leanfare's models again: the speed and the effort.
+    await picks[3].onSelect("any");
+    await h["tool.call"](e.$, { tool: `${LINK}delegate`, task: "d", effort: "low" }, async (x: any) => { sent = x; return { result: "ok" }; });
+    expect(sent).toMatchObject({ level: 3, speed: "fastest", effort: "high" });
+    expect(e.calls).toEqual([]);
+  });
+
+  test("the row as the last chat left it, where the app keeps the mod's store", async () => {
+    const mod = await load(), h = hooks(mod);
+    const e = engine([{ name: `${LINK}level`, description: nowLine(view(4), true) }], {}, { row: { level: "2", speed: "balanced", quality: "standard", only: "any" } });
+    await h["session.start"](e.$, { cwd: "/" }, async (x: any) => ({ cwd: x.cwd }));
+    expect(await mod.inEffect(e.$)).toMatchObject({ n: 2, off: false });
+    expect(mod.isRow({ level: "9" })).toBe(false);
   });
 });
