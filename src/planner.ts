@@ -21,6 +21,7 @@
 // not hold). The monthly budget holds either way.
 //
 // No words are kept: the ledger has the split's model, tokens and cost, as for any answer.
+import { parseSpeed, type SpeedChoice } from "./speed";
 import { isLevel, levelFor, levelText, type Level } from "./level";
 import { homedir } from "node:os";
 import { dirname, relative, sep } from "node:path";
@@ -337,13 +338,17 @@ const onCodex = (part: Split, r: { tokens: number }, why: string): Part => ({ ..
 
 // Why more goes out: the plan near its limit, or the level (0.12) set to 4 or 5.
 const nearWords = (near: string, join: ": " | " (") => (near.startsWith("your Leanfare level") ? near : `your plan is near its limit${join}${near}${join === " (" ? ")" : ""}`);
-async function place(part: Split, files: PlanFile[], near: string | null, manager: string, signal: AbortSignal, codex = false, priv = false, level: Level = 2, gemini = false): Promise<Part> {
+// 0.15.4: the Leanfare row's choices: a speed for the model each part goes to, and Claude only (every part on Claude's own models).
+type PlaceOpts = { speed?: SpeedChoice; claudeOnly?: boolean };
+export const CLAUDE_ONLY_WHY = "Claude only, as the Leanfare row says: it runs on Claude's own models";
+async function place(part: Split, files: PlanFile[], near: string | null, manager: string, signal: AbortSignal, codex = false, priv = false, level: Level = 2, gemini = false, o: PlaceOpts = {}): Promise<Part> {
+  if (o.claudeOnly) return { ...part, where: "you", model: null, use: modelInYourApp(part, manager), seconds: null, tokens: reading(part, files).tokens + OUT_YOU, cost: null, why: CLAUDE_ONLY_WHY };
   // 0.14: at level 4 and up a change to the project is drafted outside, as a patch: placed as drafting is (your Jobs rule
   // for drafting holds), and the app reads it and applies it with its own tools. Below 4 it stays, as before.
   // 0.15: only a change that names files Leanfare measured: with none there is nothing to draft a patch against (on 5 Nov
   // three such parts went to Codex, which found nothing to read and answered nothing), so it stays with the app.
   if (part.kind === "code" && level >= 4 && !part.keep && reading(part, files).named > 0) {
-    const p = await place({ ...part, kind: "write" }, files, near, manager, signal, codex, priv, level, gemini);
+    const p = await place({ ...part, kind: "write" }, files, near, manager, signal, codex, priv, level, gemini, o);
     if (p.where === "you") return { ...p, kind: "code", use: modelInYourApp(part, manager) };
     return { ...p, kind: "code", patch: true, why: `your Leanfare level is ${levelText(level)}: a model drafts the change as a patch, and you read it and apply it (${p.why})` };
   }
@@ -399,7 +404,7 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
     : part.kind === "read" && !r.named ? "; no files named, so it works from what the model knows: name the files or folder it reads" : "";
   // Reading at low or medium effort goes first to a model on this computer that passed its test here (localpass.ts):
   // it is free. One that cannot take the part leaves it to Auto.
-  const local = part.kind === "read" && part.effort !== "high" && settings().speed === "cheapest" ? passedLocal(only) : null;
+  const local = part.kind === "read" && part.effort !== "high" && (o.speed ?? settings().speed) === "cheapest" ? passedLocal(only) : null;
   if (local) {
     try {
       const p = await route({ source: "chat", asked: local.id, messages, tokens: r.tokens, maxOut: null, signal, dry: true, effort: part.effort, guess: taskFor(kind, messages), ledgerSource: "delegate" });
@@ -407,7 +412,7 @@ async function place(part: Split, files: PlanFile[], near: string | null, manage
     } catch (e: any) { if (e?.status === 499) throw e; }
   }
   try {
-    const p = await route({ source: "chat", asked: `auto-${TIER[part.effort]}`, messages, tokens: r.tokens, maxOut: null, signal, dry: true, effort: part.effort,
+    const p = await route({ source: "chat", asked: `auto-${TIER[part.effort]}`, messages, tokens: r.tokens, maxOut: null, signal, dry: true, effort: part.effort, ...(o.speed !== undefined ? { speed: o.speed } : {}),
       guess: part.kind === "search" ? { task: "overall", why: "a web search", alt: null } : taskFor(kind, messages), only, onlyWhy: offWhy ?? `none of the models you ticked can take this much text (about ${tokText(need)} tokens with the answer)`, ledgerSource: "delegate" });
     const where = whereOf(p.model, p.estimate);
     if (where === "paid" && !viaCodex && viaGemini) return onGemini(part, r, `your Google account through Gemini CLI, not pay per use${near && big ? ` (${nearWords(near, ": ")})` : ""}; Gemini CLI reads ${r.named ? "the files itself" : "what the task says"}, read only`);
@@ -624,7 +629,7 @@ function nextOf(r: Omit<PlanResult, "table" | "next" | "id">, started: Set<numbe
 
 // ---- the plan ------------------------------------------------------------------------------------
 
-export interface PlanInput { task: string; files: PlanFile[]; manager: string | null; split?: "auto" | "rules"; private?: boolean; yourModel?: string | null; yourEffort?: string | null; level?: Level; folder?: string | null; checks?: Check[]; parts?: GivenPart[]; signal: AbortSignal }
+export interface PlanInput { task: string; files: PlanFile[]; manager: string | null; split?: "auto" | "rules"; private?: boolean; yourModel?: string | null; yourEffort?: string | null; level?: Level; folder?: string | null; checks?: Check[]; parts?: GivenPart[]; speed?: SpeedChoice; effortUp?: boolean; claudeOnly?: boolean; signal: AbortSignal } // 0.15.4: speed, quality high (effortUp) and Claude only, from the Leanfare row
 
 // The name of a model an app says it runs on: the price list's when it has the model, else made from the id
 // (claude-opus-5-5: Claude Opus 5.5; gpt-5.4: GPT-5.4; a date at the end is dropped).
@@ -721,6 +726,11 @@ export function checkPlan(b: any, trusted = false): Omit<PlanInput, "signal"> | 
     if (!got) return "parts must each have a title or a task.";
     parts = got;
   }
+  // 0.15.4: the Leanfare row in Cowork and Claude Desktop: speed, quality and which models.
+  const speed = b.speed === undefined || b.speed === null ? null : parseSpeed(b.speed);
+  if (speed === null && b.speed !== undefined && b.speed !== null) return "speed must be cheapest, balanced, fastest, or a number of seconds from 1 to 3600.";
+  if (b.quality !== undefined && b.quality !== null && b.quality !== "standard" && b.quality !== "high") return "quality must be standard or high.";
+  if (b.only !== undefined && b.only !== null && b.only !== "any" && b.only !== "claude") return "only must be any or claude.";
   let checks: Check[] | undefined;
   if (b.checks !== undefined && b.checks !== null) {
     const got = parseChecks(b.checks);
@@ -728,7 +738,7 @@ export function checkPlan(b: any, trusted = false): Omit<PlanInput, "signal"> | 
     if (!folder) return "checks are kept for a project's folder: give plan the folder too.";
     checks = got;
   }
-  return { task: b.task.trim(), files, manager, split, ...(b.private ? { private: true } : {}), ...(yourModel ? { yourModel } : {}), ...(yourEffort ? { yourEffort } : {}), ...(isLevel(b.level) ? { level: b.level } : {}), ...(folder ? { folder } : {}), ...(checks ? { checks } : {}), ...(parts ? { parts } : {}) };
+  return { task: b.task.trim(), files, manager, split, ...(b.private ? { private: true } : {}), ...(yourModel ? { yourModel } : {}), ...(yourEffort ? { yourEffort } : {}), ...(isLevel(b.level) ? { level: b.level } : {}), ...(folder ? { folder } : {}), ...(checks ? { checks } : {}), ...(parts ? { parts } : {}) , ...(speed !== null ? { speed } : {}), ...(b.quality === "high" ? { effortUp: true } : {}), ...(b.only === "claude" ? { claudeOnly: true } : {}) };
 }
 
 // The plan whose limits count: Codex spends a ChatGPT plan, the others a Claude plan when they are Claude's.
@@ -795,11 +805,14 @@ export async function makePlan(input: PlanInput): Promise<PlanResult> {
   // A reading part with no files named reads what an earlier part finds (a search's sources): its size is a guess.
   const guessed = (p: Split) => p.kind === "read" && p.size !== "none" && reading(p, input.files).named === 0;
   const mark = (x: Part, p: Split): Part => (guessed(p) ? { ...x, guess: true } : x);
-  for (const p of parts) placed.push(mark(await place(p, input.files, near, manager, input.signal, codex.ok, !!input.private, lv.level, gem.ok), p));
+  // 0.15.4: quality high (the Leanfare row) takes each part one effort step up, so a stronger model takes it.
+  if (input.effortUp) parts = parts.map((p) => ({ ...p, effort: p.effort === "low" ? "medium" : "high" }));
+  const o: PlaceOpts = { ...(input.speed !== undefined ? { speed: input.speed } : {}), ...(input.claudeOnly ? { claudeOnly: true } : {}) };
+  for (const p of parts) placed.push(mark(await place(p, input.files, near, manager, input.signal, codex.ok, !!input.private, lv.level, gem.ok, o), p));
   // A part that waits for one of yours is handed over by your app once yours are done, with delegate,
   // which cannot run it on Codex: such a part is placed as if Codex were off.
   const later = afterYours(placed);
-  for (let i = 0; i < placed.length; i++) if ((placed[i].where === "codex" || placed[i].where === "gemini") && later.has(placed[i].n)) placed[i] = mark(await place(parts[i], input.files, near, manager, input.signal, false, !!input.private, lv.level, false), parts[i]);
+  for (let i = 0; i < placed.length; i++) if ((placed[i].where === "codex" || placed[i].where === "gemini") && later.has(placed[i].n)) placed[i] = mark(await place(parts[i], input.files, near, manager, input.signal, false, !!input.private, lv.level, false, o), parts[i]);
   const out = placed.filter((p) => p.where !== "you");
   const costs = out.map((p) => p.cost);
   const time = chains(placed);
