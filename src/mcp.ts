@@ -49,7 +49,7 @@ async function hello() {
   try { if (await healthy(where().base)) await call("/api/mcp/hello", { method: "POST", json: { client } }); } catch {}
 }
 const META = { "io.modelcontextprotocol/serverInfo": SERVER };
-const INSTRUCTIONS = "Leanfare runs every top AI model on this computer with the user's own keys, shows what each answer costs, and keeps a monthly budget. At the start of a task with several parts, call plan: it splits the task, starts Leanfare's parts at once by itself, and says in a short table which parts are yours; collect the rest of Leanfare's answers with plan_status, then review and grade each. Use delegate to hand work that reads a lot (big files, logs, many documents) to a cheaper model: Leanfare reads the files itself, so their text stays out of your context, and returns a short answer with a receipt. Use ask to hand a question to another model (Auto picks the cheapest one that rates well for the task); spend to see what was spent and saved; models to see which models and prices are available; estimate to price a prompt before sending it; trial to measure how well delegate answers on the user's models before relying on it.";
+const INSTRUCTIONS = "Leanfare runs every top AI model on this computer with the user's own keys, shows what each answer costs, and keeps a monthly budget. At the start of a task with several parts, call plan: it splits the task, starts Leanfare's parts at once by itself, and says in a short table which parts are yours; collect the rest of Leanfare's answers with plan_status (with no id it lists the plans Leanfare keeps), then review and grade each; plan_stop stops a plan, and with forget puts it away. Use delegate to hand work that reads a lot (big files, logs, many documents) to a cheaper model: Leanfare reads the files itself, so their text stays out of your context, and returns a short answer with a receipt. Use ask to hand a question to another model (Auto picks the cheapest one that rates well for the task); spend to see what was spent and saved; models to see which models and prices are available; estimate to price a prompt before sending it; trial to measure how well delegate answers on the user's models before relying on it.";
 
 export const TOOLS = [
   {
@@ -103,23 +103,22 @@ export const TOOLS = [
   {
     name: "plan_stop",
     title: "Stop a plan's parts",
-    description: "Stop the parts of a plan that Leanfare is running (plan_run). What was done stays; a part stopped half way may have been charged.",
-    inputSchema: { type: "object", properties: { id: { type: "string", description: "The plan's id, from plan." } }, required: ["id"], additionalProperties: false },
-    annotations: { title: "Stop a plan's parts", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    description: "Stops the parts of a plan that Leanfare is running, started by plan or plan_run. What was done stays and plan_status still shows it; a part stopped half way may have been charged for what its model did. With forget true it also puts the plan away for good: the plan, its answers and its rounds are forgotten in Leanfare and its id stops working (answers already saved in the project's .leanfare/plans/<id>/ stay). Use forget for a plan the user dropped or one made by mistake: it cannot be undone, and forgetting the same plan again is an error. To stop a single delegate hand off, call delegate with its id and stop true.",
+    inputSchema: { type: "object", properties: { id: { type: "string", description: "The plan's id, from plan (or from plan_status with no id, which lists the plans)." }, forget: { type: "boolean", description: "true: stop the plan, then forget it in Leanfare for good. Default false: stop only." } }, required: ["id"], additionalProperties: false },
+    annotations: { title: "Stop a plan's parts", readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   },
   {
     name: "plan_status",
     title: "Progress of a plan",
-    description: "Where each part of a plan stands (waiting, running, done, failed, yours, after yours, waiting for a yes) and the answers of the parts Leanfare finished. Each answer is also saved in the project, in .leanfare/plans/<id>/ (a folder git ignores), where you and the user can read it. wait: up to that many seconds for the running parts to end (it answers as soon as none is running; default 0, at most 50).",
+    description: "Returns where each part of a plan stands (waiting, running, done, failed, yours, after yours, waiting for a yes) and the answers of the parts Leanfare finished. Use it after plan or plan_run to collect answers: wait up to 50 seconds for running parts (it returns as soon as none runs). Each answer is also saved in the project's .leanfare/plans/<id>/ (git ignores it). With no id it lists the plans Leanfare keeps (the last 20 and any still running, newest first: id, task, when made, parts done or running), to find a lost id; wait, peek and folder then do nothing. It marks the answers as taken unless peek is true. To stop parts use plan_stop.",
     inputSchema: {
       type: "object",
       properties: {
-        id: { type: "string", description: "The plan's id, from plan." },
+        id: { type: "string", description: "The plan's id, from plan. Leave it out to list the plans Leanfare keeps." },
         wait: { type: "integer", minimum: 0, maximum: 50, description: "Seconds to wait for the running parts to end before answering." },
         peek: { type: "boolean", description: "true: only look, without taking the answers (Leanfare's plan card uses it)." },
         folder: { type: "string", description: "The project folder to save the answers in. By default, the folder the MCP client started Leanfare in." },
       },
-      required: ["id"],
       additionalProperties: false,
     },
     annotations: { title: "Progress of a plan", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -151,7 +150,7 @@ export const TOOLS = [
   {
     name: "ask",
     title: "Ask a model",
-    description: "Ask a question through Leanfare and get the answer with its cost. By default Leanfare's Auto picks the cheapest model the user ticked that rates well for the task; name a model to use that one. The cost counts toward the user's budget.",
+    description: "Sends one question to a model through Leanfare and returns the answer with the model and its cost. Auto picks the cheapest model the user ticked that rates well for the task unless model names one (ids from models). Use it for a short question or a second opinion where nothing needs reading from files. For work that reads files or needs a checked answer, use delegate; for a task in parts, plan; to price a prompt without sending it, estimate. The cost counts toward the user's monthly budget; nothing is changed on the computer.",
     inputSchema: {
       type: "object",
       properties: {
@@ -168,12 +167,13 @@ export const TOOLS = [
   {
     name: "delegate",
     title: "Hand a task to a cheaper model",
-    description: "Hand a piece of work to a cheaper model through Leanfare, to save your own context and usage. Best for work that reads a lot and answers briefly: search or summarize big files, logs or many documents, review a file, draft a section. Name the files in files: Leanfare reads them itself, so their text never enters your context. Leanfare picks the cheapest model the user ticked that rates well enough for the kind and effort, and returns a short answer with a receipt (the model, the cost, the tokens kept out of your context). Every high effort answer, and a sample of the others, is checked by a stronger model, blind and from another company when one can take it; a failed check is asked again one tier up. One that takes more than about 40 seconds answers with an id instead and keeps working: call delegate again with only that id to get the answer. Costs count toward the user's Leanfare budget.",
+    description: "Hand a piece of work to a cheaper model through Leanfare, to save your own context and usage. Best for work that reads a lot and answers briefly: search or summarize big files, logs or many documents, review a file, draft a section. Name the files in files: Leanfare reads them itself, so their text never enters your context. Leanfare picks the cheapest model the user ticked that rates well enough for the kind and effort, and returns a short answer with a receipt (the model, the cost, the tokens kept out of your context). Every high effort answer, and a sample of the others, is checked by a stronger model, blind and from another company when one can take it; a failed check is asked again one tier up. One that takes more than about 40 seconds answers with an id instead and keeps working: call delegate again with only that id to get the answer, or with that id and stop true to stop it (what its model did so far may have been charged). Costs count toward the user's Leanfare budget.",
     inputSchema: {
       type: "object",
       properties: {
         task: { type: "string", description: "What to do, written for a model that has not seen this conversation: the goal, what to look for, and the form of answer you want (for example: a list of file:line, one line each)." },
-        id: { type: "string", description: "The id an earlier delegate answered with while it was still working: give only this to get that answer." },
+        id: { type: "string", description: "The id an earlier delegate answered with while it was still working: give only this to get that answer (or with stop, to stop it)." },
+        stop: { type: "boolean", description: "With id: true stops that hand off while it still works. Nothing else is needed with it." },
         files: { type: "array", items: { type: "string" }, maxItems: 50, description: "Text files for Leanfare to read and hand over with the task: full paths, ~/ paths, or paths relative to folder. At most 50 files, 2 MB each, 4 MB in all. Files that hold secrets (.env files, private keys, credentials) are refused." },
         folder: { type: "string", description: "The folder relative paths start from. By default, the folder the MCP client started Leanfare in (in Claude Code, the project)." },
         kind: { type: "string", enum: ["read", "write", "reason"], description: "read: find, pull out or summarize from the files. write: draft text or code. reason: work something out (a bug's cause, a plan, a proof). Leave it out to let Leanfare guess." },
@@ -193,14 +193,14 @@ export const TOOLS = [
   {
     name: "spend",
     title: "What was spent",
-    description: "What the user spent on AI through Leanfare today and this month, the budget left, what Auto saved against their usual model, the top models, the work Leanfare did for apps this month (plan and delegate): the share kept out of their plans, its cost and the grades; and each platform Leanfare may send work to, with what is left before its nearest limit (the 5 hours before the week).",
+    description: "Returns money and limits now: spend today and this month, the budget left, what Auto saved, the top models by cost, this month's hand off totals and grades, and each platform's room before its nearest limit. Use it before paid work, or when the user asks what they spent or how much budget is left. Not for tokens kept out over time or one prompt's parts (use report), calls running now (use live) or a price before sending (use estimate). Read only: takes no input, calls no model, changes nothing.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { title: "What was spent", readOnlyHint: true, openWorldHint: false },
   },
   {
     name: "report",
     title: "Leanfare's report",
-    description: "What Leanfare did for the user's apps over a span of time: the tokens its models read so the apps did not (kept out of their plans), the apps' own use where it is known (Claude Code's, from its own files), the cost, the quality (the apps' grades and the blind checks), tokens over time, the work by model, and the last prompts with what each handed off. Each prompt has an id (PRM-41), kept for good; give prompt for one prompt and its parts. Use it when the user asks what Leanfare saved, how the models did, or for a report. Apps that show MCP Apps draw it as a card with spans to pick.",
+    description: "Returns what Leanfare did for the user's apps over a span: tokens its models read so the apps did not, the apps' own use where known, cost, quality (grades and blind checks), tokens over time, work by model, and recent prompts with their hand offs. Each prompt has a lasting id (PRM-41); pass prompt for one prompt and its parts. Use it when the user asks what Leanfare saved or how the models did. Not for money and budget now (use spend) or calls running now (use live). Read only. Apps that show MCP Apps draw it as a card with spans to pick.",
     inputSchema: {
       type: "object",
       properties: {
@@ -216,8 +216,8 @@ export const TOOLS = [
   {
     name: "models",
     title: "Models and prices",
-    description: "The models the user ticked in Leanfare and can use now, with their prices in US dollars per 1M tokens and their quality rating (Arena).",
-    inputSchema: { type: "object", properties: { provider: { type: "string", description: "Only this provider, for example openai, anthropic, google, openrouter." } }, additionalProperties: false },
+    description: "Returns the models Leanfare can send work to now: each one's id, name, provider, price per 1M input and output tokens (or free) and Arena rating, plus ticked models that cannot take work now with the reason (retired, no credit, free allowance used). Use it to name a model in ask or estimate, or to tell the user what Leanfare can use. Not needed for plan or delegate, which pick models themselves; for models on this computer and downloads, use local_model. Read only: calls no model and changes nothing (the user ticks models in Leanfare's Settings).",
+    inputSchema: { type: "object", properties: { provider: { type: "string", description: "Only this provider's models, by its id: for example openai, anthropic, google, deepseek, openrouter, ollama. Leave it out for every provider." } }, additionalProperties: false },
     annotations: { title: "Models and prices", readOnlyHint: true, openWorldHint: false },
   },
   {
@@ -275,7 +275,7 @@ export const TOOLS = [
   {
     name: "helper",
     title: "The Claude model for a helper",
-    description: "For Leanfare's leanfare-level mod and Claude Code's hook, not for a chat: when a Claude app is about to start a helper (a subagent), the Claude model Leanfare picks for it, by the plan part it is for or else its kind of work, as Claude's Agent tool names models (haiku, sonnet, opus, fable). With done, what a helper used once it ended; with turn, the main model's own turn. Numbers only, never words.",
+    description: "Returns the Claude model a Claude helper (subagent) should run on, and records what helpers and main turns used. Called by Leanfare's own leanfare-level mod and Claude Code hook, never by the model in a chat. Use: before a helper starts, pass task (and description, agent, asked); Leanfare answers with the model as the Agent tool names it (haiku, sonnet, opus or fable), its full id and why, or says to keep the model. After it ends, pass done; for the main model's own turn, pass turn. It writes token counts to Leanfare's local report and keeps no words. To hand work to an outside model use delegate or plan.",
     inputSchema: {
       type: "object",
       properties: {
@@ -294,7 +294,7 @@ export const TOOLS = [
   {
     name: "live",
     title: "Live tokens",
-    description: "The model calls Leanfare is running right now, and those that ended in the last minute, as numbers only: the model, what it is for (a hand off, its check, a plan's part, an app through Leanfare's address), how long it has run, and its tokens so far by kind (new input, cached, thinking, written), with tokens a second. Use it when the user asks what Leanfare is doing now, or to watch a plan's parts run. Apps that show MCP Apps draw it as a live card that keeps moving.",
+    description: "The model calls Leanfare is running right now, and those that ended in the last minute, as numbers only: the model, what it is for (a hand off, its check, a plan's part, an app through Leanfare's address), how long it has run, and its tokens so far by kind (new input, cached, thinking, written), with tokens a second. Use it when the user asks what Leanfare is doing now, or to watch a plan's parts run. It takes no input and changes nothing. For one plan's answers use plan_status; for totals over time, report. Apps that show MCP Apps draw it as a live card that keeps moving.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { title: "Live tokens", readOnlyHint: true, openWorldHint: false },
     _meta: { ui: { resourceUri: LIVE_APP_URI }, "ui/resourceUri": LIVE_APP_URI },
@@ -506,6 +506,16 @@ export const whoNote = (labels: string[]) => `(Test, Show who wrote what is on i
 const STATUS: Record<string, string> = { waiting: "waiting", running: "running", done: "done", failed: "failed", stopped: "stopped", yours: "yours to do", after_yours: "after yours: hand it to delegate once yours is done", blocked: "waits for a part that is not done", asks: "paid: waits for a yes" };
 const SHOWN = 3000; // characters of an answer in the tool's result (the whole answer is in its file)
 // What the app is asked to do with a plan's answers: review, grade and fix them (0.12), or only grade them.
+// The plans Leanfare keeps, a line each (plan_status with no id, 0.15.5).
+export function plansLines(list: any[]): string {
+  if (!list.length) return "Leanfare keeps no plans now (none made since it started, or all were forgotten).";
+  const line = (p: any) => {
+    const st = [p.done ? `${p.done} done` : "", p.running ? `${p.running} running` : "", p.failed ? `${p.failed} failed` : "", p.yours ? `${p.yours} yours` : ""].filter(Boolean).join(", ");
+    return `- ${p.id}${p.made ? ` (${agoText(Date.now() - Date.parse(p.made))})` : ""}: ${p.task}; ${p.parts} part${p.parts === 1 ? "" : "s"}${st ? `: ${st}` : p.ran ? "" : ", not run"}`;
+  };
+  return `The plans Leanfare keeps, newest first:\n${list.map(line).join("\n")}\nCall plan_status with an id for its parts and answers, or plan_stop with an id and forget true to put one away.`;
+}
+
 export function planReview(v: any): string {
   const done = v.parts.filter((r: any) => r.answer && !r.mine); // the app's own parts are not reviewed here
   if (!done.length) return "";
@@ -787,12 +797,20 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
     return text(statusText(v, null), { id: v.id, running: v.running, parts: v.parts.map((r: any) => ({ n: r.n, status: r.status })), asks: v.asks });
   }
   if (name === "plan_stop") {
-    if (typeof args?.id !== "string" || !PLAN_ID.test(args.id)) return failure("plan_stop needs the plan's id, from plan.");
+    if (typeof args?.id !== "string" || !PLAN_ID.test(args.id)) return failure("plan_stop needs the plan's id, from plan (plan_status with no id lists them).");
+    if (args.forget === true) {
+      const { j: f } = await call("/api/plan/forget", { method: "POST", json: { id: args.id } }, signal);
+      return text(`Plan ${args.id} is stopped and forgotten in Leanfare: its id no longer works. Answers already saved in the project's .leanfare/plans/${args.id}/ stay there.`, { id: args.id, forgotten: !!f?.forgotten });
+    }
     const { j: v } = await call("/api/plan/stop", { method: "POST", json: { id: args.id } }, signal);
     return text(statusText(v, null), { id: v.id, running: v.running, parts: v.parts.map((r: any) => ({ n: r.n, status: r.status })) });
   }
   if (name === "plan_status") {
-    if (typeof args?.id !== "string" || !PLAN_ID.test(args.id)) return failure("plan_status needs the plan's id, from plan.");
+    if (args?.id === undefined) {
+      const { j: l } = await call("/api/plan/list", {}, signal);
+      return text(plansLines(l.plans ?? []), { plans: l.plans ?? [] });
+    }
+    if (typeof args.id !== "string" || !PLAN_ID.test(args.id)) return failure("plan_status needs the plan's id, from plan, or no id to list the plans.");
     const wait = Number.isInteger(args.wait) ? Math.min(50, Math.max(0, args.wait)) : 0;
     const look = async (took = false) => (await call(`/api/plan/run?id=${encodeURIComponent(args.id)}${took ? "&took=1" : ""}`, {}, signal)).j;
     let v = await look();
@@ -861,8 +879,14 @@ async function runTool(name: string, args: any, signal: AbortSignal, ctx: ToolCt
     let j: any;
     if (typeof args?.id === "string" && args.id) {
       if (!PLAN_ID.test(args.id)) return failure("That is not the id of a hand off.");
+      if (args.stop === true) {
+        const { j: st } = await call("/api/delegate/stop", { method: "POST", json: { id: args.id } }, signal);
+        const said = st.stopped ? `Stopped the hand off ${args.id} after ${st.seconds} seconds.${st.stopping ? " Its model is still being let go." : ""} What its model did so far may have been charged; nothing comes back from it.` : `The hand off ${args.id} had already ended: call delegate with only its id to get its answer.`;
+        return text(said, { id: args.id, stopped: !!st.stopped, ...(st.stopping ? { stopping: true } : {}), seconds: st.seconds });
+      }
       ({ j } = await call(`/api/delegate?id=${encodeURIComponent(args.id)}&wait=${wait}`, {}, signal));
     } else {
+      if (args?.stop === true) return failure("stop goes with the id of a hand off that is still working.");
       if (typeof args?.task !== "string" || !args.task.trim()) return failure("delegate needs a task, or the id of one still working.");
       const files = readForDelegate(args.files, args.folder, ctx.cwd);
       if (typeof files === "string") return failure(files);

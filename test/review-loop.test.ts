@@ -178,6 +178,17 @@ describe("Claude Code's review hooks", () => {
     expect(stopDecision({ session_id: "bad id\twith tab" }, T + 5000, open)).toBeNull();
   });
 
+  test("0.15.5: a plan put away with plan_stop forget is not asked about at the end", () => {
+    const kept = insert({ plan: "keepPlan001:1" }), gone = insert({ plan: "gonePlan001:1" });
+    noteHandoffs({ session_id: "s-20", tool_name: "mcp__leanfare__plan_status", tool_input: { id: "keepPlan001" }, tool_response: "parts" }, T);
+    noteHandoffs({ session_id: "s-20", tool_name: "mcp__leanfare__plan_status", tool_input: { id: "gonePlan001" }, tool_response: "parts" }, T);
+    db.query("INSERT INTO settings(k, v) VALUES('forgotten_plans', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").run(JSON.stringify(["gonePlan001"]));
+    const d = stopDecision({ session_id: "s-20" }, T + 1000, open)!;
+    db.query("DELETE FROM settings WHERE k = 'forgotten_plans'").run();
+    expect(d.reason).toContain(`Hand off ${kept} (`);
+    expect(d.reason).not.toContain(`${gone} (`);
+  });
+
   test("a plan's parts count, a graded hand off does not, and it asks nothing when Settings turns it off or after two days", () => {
     const p1 = insert({ plan: "6tS-2Dd2q72z:1" }), p2 = insert({ plan: "6tS-2Dd2q72z:2", grade: "partly" }), other = insert({ plan: "6tS-2Dd2q72zX:1" });
     noteHandoffs({ session_id: "s-9", tool_name: "mcp__leanfare__plan_status", tool_input: { id: "6tS-2Dd2q72z" }, tool_response: "parts" }, T);

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.15.5
+
+- `plan_status` with no id lists the plans Leanfare keeps, newest first: each one's id, its task in short, when it was made and how its parts stand. An app that lost a plan's id finds it again.
+- `plan_stop` with `forget` puts a plan away for good: its parts stop, and the plan, its answers and its rounds are forgotten in Leanfare. Answers already saved in the project's `.leanfare/plans/<id>/` stay.
+- `delegate` with a hand off's id and `stop` ends one that is still working. Before, a slow hand off could only be waited for.
+- The plan in the chat, once every part has run, no longer says a part still waits for the main model's, and its sum says the numbers were the plan's estimate.
+- The README opens with a short moving picture of a plan running in Cowork (sample data).
+- Dependabot keeps the build's tools and the workflows' actions current once a month, and CodeQL scans the code after every merge and once a week.
+- Clearer tool descriptions for the MCP directories and for the models that read them: `helper` says it is for the mod and the hook, not a chat; `models` says what each row holds and when to use it; `spend`, `report` and `live` say which to use for what.
+
 ## 0.15.4
 
 - The Leanfare row. In Cowork and Claude Desktop, the leanfare-level mod adds a row just above the message box with four pickers: Level (Leanfare's knob, Off, or 2 to 5 for this chat), Speed (as in Leanfare, Fast, Balanced or Cheapest), Quality (Standard, or High: each part one effort step up) and Models (Claude and Leanfare's, or Claude only: every part on Claude's own models, the plan naming the model for each). A pick calls nothing, so Cowork asks nothing: the mod tells Claude in the conversation and shapes Claude's own calls to Leanfare by it. Off turns back every Leanfare call in that chat before Cowork can ask.

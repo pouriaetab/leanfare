@@ -118,13 +118,16 @@ export const PLAN_APP_HTML = `<!doctype html>
       run ? el("td", { class: "s " + nowClass(st(p.n)), "data-l": "Now", text: nowOf(st(p.n), p) }) : null));
     const t = plan.totals;
     const mine = plan.parts.filter((p) => p.runs_on !== "you").length;
-    const later = plan.parts.filter((p) => p.runs_on !== "you" && laterOf(p)).map((p) => p.n);
+    // 0.15.5: once a part that waited for the main model's has started, it no longer waits; once every part ended,
+    // the sum says the numbers were the plan's estimate.
+    const later = plan.parts.filter((p) => p.runs_on !== "you" && laterOf(p) && (!run || (st(p.n) && st(p.n).status === "after_yours"))).map((p) => p.n);
+    const ended = run && !run.running && run.parts.every((p) => !["waiting", "running", "after_yours", "yours", "asks", "blocked"].includes(p.status));
     const state = stateOf();
     const kids = [
       el("h1", {}, "Leanfare's plan", el("small", { text: mine + " of " + plan.parts.length + " parts to Leanfare" })),
       el("p", { class: "state " + state.cls, id: "state" }, state.live ? el("span", { class: "dot" }) : null, state.text),
       el("table", {}, el("thead", {}, el("tr", {}, ...["#", "Part", "Model", "Time", "Tokens", "Cost", ...(run ? ["Now"] : [])].map((x) => el("th", { text: x })))), el("tbody", {}, ...rows)),
-      mine ? el("p", { class: "sum", text: "About " + tok(t.kept) + " tokens stay out of " + planName(plan) + share(t) + (t.used ? " and about " + tok(t.used) + " stay in it" : "") + ": " + (t.guessed ? "a guess, as no files were named for the reading" : "an estimate until the parts end") + ". Pay per use: " + usd(t.cost) + "." }) : null,
+      mine ? el("p", { class: "sum", text: "About " + tok(t.kept) + " tokens stay out of " + planName(plan) + share(t) + (t.used ? " and about " + tok(t.used) + " stay in it" : "") + ": " + (t.guessed ? "a guess, as no files were named for the reading" : ended ? "the plan's estimate" : "an estimate until the parts end") + ". Pay per use: " + usd(t.cost) + "." }) : null,
       plan.local ? el("p", { class: "muted", text: "A local model fits this computer: " + plan.local.name + " (" + (plan.local.size / 1e9).toFixed(plan.local.size < 10e9 ? 1 : 0) + " GB), rated like " + plan.local.like + ", free to run. Ask for it to be downloaded (Leanfare's local_model asks you first)." }) : null,
     ].filter(Boolean); // replaceChildren would print a left out part as the word null
     if (run && run.asks) kids.push(el("p", { class: "bad", text: (run.asks.parts.length === 1 ? "Part " + run.asks.parts[0] + " is" : "Parts " + run.asks.parts.join(", ") + " are") + " paid (" + (run.asks.estimate === null || run.asks.estimate === undefined ? "cost not known" : "about " + usd(run.asks.estimate)) + ") and wait" + (run.asks.parts.length === 1 ? "s" : "") + " for your yes: Claude asks you in the chat." }));

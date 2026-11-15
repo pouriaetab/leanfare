@@ -46,6 +46,7 @@ import { JOB_DEFAULTS, settings, type HelperStarts, type JobKind } from "./setti
 import { claudeRungs, helperRules, pickClaude } from "./claudeladder";
 import { UserError } from "./upstream";
 import { now, randomId, secondsText } from "./util";
+import { getSetting, putSetting } from "./db";
 
 export type PartKind = "read" | "write" | "reason" | "code" | "search" | "act";
 export type Size = "none" | "small" | "medium" | "large";
@@ -868,11 +869,12 @@ export function paidOf(plan: PlanResult): { parts: number[]; estimate: number | 
 
 const KEEP = 20;
 const kept = new Map<string, PlanResult>();
+const madeAt = new Map<string, number>(); // when each kept plan was made (0.15.5)
 const wherePaths = new Map<string, Map<string, { path: string; size: number }>>(); // a plan's files, by name, when Leanfare knows where they are
 // grades: part n -> its grade's row, so grading a part again replaces its grade
 const runs = new Map<string, { view: RunView; ac: AbortController; tick: () => void; yes: { on: boolean }; grades: Map<number, number> }>();
 export const keptPlan = (id: string) => kept.get(id) ?? null;
-export const forgetPlans = () => { for (const r of runs.values()) r.ac.abort(); kept.clear(); runs.clear(); wherePaths.clear(); checkedLater.clear(); redos.clear(); gaveUp.clear(); };
+export const forgetPlans = () => { for (const r of runs.values()) r.ac.abort(); kept.clear(); runs.clear(); wherePaths.clear(); madeAt.clear(); checkedLater.clear(); redos.clear(); gaveUp.clear(); };
 const HANDED = 20_000; // characters of an earlier part's answer handed on
 const running = (id: string) => !!runs.get(id)?.view.running;
 
@@ -896,12 +898,39 @@ export function partForHelper(words: string, manager: string | null): { plan: Pl
 function keep(plan: PlanResult, paths: Map<string, { path: string; size: number }>) {
   kept.set(plan.id, plan);
   wherePaths.set(plan.id, paths);
+  madeAt.set(plan.id, Date.now());
   for (const id of [...kept.keys()]) {
     if (kept.size <= KEEP) break;
     if (id === plan.id || running(id)) continue;
-    kept.delete(id); wherePaths.delete(id); runs.delete(id);
+    kept.delete(id); wherePaths.delete(id); runs.delete(id); madeAt.delete(id);
   }
 }
+
+// The plans Leanfare keeps (0.15.5, for plan_status with no id): newest first, each with how its parts stand.
+export interface PlanItem { id: string; task: string; made: string | null; parts: number; done: number; running: number; failed: number; yours: number; ran: boolean }
+export function listPlans(): PlanItem[] {
+  return [...kept.values()].map((plan) => {
+    const v = runs.get(plan.id)?.view, st = (s: string) => (v ? v.parts.filter((p) => p.status === s).length : 0);
+    const at = madeAt.get(plan.id);
+    return { id: plan.id, task: plan.task.replace(/\s+/g, " ").trim().slice(0, 120), made: at ? new Date(at).toISOString() : null, parts: plan.parts.length,
+      done: st("done"), running: st("running"), failed: st("failed"), yours: v ? st("yours") : plan.parts.filter((p) => p.where === "you").length, ran: !!v };
+  }).sort((a, b) => (b.made ?? "").localeCompare(a.made ?? ""));
+}
+
+// A plan put away for good (0.15.5, plan_stop with forget): its running parts stopped, then the plan, its run, its
+// answers and its rounds forgotten here. The answers saved in the project's .leanfare/plans/<id>/ stay where they are.
+export function forgetPlan(id: string): boolean {
+  if (!kept.has(id) && !runs.has(id)) return false;
+  runs.get(id)?.ac.abort();
+  kept.delete(id); wherePaths.delete(id); runs.delete(id); madeAt.delete(id); checkedLater.delete(id);
+  for (const k of [...redos.keys()]) if (k.startsWith(`${id}:`)) redos.delete(k);
+  for (const k of [...gaveUp]) if (k.startsWith(`${id}:`)) gaveUp.delete(k);
+  // Claude Code's stop hook (reviewhook.ts) runs in its own process and reads the database: it skips these plans, so
+  // it never asks for grades of a plan the user put away. The last 100 are kept.
+  try { putSetting(FORGOTTEN, [...getSetting<string[]>(FORGOTTEN, []).filter((x) => x !== id), id].slice(-100)); } catch {}
+  return true;
+}
+export const FORGOTTEN = "forgotten_plans";
 
 export function runView(id: string): RunView | null { return runs.get(id)?.view ?? null; }
 // The next steps once Leanfare started a plan's parts by itself (the plan tool, 0.13).
