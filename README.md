@@ -4,7 +4,7 @@
 
 Leanfare makes your Claude plan last longer. Claude keeps the hard parts of a task and hands the simple ones, like reading files, searching and drafting, to free or cheaper models. You keep working in Claude as before.
 
-![A plan as Claude shows it in Cowork: each part of the task, the model it runs on, its tokens and its cost](docs/plan.png)
+![A plan in Cowork, sample data: Leanfare runs the reading parts on cheaper models while Claude Opus keeps the fix, then Claude checks every answer](docs/plan.gif)
 
 > Leanfare is early and changes every week. If something breaks, [report a bug](https://github.com/pouriaetab/leanfare/issues/new?template=bug_report.yml); Settings, **Report a problem**, fills in your version. Questions and ideas go to [Discussions](https://github.com/pouriaetab/leanfare/discussions).
 
