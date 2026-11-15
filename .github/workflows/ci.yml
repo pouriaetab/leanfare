@@ -12,7 +12,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.3
@@ -26,6 +26,6 @@ jobs:
   mac:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - run: bash mac/build.sh
       - run: test -x mac/build/Leanfare.app/Contents/MacOS/Leanfare
