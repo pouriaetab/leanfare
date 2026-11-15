@@ -131,6 +131,18 @@ describe("the plan inside the chat (an MCP App)", () => {
     expect(doc.querySelectorAll("button").length).toBe(0);
   });
 
+  test("0.15.5: once the part after yours has run, the page no longer says it waits, and the sum says it was the plan's estimate", async () => {
+    const done = { id: "p3", running: false, asks: null, parts: [{ n: 1, title: "Decide", status: "done" }, { n: 2, title: "Read after", status: "done", answer: "ok", model: "GPT-5 mini", verdict: "good" }] };
+    const { doc, sent, push } = open((m) => (m.method === "ui/initialize" ? { hostContext: {} } : m.method === "tools/call" ? { structuredContent: done } : undefined));
+    await until(() => sent.some((m) => m.method === "ui/notifications/initialized"));
+    const parts = [{ ...PLAN.parts[1], n: 1, needs: [] }, { ...PLAN.parts[0], n: 2, needs: [1], runs_on: "free", cost_usd: 0 }];
+    push("ui/notifications/tool-result", { structuredContent: { id: "p3", parts, totals: { parts: 2, out: 1, later: 1, kept: 31000, used: 5000, seconds: null, after: 12, cost: 0 }, run: done } });
+    await until(() => doc.body.textContent.includes("checked: good"));
+    expect(doc.body.textContent).not.toContain("waits for the main model's parts");
+    expect(doc.body.textContent).toContain("the plan's estimate");
+    expect(doc.body.textContent).not.toContain("an estimate until the parts end");
+  });
+
   test("messages from anywhere but the app it is shown in are ignored, and a result with no plan shows its text", async () => {
     const { doc, push } = open((m) => (m.method === "ui/initialize" ? { hostContext: {} } : undefined));
     push("ui/notifications/tool-result", { structuredContent: PLAN }, { postMessage() {} }); // another frame
