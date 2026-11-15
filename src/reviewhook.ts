@@ -64,7 +64,9 @@ export function stopDecision(input: any, now = clock(), open: () => Database | n
     const ids = [...s.handoffs].filter((n) => !s.asked.has(n));
     if (ids.length)
       for (const r of d.query(`SELECT id, model, rerun, kind, task FROM delegations WHERE id IN (${ids.map(() => "?").join(",")}) AND status = 'ok' AND grade IS NULL`).all(...ids) as any[]) rows.set(r.id, r);
-    for (const p of s.plans)
+    let forgotten = new Set<string>(); // plans put away with plan_stop forget (planner.ts): nothing of theirs to grade
+    try { const f = d.query("SELECT v FROM settings WHERE k = 'forgotten_plans'").get() as { v: string } | null; if (f) forgotten = new Set(JSON.parse(f.v)); } catch {}
+    for (const p of s.plans) if (!forgotten.has(p))
       for (const r of d.query("SELECT id, model, rerun, kind, task FROM delegations WHERE substr(plan, 1, ?) = ? AND status = 'ok' AND grade IS NULL").all(p.length + 1, `${p}:`) as any[])
         if (!s.asked.has(r.id)) rows.set(r.id, r);
     const open_ = [...rows.values()].sort((a, b) => a.id - b.id);

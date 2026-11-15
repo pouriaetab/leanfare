@@ -571,6 +571,7 @@ export async function runDelegate(input: DelegateInput, signal: AbortSignal): Pr
     }
   }
 
+  if (gone()) throw stopped(); // stopped once its answer was in (0.15.5, delegate with stop): nothing comes back from it
   const model = who(final.meta.model);
   const answerTokens = tokensOf(final.text.length);
   const tickedModels = settings().ticked.map((id) => getModel(id)).filter((m): m is Model => !!m);
@@ -692,6 +693,15 @@ export async function waitDelegate(id: string, seconds: number, signal?: AbortSi
     clearTimeout(timer);
     if (gone) signal?.removeEventListener("abort", gone);
   }
+  return job;
+}
+
+// One hand off stopped while it still works (0.15.5, delegate with id and stop): null when no hand off has that id.
+// One that already ended keeps its answer; a stopped one may have been charged for what its model did so far.
+export function stopDelegate(id: string): Job | null {
+  const job = jobs.get(id);
+  if (!job) return null;
+  if (!job.done) job.ac.abort();
   return job;
 }
 

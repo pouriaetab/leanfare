@@ -29,7 +29,7 @@ import { CODEX_ID, codexSetting, codexState, connectChatGPT, connectProgress, co
 import { GRADED_KINDS, VERDICTS, addGrade, giveAnotherChance, standing, standingText, standings } from "./grades";
 import { plansBrief, plansView } from "./plans";
 import { meterViews, setStatusline } from "./meter";
-import { checkDelegate, fixHandOff, gradeRow, gradeTogether, handOffRow, markFixed, planRow, runDelegate, startDelegate, stopDelegates, waitDelegate } from "./delegate";
+import { checkDelegate, fixHandOff, gradeRow, gradeTogether, handOffRow, markFixed, planRow, runDelegate, startDelegate, stopDelegate, stopDelegates, waitDelegate } from "./delegate";
 import { sideMonth, sideStandings, sideText, stopSideBySide } from "./sidebyside";
 import { endRest } from "./rest";
 import { clearNoQuota, noQuota, noQuotaNow, noQuotaWhy } from "./quota";
@@ -42,7 +42,7 @@ import { notNowWhy } from "./allowance";
 import { FREE_LIST, afterFreeKey, freeView } from "./freelist";
 import { LASTING, hideNotice, keepKeysFresh, keyChanged, keyNotices, keyState, keyUnusable, noCredit, providerAway, recheckKey } from "./keystate";
 import { TASK_OF, shareView } from "./share";
-import { checkPlan, gradePart, keptPlan, makePlan, nextStarted, recordChecks, runView, sendAgain, startRun, stopAllRuns, stopRun, tookAnswers, yoursDone } from "./planner";
+import { checkPlan, forgetPlan, gradePart, keptPlan, listPlans, makePlan, nextStarted, recordChecks, runView, sendAgain, startRun, stopAllRuns, stopRun, tookAnswers, yoursDone } from "./planner";
 import { allChecks, removeChecks } from "./checks";
 import { geminiCliState } from "./geminicli";
 import { setAuto } from "./workers";
@@ -881,6 +881,16 @@ async function api(req: Request, url: URL): Promise<Response> {
     if (wait === null) return json({ ...(await runDelegate(v, req.signal)), whoWrote: settings().whoWrote, review: settings().review });
     return handOff(await waitDelegate(startDelegate(v).id, wait, req.signal));
   }
+  // One hand off stopped while it still works (0.15.5): what it had when it stopped. Its answer, if it had ended.
+  if (p === "/api/delegate/stop" && m === "POST") {
+    const b = await readBody(req);
+    const job = stopDelegate(String(b?.id ?? ""));
+    if (!job) return fail(404, "No hand off with that id: Leanfare was restarted, it is more than 2 hours old, or 50 newer ones came after it.");
+    const was = !job.done;
+    if (was) await Promise.race([job.settled, Bun.sleep(2000)]);
+    // stopped: it was still working and ends with no answer; stopping: it has not ended within 2 seconds.
+    return json({ id: job.id, stopped: was && !job.result, ...(was && !job.done ? { stopping: true } : {}), seconds: Math.round((Date.now() - job.started) / 1000), ...(job.result ? { answer: true } : {}) });
+  }
   if (p === "/api/delegate" && m === "GET") return handOff(await waitDelegate(url.searchParams.get("id") ?? "", waitOf(url.searchParams.get("wait")) ?? 0, req.signal));
   // The plan (planner.ts): a task split into parts, each with where it runs and on which model.
   if (p === "/api/plan" && m === "POST") {
@@ -901,6 +911,9 @@ async function api(req: Request, url: URL): Promise<Response> {
   if (p === "/api/plan/run" && m === "GET") { const id = url.searchParams.get("id") ?? ""; const v = url.searchParams.get("took") === "1" ? tookAnswers(id) : runView(id); return v ? json({ ...v, whoWrote: settings().whoWrote, review: settings().review }) : fail(404, "No run of that plan."); }
   // The next steps again, once a yes started a plan's paid parts too (the plan tool asks before it answers).
   if (p === "/api/plan/next" && m === "GET") { const id = url.searchParams.get("id") ?? ""; const plan = keptPlan(id), v = runView(id); return plan && v ? json({ next: nextStarted(plan, v) }) : fail(404, "No run of that plan."); }
+  // The plans Leanfare keeps, newest first (0.15.5), and one put away for good.
+  if (p === "/api/plan/list" && m === "GET") return json({ plans: listPlans() });
+  if (p === "/api/plan/forget" && m === "POST") { const b = await readBody(req); const id = String(b?.id ?? ""); return forgetPlan(id) ? json({ id, forgotten: true }) : fail(404, "No plan with that id in Leanfare."); }
   if (p === "/api/plan/stop" && m === "POST") { const b = await readBody(req); const v = stopRun(String(b?.id ?? "")); return v ? json(v) : fail(404, "No run of that plan."); }
   // The project's checks (checks.ts, 0.14): what the app reported once a plan's parts were back; every project's list;
   // one project's list taken away (Settings, Project checks).
