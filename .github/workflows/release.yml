@@ -28,6 +28,7 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
@@ -44,6 +45,7 @@ jobs:
   build:
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
@@ -61,6 +63,7 @@ jobs:
   check-mac:
     needs: build
     runs-on: macos-15
+    timeout-minutes: 15
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -92,6 +95,7 @@ jobs:
   check-linux-arm:
     needs: build
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -109,6 +113,7 @@ jobs:
   check-windows:
     needs: build
     runs-on: windows-latest
+    timeout-minutes: 15
     continue-on-error: true # Windows builds are new: a failure here keeps only the Windows file off the release
     outputs:
       ok: ${{ steps.check.outputs.ok }}
@@ -137,6 +142,7 @@ jobs:
     needs: [build, check-mac, check-linux-arm, check-windows]
     if: ${{ always() && needs.build.result == 'success' && needs.check-mac.result == 'success' && needs.check-linux-arm.result == 'success' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write # only this job writes: the files, then the release
     steps:
@@ -170,6 +176,7 @@ jobs:
     needs: publish
     if: ${{ always() && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       id-token: write # the sign in to the Registry
       contents: read
