@@ -1,6 +1,6 @@
 # Leanfare
 
-[![Latest release](https://img.shields.io/github/v/release/pouriaetab/leanfare)](https://github.com/pouriaetab/leanfare/releases/latest) [![Tests](https://github.com/pouriaetab/leanfare/actions/workflows/ci.yml/badge.svg)](https://github.com/pouriaetab/leanfare/actions/workflows/ci.yml) [![License](https://img.shields.io/github/license/pouriaetab/leanfare)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/pouriaetab/leanfare)](https://github.com/pouriaetab/leanfare/releases/latest) [![Tests](https://github.com/pouriaetab/leanfare/actions/workflows/ci.yml/badge.svg)](https://github.com/pouriaetab/leanfare/actions/workflows/ci.yml) [![License](https://img.shields.io/github/license/pouriaetab/leanfare)](LICENSE) [![pouriaetab/leanfare MCP server](https://glama.ai/mcp/servers/pouriaetab/leanfare/badges/score.svg)](https://glama.ai/mcp/servers/pouriaetab/leanfare)
 
 Leanfare makes your Claude plan last longer. Claude keeps the hard parts of a task and hands the simple ones, like reading files, searching and drafting, to free or cheaper models. You keep working in Claude as before.
 
